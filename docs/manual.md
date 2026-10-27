@@ -93,7 +93,7 @@ Imports the model, reads its signatures and **its source code**, and writes a co
 
 ```
 fmugen init MODEL [-o OUTPUT] [--call METHOD] [--fmi {2,3}]
-                  [--start NAME=VALUE ...] [--setup CALL ...] [--kind function] [--create CLASSMETHOD]
+                  [--start NAME=VALUE ...] [--const NAME=VALUE ...] [--setup CALL ...] [--kind function] [--create CLASSMETHOD]
                   [--probe] [--convert NAME=module:function ...] [--force]
 ```
 
@@ -103,7 +103,8 @@ fmugen init MODEL [-o OUTPUT] [--call METHOD] [--fmi {2,3}]
 | `-o`, `--output PATH` | `fmugen.toml` next to the model (current directory for an installed module) | Where to write the config; missing folders are created. `-o -` prints it instead. A model file must be inside the config's folder. |
 | `--call METHOD` | `step`, `do_step`, `update`, `__call__`, or the only public method | Classes: the method run on each step. |
 | `--fmi {2,3}` | none (FMI 2) | Writes `fmi_version` into the config. With `3`, list/tuple/numpy values are inferred as arrays, `bytes` as Binary and numpy `float32` as Float32. |
-| `--start NAME=VALUE` | none | Start value (and, with `--probe`, the value it is called with) for an argument; repeatable. `VALUE` is a Python literal (`1e5`, `"Water"`, `[1.0, 0.0]`); a bare word is taken as a string. `true`/`false` are booleans. A tuple or dict value is split into one variable per item. `call:module:function(args)` makes a [computed constant](config.md#modelconstants-and-modelcall_constants) instead of a variable (`call:module:attr` without parentheses passes the object itself, e.g. a function). Use it for arguments without a default, or whose default breaks the model. |
+| `--start NAME=VALUE` | none | Start value of an argument that becomes an FMU variable (and, with `--probe`, the value it is called with); repeatable. `VALUE` is a Python literal (`1e5`, `"Water"`, `[1.0, 0.0]`); a bare word is taken as a string. `true`/`false` are booleans. A tuple or dict value is split into one variable per item. Use it for arguments without a default, or whose default breaks the model. A value that can't be an FMU variable (a `call:` value, a dict for `**kwargs`, None) is refused: give it with `--const`. |
+| `--const NAME=VALUE` | none | Fixed value of an argument, not an FMU variable: written to [`[model.constants]`](config.md#modelconstants-and-modelcall_constants) (or `call_constants` for the step method), for what only the model's user knows: a file, a model name, a mode (`--const model=yolo11n.pt`, `--const task=sentiment-analysis`). `VALUE` is read as for `--start`; `call:module:function(args)` is computed when the FMU initializes (`call:module:attr` without parentheses passes the object itself, e.g. a function), for objects: `--const "net=call:pandapower.networks:example_simple()"`. A file it names next to the config is copied into the FMU, as for `--start`. Repeatable; a name can't be given to both. |
 | `--setup CALL` | none | A [setup call](config.md#model), written to `[model] setup`; with `--probe` it is also run before the probe. Repeatable. E.g. `"psychrolib:SetUnitSystem(psychrolib.SI)"`, `reset`. |
 | `--kind function` | none | Treat a class whose constructor does the work as a function called on every step (writes `[model] kind`). |
 | `--create CLASSMETHOD` | none | Classes built by a factory: the classmethod that creates the object, e.g. `from_pretrained`. Its arguments become parameters (writes `[model] create`). |
@@ -135,6 +136,10 @@ fmugen init psychrolib:GetHumRatioFromRelHum --setup "psychrolib:SetUnitSystem(p
 
 ```bash
 fmugen init filterpy.kalman:KalmanFilter --call predict --fmi 3 --start dim_x=2 --start dim_z=1 -o -
+```
+
+```bash
+fmugen init ultralytics:YOLO --call predict --fmi 3 --probe --const model=yolo11n.pt --start source=bus.jpg -o -
 ```
 
 ### `fmugen build`
@@ -278,6 +283,7 @@ Every section and key, with defaults, value forms, validation rules and a comple
 | Package a plain function | `fmugen init model.py` → `build` |
 | Use a class with a step method | `--call METHOD` (or `[model] call`) |
 | Give arguments without defaults sensible values | `init --start NAME=VALUE` / `start = …` |
+| Pass a file, a model name or an object that isn't an FMU variable | `init --const NAME=VALUE` (`call:…` for an object) / `[model.constants]` |
 | Call a library setup function first | `[model] setup = ["module:function(args)"]` |
 | Reset a gym-style environment before stepping | `setup = ["reset"]` |
 | Feed a result back into the next step | `[states] x_prev = { next = "return:x" }` |

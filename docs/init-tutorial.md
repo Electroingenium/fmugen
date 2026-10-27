@@ -247,7 +247,7 @@ solver     = { ref = "scipy.integrate:RK45" }            # an imported object (c
 weights    = { call = "numpy:eye(3)" }                   # the result of a call, made at initialization
 ```
 
-Lines marked `# computed when the FMU initializes` are `call =` constants `init` wrote for you, either from `--start NAME=call:...` or for arguments that need an array to work (pykalman's `filtered_state_mean = { call = "numpy:zeros(1)" }`). They are active, not commented.
+Lines marked `# computed when the FMU initializes` are `call =` constants `init` wrote for you, either from `--const NAME=call:...` or for arguments that need an array to work (pykalman's `filtered_state_mean = { call = "numpy:zeros(1)" }`). They are active, not commented.
 
 ### `[experiment]`: default run settings
 

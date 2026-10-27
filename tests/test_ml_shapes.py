@@ -3,8 +3,11 @@ factory functions, computed constants, tuple/dict arguments, NamedTuple and 0-d 
 and array inputs that must be numpy arrays without saying so."""
 import textwrap
 
+import pytest
+
 from fmugen.builder import init, isolated_imports
-from fmugen.__main__ import _parse_starts
+from fmugen.config import InterfaceError
+from fmugen.__main__ import _parse_consts, _parse_starts, _starts_and_consts
 from fmugen.interface import infer_config
 
 
@@ -14,8 +17,15 @@ def write(tmp_path, source):
 
 
 def test_start_values_in_toml_spelling_and_computed_constants():
-    starts = _parse_starts(["fast=true", "slow=FALSE", "n=3", "name=abc", "path=call:os.path:join('a', 'b')"])
-    assert starts == {"fast": True, "slow": False, "n": 3, "name": "abc", "path": {"call": "os.path:join('a', 'b')"}}
+    starts = _parse_starts(["fast=true", "slow=FALSE", "n=3", "name=abc"])
+    assert starts == {"fast": True, "slow": False, "n": 3, "name": "abc"}
+    with pytest.raises(InterfaceError, match="give it with --const path=call:"):
+        _parse_starts(["path=call:os.path:join('a', 'b')"])
+    consts = _parse_consts(["path=call:os.path:join('a', 'b')", "model=yolo11n.pt", "size=[640, 480]", "on=TRUE"])
+    assert consts == {"path": {"call": "os.path:join('a', 'b')"}, "model": {"python": "'yolo11n.pt'"},
+                      "size": {"python": "[640, 480]"}, "on": {"python": "True"}}
+    with pytest.raises(InterfaceError, match="both --start and --const"):
+        _starts_and_consts({"n": 3}, {"n": {"python": "3"}})
 
 
 def test_factory_function_with_a_computed_constant(tmp_path, make_fmu, adapter):
@@ -34,7 +44,7 @@ def test_factory_function_with_a_computed_constant(tmp_path, make_fmu, adapter):
             return "weights.bin"
     ''')
     with isolated_imports():
-        init(f"{model}:make", call="step", probe=True, starts=_parse_starts(["path=call:lib:weights_file()", "u=1.0"]))
+        init(f"{model}:make", call="step", probe=True, starts=_starts_and_consts(_parse_starts(["u=1.0"]), _parse_consts(["path=call:lib:weights_file()"])))
     text = (tmp_path / "fmugen.toml").read_text()
     assert 'call = "step"' in text and "[model.constants]" in text and 'path = { call = "lib:weights_file()" }' in text
     assert "k = { start = 2.0 }" in text and "verbose = { start = false }" in text

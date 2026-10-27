@@ -138,6 +138,27 @@ def test_columns_of_result_tables_the_step_fills(tmp_path, monkeypatch):
     assert data["outputs"] == {"res_junction.p_bar": {"from": "attr:res_junction.p_bar", "dimensions": [2]}}
 
 
+def test_const_values_are_fixed_and_their_files_copied(tmp_path):
+    # like ultralytics' YOLO(model="yolo11n.pt").predict(source="bus.jpg"): the weights are a fixed
+    # value (--const), the image an input (--start); both files are copied into the FMU
+    (tmp_path / "w.bin").write_text("2.0")
+    (tmp_path / "img.txt").write_text("3.0")
+    path = write(tmp_path, "det.py", """
+        class Detector:
+            def __init__(self, model):
+                self.k = float(open(model).read())
+
+            def predict(self, source):
+                return self.k * float(open(source).read())
+    """)
+    data, text = probe(f"{path}:Detector", tmp_path, call="predict",
+                       starts={"model": {"python": "'w.bin'"}, "source": "img.txt"})
+    assert data["model"]["constants"] == {"model": "w.bin"}   # a plain TOML value, not a variable
+    assert "parameters" not in data and data["inputs"] == {"source": {"start": "img.txt"}}
+    assert sorted(data["model"]["sources"]) == ["img.txt", "w.bin"] and data["model"]["cwd"] == "."
+    assert data["outputs"] == {"y": {"from": "return"}}
+
+
 def test_a_history_that_grows_each_step_gives_its_last_entry(tmp_path):
     # like seirsplus' numS: one more entry per run_epoch()
     path = write(tmp_path, "epi.py", """

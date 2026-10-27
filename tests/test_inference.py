@@ -555,8 +555,11 @@ def test_a_keyword_named_like_the_kwargs_parameter(tmp_path):
         def load(path="x", **model_kwargs):
             return {"y": float(len(model_kwargs.get("model_kwargs", {})))}
     '''))
-    data, _ = infer(f"{tmp_path / 'kw.py'}:load", starts={"model_kwargs": {"task_name": "r"}})
+    # a dict can't be an FMU variable: it's a --const, passed through **kwargs
+    data, _ = infer(f"{tmp_path / 'kw.py'}:load", starts={"model_kwargs": {"python": "{'task_name': 'r'}"}})
     assert data["model"]["constants"] == {"model_kwargs": {"python": "{'task_name': 'r'}"}}
+    with pytest.raises(InterfaceError, match="give a fixed value with --const model_kwargs"):
+        infer(f"{tmp_path / 'kw.py'}:load", starts={"model_kwargs": {"task_name": "r"}})
 
 
 def test_fmi3_integer_starts_beyond_int32_get_64_bit_types(tmp_path):

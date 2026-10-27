@@ -36,37 +36,80 @@ def _parse_converts(items):
     return converts
 
 
-def _parse_starts(items):
-    """Parse ``--start NAME=VALUE`` options.
+def _literal(text):
+    """A ``--start`` / ``--const`` VALUE: a Python literal (:func:`ast.literal_eval`, never executed),
+    ``true`` / ``false`` in any case as Booleans, anything else a string.
 
-    VALUE is read as a Python literal with :func:`ast.literal_eval` (never executed); ``true`` /
-    ``false`` in any case are Booleans; ``call:module:function(...)`` becomes a call constant;
-    anything else stays a string.
+    :param text: the VALUE.
+    :type text: str
+    """
+    import ast
+    if text.lower() in ("true", "false"):
+        return text.lower() == "true"
+    try:
+        return ast.literal_eval(text)
+    except (ValueError, SyntaxError):
+        return text
+
+
+def _parse_starts(items, option="--start"):
+    """Parse ``--start NAME=VALUE`` options: start values of the model's arguments, as FMU variables.
 
     :param items: the options.
     :type items: list[str]
+    :param option: the option name, for messages.
+    :type option: str
     :return: ``{NAME: value}``; NAME may be dotted (``ARG.FIELD``).
     :rtype: dict
-    :raises InterfaceError: an item without ``=`` or with an invalid name.
+    :raises InterfaceError: an item without ``=``, with an invalid name, or a ``call:`` value.
     """
-    import ast
     starts = {}
     for item in items:
         name, sep, text = item.partition("=")
         if not sep or not all(part.isidentifier() for part in name.strip().split(".")):
-            raise InterfaceError(f"--start {item!r}: expected NAME=VALUE")
+            raise InterfaceError(f"{option} {item!r}: expected NAME=VALUE")
         text = text.strip()
-        if text.startswith("call:"):
-            starts[name.strip()] = {"call": text[len("call:"):]}
-            continue
-        if text.lower() in ("true", "false"):
-            starts[name.strip()] = text.lower() == "true"
-            continue
-        try:
-            starts[name.strip()] = ast.literal_eval(text)
-        except (ValueError, SyntaxError):
-            starts[name.strip()] = text
+        if option == "--start" and text.startswith("call:"):
+            raise InterfaceError(f"--start {item!r}: a call: value is computed once, not a start value: "
+                                 f"give it with --const {item}")
+        starts[name.strip()] = text if option == "--const" else _literal(text)
     return starts
+
+
+def _parse_consts(items):
+    """Parse ``--const NAME=VALUE`` options: fixed values passed to the model, not FMU variables.
+
+    For what only the model's user knows: a file, a model name, a mode, a computed object.
+    ``call:module:function(...)`` is computed when the FMU initializes; anything else is a literal
+    as for ``--start``.
+
+    :param items: the options.
+    :type items: list[str]
+    :return: ``{NAME: {"call": ...} | {"python": repr}}``.
+    :rtype: dict
+    :raises InterfaceError: an item without ``=`` or with an invalid name.
+    """
+    consts = {}
+    for name, text in _parse_starts(items, "--const").items():
+        consts[name] = {"call": text[len("call:"):]} if text.startswith("call:") else {"python": repr(_literal(text))}
+    return consts
+
+
+def _starts_and_consts(starts, consts):
+    """The ``--start`` and ``--const`` values together, as :func:`fmugen.builder.init` takes them.
+
+    :param starts: parsed ``--start`` values.
+    :type starts: dict
+    :param consts: parsed ``--const`` values.
+    :type consts: dict
+    :rtype: dict
+    :raises InterfaceError: a name given to both.
+    """
+    both = sorted(set(starts) & set(consts))
+    if both:
+        raise InterfaceError(f"{', '.join(both)}: given with both --start and --const; an argument is either an "
+                             "FMU variable (--start) or a fixed value (--const)")
+    return {**starts, **consts}
 
 
 def main(argv=None):
@@ -93,8 +136,12 @@ def main(argv=None):
     i.add_argument("--force", action="store_true", help="overwrite an existing config")
     i.add_argument("--fmi", type=int, choices=(2, 3), help="target FMI version; 3 also infers Binary, Float32 and resizable arrays")
     i.add_argument("--start", action="append", default=[], metavar="NAME=VALUE",
-                   help="start/probe value for an argument (a Python literal), e.g. for arguments "
-                        "without a default, or ARG.FIELD=VALUE for a field of an object argument; repeatable")
+                   help="start (and probe) value of an argument that becomes an FMU variable (a Python literal: "
+                        "number, string, bool, list), e.g. for arguments without a default, or ARG.FIELD=VALUE "
+                        "for a field of an object argument; repeatable")
+    i.add_argument("--const", action="append", default=[], metavar="NAME=VALUE",
+                   help="fixed value of an argument, not an FMU variable: a file, a model name, a mode, or "
+                        "call:module:function(...) for an object computed when the FMU initializes; repeatable")
     i.add_argument("--setup", action="append", default=[], metavar="CALL",
                    help="run before the model is used, e.g. 'psychrolib:SetUnitSystem(psychrolib.SI)' "
                         "or 'reset' (a method, after construction); repeatable")
@@ -161,8 +208,8 @@ def main(argv=None):
     try:
         if args.command == "init":
             output, _data = init(args.model, args.output, args.call, args.force, args.fmi,
-                                _parse_starts(args.start), args.setup, args.kind, args.create, args.probe,
-                                _parse_converts(args.convert))
+                                _starts_and_consts(_parse_starts(args.start), _parse_consts(args.const)),
+                                args.setup, args.kind, args.create, args.probe, _parse_converts(args.convert))
             if output:
                 print(f"Wrote {output.resolve()}; review it, then run: fmugen build {output}")
             return

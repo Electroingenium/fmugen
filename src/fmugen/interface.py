@@ -479,9 +479,9 @@ def _in_venv(file, root):
 def _add_data_files(data, comments, config_dir, entry_file):
     """Add files next to the config that the model opens by a relative path.
 
-    Found as string start values (a file name argument), string constants, or string literals
-    in the entry file (parsed with :func:`ast.parse`): copied with ``sources``, and ``cwd = "."``
-    so the model finds them inside the FMU.
+    Found as string start values (a file name argument), string constants (``--const``), or string
+    literals in the entry file (parsed with :func:`ast.parse`): copied with ``sources``, and
+    ``cwd = "."`` so the model finds them inside the FMU.
 
     :param data: the config being inferred; updated in place.
     :type data: dict
@@ -494,8 +494,9 @@ def _add_data_files(data, comments, config_dir, entry_file):
     """
     texts = [info["start"] for section in ("parameters", "inputs") for info in data.get(section, {}).values()
              if isinstance(info.get("start"), str)]
-    texts += [c["python"] for table in ("constants", "call_constants")
-              for c in data["model"].get(table, {}).values() if isinstance(c, dict) and "python" in c]
+    texts += [c["python"] if isinstance(c, dict) else c for table in ("constants", "call_constants")
+              for c in data["model"].get(table, {}).values()
+              if isinstance(c, str) or (isinstance(c, dict) and "python" in c)]
     if entry_file is not None:
         try:
             tree = ast.parse(entry_file.read_text(encoding="utf-8"))

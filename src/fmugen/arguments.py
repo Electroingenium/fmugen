@@ -394,6 +394,35 @@ def _keywordless(fn):
     return hasattr(fn, "nin") and type(fn).__module__.split(".")[0] in ("numpy", "numba")
 
 
+def _given_constant(value):
+    """Whether a ``--start`` / ``--const`` value is a ``--const`` one: ``{"call": ...}`` or ``{"python": ...}``.
+
+    :param value: a value of the starts.
+    :rtype: bool
+    """
+    return isinstance(value, dict) and len(value) == 1 and ("call" in value or "python" in value)
+
+
+def _const_entry(value):
+    """How a ``--const`` value is written in the constants table.
+
+    A computed one as ``{call = ...}``; a literal as the plain TOML value when TOML has one (a string,
+    number, bool, or a list of them: ``model = "yolo11n.pt"``), else as ``{python = repr}``.
+
+    :param value: ``{"call": ...}`` or ``{"python": repr}``.
+    :type value: dict
+    :rtype: object
+    """
+    if "call" in value:
+        return dict(value)
+    literal = ast.literal_eval(value["python"])
+
+    def plain(v):
+        return isinstance(v, (str, bool, int, float)) or (isinstance(v, list) and all(plain(x) for x in v))
+
+    return literal if plain(literal) and not (isinstance(literal, float) and math.isnan(literal)) else dict(value)
+
+
 #: The parameters assumed for a callable without a signature (a C built-in): positional arguments only.
 NO_SIGNATURE_PARAMETERS = inspect.Signature([inspect.Parameter("args", inspect.Parameter.VAR_POSITIONAL)]).parameters
 
@@ -496,8 +525,8 @@ def _arguments(fn, section, data, comments, skip_self=False, allow_time=True, co
                 else f"taken as a date-time from its name {p.name!r} (not annotated): check it, or replace this "
                      "with an input; the epoch plus the simulation time")
             continue
-        if isinstance(starts.get(p.name), dict) and "call" in starts[p.name]:
-            data["model"].setdefault(constants_key, {})[p.name] = dict(starts[p.name])
+        if _given_constant(starts.get(p.name)):   # --const: a fixed value, not a variable
+            data["model"].setdefault(constants_key, {})[p.name] = _const_entry(starts[p.name])
             continue
         if p.name in starts and _split_items(p, starts[p.name], variables, section, comments, arrays):
             continue
@@ -507,7 +536,7 @@ def _arguments(fn, section, data, comments, skip_self=False, allow_time=True, co
             if name.startswith(f"{p.name}."):
                 _start_error(comments, name, f"cannot tell the class of {p.name} (no default and no dataclass, "
                                              "pydantic, attrs or namedtuple annotation) to build it from fields; "
-                                             f"give the whole argument instead, e.g. --start={p.name}=call:module:Class(...)")
+                                             f"give the whole argument instead, e.g. --const {p.name}=call:module:Class(...)")
         if p.name in starts and not arrays and isinstance(starts[p.name], (list, tuple, bytes)):
             raise InterfaceError(f"--start {p.name}: arrays and bytes need --fmi 3 (FMI 2 has only scalar variables)")
         has_default = p.default is not p.empty or p.name in starts
@@ -531,8 +560,9 @@ def _arguments(fn, section, data, comments, skip_self=False, allow_time=True, co
             variables[p.name] = {"type": "Binary", "start": default.hex()}
         elif arrays and _array_info(default):
             variables[p.name] = _array_info(default, with_start=True)
-        elif p.name in starts and _constant(default):   # --start with a value that isn't an FMI one
-            data["model"].setdefault(constants_key, {})[p.name] = _constant(default)
+        elif p.name in starts:   # --start with a value that can't be an FMU variable
+            raise InterfaceError(f"--start {p.name}: {default!r} can't be an FMU variable (a number, string, bool "
+                                 f"or array); give a fixed value with --const {p.name}=...")
         else:
             comments[("model", f"{constants_key}.{p.name}")] = _constant(default)
         if len(variables) > before and "dimensions" in variables[p.name]:
@@ -554,15 +584,15 @@ def _arguments(fn, section, data, comments, skip_self=False, allow_time=True, co
         and all(p.kind in (p.VAR_POSITIONAL, p.VAR_KEYWORD) for p in params)
     # by position: for a constructor, for computed constants, and when there's no **kwargs to take them
     by_position = only_varargs and not by_keyword and (section == "parameters" or not any(p.kind is p.VAR_KEYWORD for p in params)
-                                    or any(isinstance(starts[n], dict) and "call" in starts[n] for n in extra))
+                                    or any(_given_constant(starts[n]) for n in extra))
     for name in extra:
-        computed = isinstance(starts[name], dict) and "call" in starts[name]   # call:...: a constant
+        computed = _given_constant(starts[name])   # --const: a constant
         if by_position:
             # A callable that only declares (*args, **kwargs), e.g. StateSpace(A, B, C, D):
             # the --start values go by position, in the order given. Constants are named "0", "1", ...
             if computed:
-                data["model"].setdefault(constants_key, {})[str(position)] = dict(starts[name])
-                comments[("model", f"{constants_key}.{position}")] = f"--start {name}, passed by position to *args"
+                data["model"].setdefault(constants_key, {})[str(position)] = _const_entry(starts[name])
+                comments[("model", f"{constants_key}.{position}")] = f"--const {name}, passed by position to *args"
                 comments.setdefault(POSITIONAL_STARTS, {})[name] = position
             else:
                 variables[name] = _extra_info(name, starts[name], arrays)
@@ -571,10 +601,8 @@ def _arguments(fn, section, data, comments, skip_self=False, allow_time=True, co
             position += 1
         elif any(p.kind is p.VAR_KEYWORD for p in params):  # **kwargs: --start values become keyword arguments
             if computed:
-                data["model"].setdefault(constants_key, {})[name] = dict(starts[name])
-            elif isinstance(starts[name], dict):   # a dict (MOMENT's model_kwargs={...}): a fixed keyword
-                data["model"].setdefault(constants_key, {})[name] = {"python": repr(starts[name])}
-                comments[("model", f"{constants_key}.{name}")] = "--start, passed through **kwargs"
+                data["model"].setdefault(constants_key, {})[name] = _const_entry(starts[name])
+                comments[("model", f"{constants_key}.{name}")] = "--const, passed through **kwargs"
             else:
                 variables[name] = _extra_info(name, starts[name], arrays)
                 comments[(section, name)] = "start from --start (passed through **kwargs)"
@@ -616,7 +644,8 @@ def _extra_info(name, value, arrays):
         return _type_info(value)
     if arrays and _array_info(value):
         return _array_info(value, with_start=True)
-    raise InterfaceError(f"--start {name}: {value!r} is not an FMI value")
+    raise InterfaceError(f"--start {name}: {value!r} can't be an FMU variable (a number, string, bool or array); "
+                         f"give a fixed value with --const {name}=...")
 
 
 #: Annotation text -> how an array argument of that type is passed (``convert``, or ``numpy``).
