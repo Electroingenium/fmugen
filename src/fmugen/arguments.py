@@ -308,7 +308,7 @@ def _assign_starts(init, method, starts):
     :rtype: tuple[dict, dict]
     """
     def params(fn):
-        """The parameters of ``fn`` from :func:`inspect.signature`, or ``{}`` without one.
+        """The parameters of ``fn`` from :func:`inspect.signature`; ``(*args)`` for a C built-in without one.
 
         :param fn: a callable, or None.
         :rtype: collections.abc.Mapping
@@ -316,7 +316,7 @@ def _assign_starts(init, method, starts):
         try:
             return inspect.signature(fn).parameters if fn is not None else {}
         except (TypeError, ValueError):
-            return {}
+            return NO_SIGNATURE_PARAMETERS
 
     init_p, call_p = params(init), params(method)
     init_starts, call_starts = {}, {}
@@ -363,7 +363,10 @@ def class_called(cls, name):
     raw = inspect.getattr_static(cls, name, None) if cls is not None else None
     if not isinstance(raw, types.FunctionType):
         return False
-    params = list(inspect.signature(raw).parameters.values())
+    try:
+        params = list(inspect.signature(raw).parameters.values())
+    except (TypeError, ValueError):   # no readable signature: a normal method, as for C built-ins
+        return False
     if not params:
         return True
     first = params[0]
@@ -391,8 +394,14 @@ def _keywordless(fn):
     return hasattr(fn, "nin") and type(fn).__module__.split(".")[0] in ("numpy", "numba")
 
 
+#: The parameters assumed for a callable without a signature (a C built-in): positional arguments only.
+NO_SIGNATURE_PARAMETERS = inspect.Signature([inspect.Parameter("args", inspect.Parameter.VAR_POSITIONAL)]).parameters
+
+
 def _only_varargs(fn, skip_self=True):
     """Whether ``fn`` declares no named arguments, only ``*args`` (and maybe ``**kwargs``).
+
+    A callable without a signature (a C built-in) counts: its arguments can only be given by position.
 
     :param fn: the callable.
     :param skip_self: ignore the first parameter (an unbound method's self).
@@ -402,7 +411,7 @@ def _only_varargs(fn, skip_self=True):
     try:
         params = list(inspect.signature(fn).parameters.values())[1 if skip_self else 0:]
     except (TypeError, ValueError):
-        return False
+        return True
     return any(p.kind is p.VAR_POSITIONAL for p in params) \
         and all(p.kind in (p.VAR_POSITIONAL, p.VAR_KEYWORD) for p in params)
 
@@ -451,11 +460,15 @@ def _arguments(fn, section, data, comments, skip_self=False, allow_time=True, co
     starts = starts or {}
     try:
         params = list(inspect.signature(fn).parameters.values())
-    except (TypeError, ValueError):  # e.g. some C extensions
+    except (TypeError, ValueError):  # e.g. some C extensions: --start values go by position, as to *args
         comments.setdefault(NO_SIGNATURE, []).append(getattr(fn, "__qualname__", repr(fn)))
-        comments[(section, None)] = f"cannot inspect the signature of {getattr(fn, '__qualname__', fn)}; " \
-                                    "add the variables by hand (to = \"pos:N\" for positional arguments)"
-        params = []
+        comments.setdefault((section, None), (   # the probe's split between constructor and step says more
+            f"cannot inspect the signature of {getattr(fn, '__qualname__', fn)}: --start values are passed by "
+            "position, in the order given; add any others by hand (to = \"pos:N\")" if starts else
+            f"cannot inspect the signature of {getattr(fn, '__qualname__', fn)}; add the variables by hand "
+            "(to = \"pos:N\" for positional arguments), or give them with --start in order"))
+        params = list(NO_SIGNATURE_PARAMETERS.values())
+        skip_self = False
     if skip_self and params:
         params = params[1:]
     params = [_unwrap_descriptor(p) for p in params]
@@ -1080,6 +1093,8 @@ def _same(a, b):
     :rtype: bool
     """
     try:
+        if type(a) is type(b) and type(a).__module__.split(".")[0] == "pandas" and hasattr(a, "equals"):
+            return bool(a.equals(b))   # tables: == compares element-wise
         if hasattr(a, "tolist"):
             a = a.tolist()
         if hasattr(b, "tolist"):

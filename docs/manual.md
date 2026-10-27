@@ -305,10 +305,10 @@ Every section and key, with defaults, value forms, validation rules and a comple
 | `probe call failed (…)` in the config written by `init --probe` | The model raised an error at the start values (division by zero, `log(0)`, out of range…). | Rerun `init` with realistic `--start` values. |
 | `… must be called first` / `has not been defined` (raised by the model) | The library needs setup. | `[model] setup` / `init --setup`. |
 | `--start NAME: arrays and bytes need --fmi 3` | An array or Binary value in an FMI 2 build. | Use `--fmi 3`. |
-| `--start names that are not arguments of the model` | A typo, or the argument isn't in the inspected signature. | Check the names; for C extensions, write the config by hand. |
+| `--start names that are not arguments of the model` | A typo, or the argument isn't in the inspected signature. | Check the names. (For C extensions without a signature, `--start` values are passed by position instead.) |
 | `the config defines no FMU variables` | Nothing could be inferred (e.g. `**kwargs` only, or an uninspectable signature). | Add `[inputs]` and `[outputs]`, or use `--start`, `--kind function`. |
 | `requires FMI 3 (…)` | FMI 3-only feature in an FMI 2 build. | `fmi_version = 3` or `build --fmi 3`. |
-| `cannot inspect the signature of …` (comment in the generated config) | A C extension without signature information. | Hand-written variables with `to = "pos:N"`. |
+| `cannot inspect the signature of …` (comment in the generated config) | A C extension without signature information. | Give the arguments with `--start`, in order (they are passed by position), or write variables by hand with `to = "pos:N"`. |
 | `unknown key(s) [...]` | A typo in a key. | The message lists the allowed keys. |
 | `duplicate variable or clock names` | The same name in two sections, or a variable named like a clock. | Rename one; bind it with `to`/`from`. |
 | `save_state = false` or `save_state = [...]` written by `init`, with a comment | The object holds something that can't be pickled: an ONNX session, a file, a socket, a generator. | Fine for most uses. With a list, check that the attributes named as not saved don't change during a simulation (a session or device handle doesn't; a generator does): if they do, set `save_state = false`. |

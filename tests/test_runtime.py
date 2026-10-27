@@ -907,12 +907,12 @@ def test_call_start_for_the_step_method_copy_of_a_shared_name(tmp_path):
     assert data["model"]["constants"]["x0"] == {"call": "builtins:list([1.0])"}
 
 
-def test_init_start_for_a_callable_without_signature():
-    from fmugen.config import InterfaceError
-
-    # max is a C built-in: inspect.signature fails, so the --start names can't be placed
-    with pytest.raises(InterfaceError, match=r"--start a, b: cannot tell which arguments these are, since max has no signature"):
-        init("builtins:max", starts={"a": 1.0, "b": 2.0})
+def test_init_start_for_a_callable_without_signature(tmp_path):
+    # max is a C built-in: inspect.signature fails, so the --start values go by position, in order
+    _, data = init("builtins:max", output=tmp_path / "fmugen.toml", starts={"a": 1.0, "b": 2.0}, probe=True)
+    assert data["inputs"] == {"a": {"start": 1.0, "to": "pos:0"}, "b": {"start": 2.0, "to": "pos:1"}}
+    assert data["outputs"] == {"y": {"from": "return"}}
+    assert "passed by position, in the order given" in (tmp_path / "fmugen.toml").read_text()
 
 
 def test_probe_retries_a_date_time_in_utc(tmp_path):

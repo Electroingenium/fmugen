@@ -372,7 +372,7 @@ fluid  = { start = "Water",  to = "pos:5" }
 value = { from = "return" }    # saturation temperature of water at 1 atm: 373.12 K
 ```
 
-`fmugen init` binds positional-only arguments it can see this way. If a signature can't be inspected at all, as with `PropsSI`, `init` says so and you write the variables by hand.
+`fmugen init` binds positional-only arguments it can see this way. If a signature can't be inspected at all, as with `PropsSI` or sgp4's `Satrec`, `init` passes the `--start` values by position, in the order given (`to = "pos:N"`). For a class, `--probe` also finds which of them go to the constructor and which to the step method, giving the step as many as it takes: `--start line1=… --start line2=… --start jd=… --start fr=…` for `Satrec.twoline2rv(line1, line2).sgp4(jd, fr)`. Without `--start`, write the variables by hand.
 
 ---
 

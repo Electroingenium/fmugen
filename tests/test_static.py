@@ -200,8 +200,8 @@ def test_probe_adds_what_only_the_code_shows(tmp_path):
 
 
 def test_probe_comments_out_values_that_cant_be_fmi_variables(tmp_path):
-    # like pyproj (a str property that is None) and seirsplus (a growing history); impedance's
-    # complex result is split into its real and imaginary parts
+    # like pyproj (a str property that is None); impedance's complex result is split into its real
+    # and imaginary parts; a growing history (seirsplus) gives its last entry
     model = write(tmp_path, '''
         import numpy as np
 
@@ -220,9 +220,9 @@ def test_probe_comments_out_values_that_cant_be_fmi_variables(tmp_path):
     data, comments = infer(model, probe=True, fmi_version=3)
     assert data["outputs"] == {"y_real": {"from": "return:real", "dimensions": [2]},
                                "y_imag": {"from": "return:imag", "dimensions": [2]}}
-    assert "locals" not in data
+    assert data["locals"] == {"history": {"from": "attr:history.-1"}}
     assert comments[("outputs", "#remarks#0")] == 'remarks = { from = "attr:remarks", type = ... }'
-    assert "from [2] to [3]" in comments[("locals", "#history#why")]
+    assert "its last entry" in comments[("locals", "history")] and "([2] then [3])" in comments[("locals", "history")]
     with isolated_imports():
         output, _ = init(str(model), probe=True, fmi_version=3, output=str(tmp_path / "fmugen.toml"))
     text = output.read_text()
@@ -292,7 +292,7 @@ def test_pint_units_are_read_from_the_errors():
 
 
 def test_probe_outputs_what_the_step_changes_when_nothing_else(tmp_path):
-    # like river's LinearRegression (learns intercept); a history that grows each step stays left out
+    # like river's LinearRegression (learns intercept); a history that grows each step gives its last entry
     model = write(tmp_path, '''
         import numpy as np
 
@@ -307,5 +307,5 @@ def test_probe_outputs_what_the_step_changes_when_nothing_else(tmp_path):
                 self.history = np.append(self.history, self.intercept)
     ''')
     data, _ = infer(f"{model}:Learner", call="learn_one", probe=True)
-    assert data["outputs"] == {"intercept": {}}
+    assert data["outputs"] == {"intercept": {}, "history": {"from": "attr:history.-1"}}
     assert "locals" not in data

@@ -734,6 +734,8 @@ def _infer_function(fn, data, comments, arrays=False, starts=None, probe=False, 
             comments[PROBED] = True
             seen = _outputs_from_return(result, data, comments, default_name="y", is_class=False, arrays=arrays)
             returned_names |= seen
+            if result is None:
+                _suggest_object_step(data, comments)
     if inspect.isclass(fn):   # kind = "function": the new object is the result; its constructor sets the outputs
         kinds = static.class_attributes(fn, "__init__")[0]
         public = [a for a, k in kinds.items() if not a.startswith("_") and k not in ("other", "none")
@@ -745,6 +747,27 @@ def _infer_function(fn, data, comments, arrays=False, starts=None, probe=False, 
         read = static.returned(fn)
     _add_returned(read, data, comments, is_class=False, arrays=arrays, probe=probe, seen=seen)
     _detect_states(data, comments, returned=returned_names | set(read.names), attrs=set())
+
+
+def _suggest_object_step(data, comments):
+    """A function that returned None and took a computed object writes its results onto it (pandapower's
+    ``runpp(net)``): suggest the config that makes that object the model, whose attributes can be read.
+
+    :param data: the config being inferred.
+    :type data: dict
+    :param comments: ``(section, key) -> text``; updated in place.
+    :type comments: dict
+    """
+    objects = {n: v["call"] for n, v in data["model"].get("constants", {}).items()
+               if isinstance(v, dict) and "call" in v and not n.isdigit()}
+    if len(objects) != 1:
+        return
+    (name, made), = objects.items()
+    factory = made.split("(", 1)[0]
+    function = data["model"]["entry"]
+    comments[("outputs", None)] = (
+        f"{function.split(':')[-1]}() returned None: its results are probably written onto {name}. To read them, "
+        f"make {name} the model: fmugen init {factory} --call \"{function}(self)\" --probe")
 
 
 # ---------------- classes ----------------
@@ -782,6 +805,10 @@ def _infer_class(cls, call, data, comments, arrays=False, starts=None, create=No
     if factory and cls is None:
         cls = static.factory_class(factory)   # from its return annotation; else known only by calling it
     method_name = call or _pick_method(cls)
+    object_step = ":" in method_name   # "module:function(self, ...)": a function taking the object (pandapipes)
+    if object_step:
+        from fmugen.config import _object_call
+        _object_call(method_name, is_class=True, call_on_class=False)
     if create:
         if not callable(getattr(cls, create, None)):
             raise InterfaceError(f"{cls.__name__} has no classmethod {create!r}")
@@ -798,7 +825,8 @@ def _infer_class(cls, call, data, comments, arrays=False, starts=None, create=No
         call_starts = {k: v for k, v in (starts or {}).items() if k not in declared}
     else:
         constructor = getattr(cls, create) if create else cls.__init__   # a bound classmethod has no cls argument
-        init_starts, call_starts = _assign_starts(constructor, getattr(cls, method_name, None), starts or {})
+        init_starts, call_starts = _assign_starts(constructor, None if object_step else getattr(cls, method_name, None),
+                                                  starts or {})
         init_starts, call_starts = _split_varargs(cls, create, method_name, init_starts, call_starts, data,
                                                   comments, probe)
     by_keyword = not factory and _varargs_by_keyword(getattr(cls, create) if create else cls, init_starts, data,
@@ -809,24 +837,27 @@ def _infer_class(cls, call, data, comments, arrays=False, starts=None, create=No
 
     if method_name != "__call__" or call:
         data["model"]["call"] = method_name
-    if not factory and not callable(getattr(cls, method_name, None)):
+    if not factory and not object_step and not callable(getattr(cls, method_name, None)):
         raise InterfaceError(f"{cls.__name__} has no method {method_name!r}")
-    on_class = not factory and class_called(cls, method_name)
+    on_class = not factory and not object_step and class_called(cls, method_name)
     if on_class:
         data["model"]["call_on_class"] = True
         comments[("model", "call_on_class")] = (f"{method_name}() has no self: it's called as {cls.__name__}."
                                                 f"{method_name}(...); remove this if it's a normal method")
 
     seen_returns, seen_attrs, obj = set(), set(), None
-    if factory is not None and not probe and cls is not None and not hasattr(cls, method_name):
+    if factory is not None and not probe and cls is not None and not object_step and not hasattr(cls, method_name):
         cls = None   # annotated with a base class (tirex's PretrainedModel): the real class is known only by running it
     if probe:
         obj, seen_returns, seen_attrs = _probe_class(cls, method_name, data, comments, arrays, call_starts,
                                                      create, factory, converts)
-        if obj is not None and cls is not None and not hasattr(cls, method_name):
+        if obj is not None and (object_step or cls is not None and not hasattr(cls, method_name)):
             # a factory annotated with a base class (tirex's load_model -> PretrainedModel): read the
             # class of the object it returned, which has the method
             cls = type(obj)
+    elif object_step:
+        comments[("outputs", None)] = (f"{method_name} is a function taking the object: what it changes is known only "
+                                       "by running it; add outputs by hand (e.g. attr: paths), or run init --probe")
     elif cls is None:
         # getattr: a callable object (a library's placeholder for a missing optional dependency) has no __name__
         comments[("inputs", None)] = (f"the object {getattr(factory, '__name__', type(factory).__name__)}() returns is known only by running it: add the "
@@ -846,8 +877,8 @@ def _infer_class(cls, call, data, comments, arrays=False, starts=None, create=No
         comments[("model", "#save_state")] = (
             "save_state = false  # not checked without --probe: set it if the model holds a device, file, "
             "socket or ONNX session")
-    if obj is None and cls is None:
-        return   # a factory whose object type isn't known without running it
+    if obj is None and cls is None or object_step:
+        return   # a factory whose object type isn't known without running it; a step function's results are on obj
 
     if cls is not None:
         in_step, in_init = static.class_attributes(cls, method_name)

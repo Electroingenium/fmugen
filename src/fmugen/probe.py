@@ -91,14 +91,19 @@ def _probe_class(cls, method_name, data, comments, arrays, call_starts, create, 
         raise
     except Exception as e:
         comments[("outputs", None)] = f"probe construction failed ({e!r}); outputs below are read from the code"
-        if cls is not None:
+        if cls is not None and ":" not in method_name:
             _arguments(getattr(cls, method_name), "inputs", data, comments,
                        skip_self=not data["model"].get("call_on_class"),
                        constants_key="call_constants", arrays=arrays, starts=call_starts)
             _apply_converts(data, converts)
         return None, set(), set()
-    if factory:
+    object_step = ":" in method_name   # "module:function(self, ...)": its arguments are in the call text
+    if object_step:
+        method = None
+    elif factory:
         method = getattr(obj, method_name, None)   # bound: no self argument
+        if method_name == "__call__" and isinstance(obj, (types.FunctionType, types.MethodType)):
+            method = obj   # a function made at runtime (sympy's lambdify): its own signature, not (*args, **kwargs)
         if not callable(method):
             raise InterfaceError(f"the object {factory.__name__}() returns has no method {method_name!r}")
     else:
@@ -110,11 +115,18 @@ def _probe_class(cls, method_name, data, comments, arrays, call_starts, create, 
         if _writable_attribute(obj, name) and _same(getattr(obj, name), data["parameters"][name].get("start")):
             comments.setdefault(("parameters", name), "kept as an attribute: add variability = \"tunable\" if the step reads it")
 
-    _arguments(method, "inputs", data, comments, skip_self=not factory and not data["model"].get("call_on_class"),
-               constants_key="call_constants",
-               arrays=arrays, starts=call_starts)
+    if object_step:
+        if call_starts:
+            raise InterfaceError(f"--start {', '.join(call_starts)}: {method_name} takes its arguments in the call "
+                                 "text; write them there, or bind inputs by hand (to = \"pos:N\" after those)")
+    else:
+        _arguments(method, "inputs", data, comments, skip_self=not factory and not data["model"].get("call_on_class"),
+                   constants_key="call_constants",
+                   arrays=arrays, starts=call_starts)
     _apply_converts(data, converts)
     before, state_before = _numeric_attributes(obj, arrays), _state_bytes(obj)
+    dynamic_before = _dynamic_values(obj, arrays)
+    descriptors_before = _descriptor_values(obj, arrays)
     # what reading the properties and C attributes raises before the first step (pydmd before fit(),
     # ephem before compute()): those outputs need the model called at initialization
     unread_before = _unreadable(obj)
@@ -126,9 +138,15 @@ def _probe_class(cls, method_name, data, comments, arrays, call_starts, create, 
         comments[("outputs", None)] = f"probe call failed ({e!r}); outputs below are read from the code"
         return obj, set(), set(getattr(obj, "__dict__", {}))
     comments[PROBED] = True
+    if result is obj:   # a step returning its object for chaining (imufusion's update): it returns nothing new
+        result = None
     after = _numeric_attributes(obj, arrays)
     state_after = _state_bytes(obj)
-    if result is not None and _same(before, after) and (state_before is None or state_before == state_after):
+    dynamic_after = _dynamic_values(obj, arrays)
+    dynamic_changed = {k: v for k, v in dynamic_after.items() if k not in dynamic_before
+                       or not _same(dynamic_before[k], v)}
+    if result is not None and _same(before, after) and (state_before is None or state_before == state_after) \
+            and not dynamic_changed:
         # the step changed nothing: running it at initialization too gives the outputs at the start time
         data["model"]["init_call"] = True
         comments[("model", "init_call")] = (f"{method_name}() changed nothing in the probe, so it also runs at "
@@ -146,10 +164,16 @@ def _probe_class(cls, method_name, data, comments, arrays, call_starts, create, 
     if result is None:   # the step returns nothing: its results are on the object
         taken |= set(data.get("outputs", {}))
         for attr, value in _descriptor_values(obj, arrays).items():   # C attributes set by the step (ephem's ra)
-            if attr in unread_before and attr not in taken:
-                data.setdefault("outputs", {})[attr] = _typed({}, value, arrays)
+            if attr in taken:
+                continue
+            if attr in unread_before:
                 comments[("outputs", attr)] = f"set by {method_name}(): reading it failed before"
-                taken.add(attr)
+            elif attr in descriptors_before and not _same(descriptors_before[attr], value):   # imufusion's quaternion
+                comments[("outputs", attr)] = f"changed by {method_name}()"
+            else:
+                continue
+            data.setdefault("outputs", {})[attr] = _typed({}, value, arrays)
+            taken.add(attr)
         _getter_outputs(obj, data, comments, arrays, taken)
         taken |= set(data.get("outputs", {}))
     needs_call = sorted(set(unread_before) & set(data.get("outputs", {})))
@@ -174,6 +198,19 @@ def _probe_class(cls, method_name, data, comments, arrays, call_starts, create, 
         elif not _same(before[attr], value):
             data.setdefault("locals", {})[attr] = _typed({}, value, arrays)
             comments[("locals", attr)] = f"changed by {method_name}()"
+    for attr, value in dynamic_changed.items():   # attributes the object makes up (tellurium's species S1, S2)
+        if attr in taken or attr in data.get("outputs", {}) or attr in data.get("locals", {}):
+            continue
+        columns = _table_children(value)
+        if columns is not None:   # a result table (pandapipes' net.res_junction): its columns
+            for column, part in columns:
+                name = _valid_name(f"{attr}.{column}")
+                if _fmi_value(part, arrays) and name not in data.get("outputs", {}):
+                    data.setdefault("outputs", {})[name] = _typed({"from": f"attr:{attr}.{column}"}, part, arrays)
+                    comments[("outputs", name)] = f"a column of {attr}, changed by {method_name}()"
+            continue
+        data.setdefault("outputs", {})[attr] = _typed({}, value, arrays)
+        comments[("outputs", attr)] = f"changed by {method_name}(); an attribute the object provides itself"
     if "outputs" not in data and data.get("locals"):
         # nothing else to read: what the step changes is its result (river's intercept)
         data["outputs"] = data.pop("locals")
@@ -309,6 +346,15 @@ def _check_sizes(obj, method_name, data, comments):
             new = _array_info(_scalar_of(value))
             size = new["dimensions"] if new else "not an array"
         if size == info["dimensions"]:
+            continue
+        if isinstance(size, list) and len(size) == len(info["dimensions"]) and size[1:] == info["dimensions"][1:] \
+                and size[0] > info["dimensions"][0]:
+            # a history that grows by one entry per step (seirsplus' numS, pybamm's t): its last entry
+            # has a fixed size, and is the value at the end of the step
+            sep = "." if path else ":"
+            data[section][name] = _typed({"from": f"{source}{sep}-1"}, value[-1], arrays=True)
+            comments[(section, name)] = (f"its last entry: the whole {source} grows each step ({info['dimensions']} "
+                                         f"then {size}), and an FMI array has a fixed size")
             continue
         del data[section][name]
         comments.pop((section, name), None)
@@ -902,6 +948,9 @@ def _step_method(obj, method_name, data):
     :type data: dict
     :rtype: callable
     """
+    if ":" in method_name:   # "module:function(self, ...)": a function taking the object (pandapipes' pipeflow)
+        from fmugen.templates.fmugen_runtime import object_call
+        return object_call(method_name, obj)
     return getattr(type(obj) if data["model"].get("call_on_class") else obj, method_name)
 
 
@@ -949,15 +998,17 @@ def _varargs_by_keyword(constructor, init_starts, data, probe):
 def _split_varargs(cls, create, method_name, init_starts, call_starts, data, comments, probe):
     """Split ``--start`` values between a constructor and a step method that both take only ``*args``.
 
-    SWIG classes such as ``openturns.Normal(mu, sigma).computePDF(x)``: the signatures can't tell
-    which values go where, so _assign_starts gives them all to the constructor. With ``--probe``,
-    the first values (in ``--start`` order) go to the constructor, the rest to the method, trying
-    the constructor with as many as possible first, and the first split where both calls work
-    is kept.
+    SWIG classes such as ``openturns.Normal(mu, sigma).computePDF(x)``, and C built-ins without a
+    signature (``vqf.VQF(gyrTs).update(gyr, acc)``, sgp4's ``Satrec.twoline2rv(l1, l2).sgp4(jd, fr)``):
+    the signatures can't tell which values go where, so _assign_starts gives them all to the
+    constructor. With ``--probe``, the first values (in ``--start`` order) go to the constructor, the
+    rest to the method, trying the method with as many as possible first, and the first split where
+    both calls work is kept: a value the step can take is an input, which can change each step
+    (ephem's ``Sun().compute(date)``, not ``Sun(date)``, which computes once).
 
     :param cls: the model class.
     :type cls: type
-    :param create: ``--create``, or None (then nothing is split).
+    :param create: ``--create``: the classmethod that builds the object, or None.
     :type create: str or None
     :param method_name: the step method.
     :type method_name: str
@@ -975,13 +1026,16 @@ def _split_varargs(cls, create, method_name, init_starts, call_starts, data, com
     :rtype: tuple[dict, dict]
     """
     method = getattr(cls, method_name, None)
-    if create or method is None or not _only_varargs(cls.__init__) or not _only_varargs(method) \
-            or len(init_starts) < 1:
+    build = getattr(cls, create, None) if create else cls
+    constructor = build if create else cls.__init__
+    if method is None or build is None or not _only_varargs(constructor, skip_self=not create) \
+            or not _only_varargs(method) or len(init_starts) < 1:
         return init_starts, call_starts
     names = list(init_starts)
+    built = f"{cls.__name__}.{create}" if create else cls.__name__
     if not probe:
-        comments[("inputs", None)] = (f"{cls.__name__}() and {method_name}() both take *args: every --start value "
-                                      f"was given to the constructor; run init --probe to split them")
+        comments[("inputs", None)] = (f"{built}() and {method_name}() both take *args (or have no signature): every "
+                                      f"--start value was given to the constructor; run init --probe to split them")
         return init_starts, call_starts
     from fmugen.templates.fmugen_runtime import resolve_constant
     try:
@@ -989,15 +1043,15 @@ def _split_varargs(cls, create, method_name, init_starts, call_starts, data, com
         values = [resolve_constant(init_starts[n]) for n in names]
     except Exception:
         return init_starts, call_starts
-    for k in range(len(names), -1, -1):
+    for k in range(len(names) + 1):
         try:
-            getattr(cls(*values[:k]), method_name)(*values[k:], **{n: resolve_constant(v) for n, v in call_starts.items()})
+            getattr(build(*values[:k]), method_name)(*values[k:], **{n: resolve_constant(v) for n, v in call_starts.items()})
         except Exception:
             continue
         if k < len(names):
-            comments[("inputs", None)] = (f"{cls.__name__}() and {method_name}() both take *args: the probe worked "
-                                          f"with {', '.join(names[:k]) or 'nothing'} for the constructor and "
-                                          f"{', '.join(names[k:])} for {method_name}()")
+            comments[("inputs", None)] = (f"{built}() and {method_name}() both take *args (or have no signature): the "
+                                          f"probe worked with {', '.join(names[:k]) or 'nothing'} for the constructor "
+                                          f"and {', '.join(names[k:])} for {method_name}()")
         return ({n: init_starts[n] for n in names[:k]},
                 {**{n: init_starts[n] for n in names[k:]}, **call_starts})
     return init_starts, call_starts
@@ -1155,6 +1209,8 @@ def _outputs_from_return(result, data, comments, default_name, is_class, arrays=
             # a property of the object a function returns, named like an input: y_nominal_value
             # (a class's step that echoes its input, as pyfluids' with_state, still gives none)
             name = f"{default_name}_{name}"
+        if name in taken and source == "return":   # the whole result, named like an input (lambdify's f(x, y))
+            name = next(n for n in ("result", "result_y", f"{default_name}_result") if n not in taken)
         if name in taken:  # e.g. an object that echoes its inputs as attributes
             continue
         if _dotted_name(name) and _unfit_value(comments, "outputs", name, value, source, arrays):
@@ -1247,7 +1303,10 @@ def _positions(name, value, source, arrays, depth=0):
 
 
 def _children(value):
-    """The named parts of a container value (tables, mappings, NamedTuples, dataclasses, namespaces).
+    """The named parts of a container value (tables, mappings, NamedTuples, dataclasses, namespaces, objects).
+
+    An object's parts are its public attributes and properties (simdkalman's ``result.observations.mean``,
+    ultralytics' ``results[0].boxes.xyxy``); a list or tuple of such objects gives its items by position.
 
     :param value: the value.
     :return: ``[(name, part)]``, empty for anything else.
@@ -1264,13 +1323,56 @@ def _children(value):
         return [(f.name, getattr(value, f.name)) for f in dataclasses.fields(value)]
     if isinstance(value, types.SimpleNamespace):
         return list(vars(value).items())
+    if type(value) in (list, tuple) and 0 < len(value) <= MAX_ITEMS and all(_plain_object(v) for v in value):
+        return [(str(i), v) for i, v in enumerate(value)]
+    if _plain_object(value):
+        public = {k: v for k, v in vars(value).items() if not k.startswith("_") and v is not None}
+        public.update({k: v for k, v in _public_properties(value, arrays=True).items() if k not in public})
+        # inputs kept on the object (ultralytics' orig_img) aren't results: too large to be one
+        return [(k, v) for k, v in public.items() if not _size(v) > MAX_NESTED_SIZE]
     return []
 
 
-def _table_children(value):
-    """``[(label, scalar)]`` for a pandas Series, a one-row DataFrame or an xarray Dataset of single values.
+#: How many items of a list of objects are split into outputs (ultralytics' one Results per image).
+MAX_ITEMS = 8
 
-    Recognised by module and class name, so pandas/xarray aren't imported; only string labels.
+#: Arrays inside a returned object larger than this aren't made outputs (an input image kept on it).
+MAX_NESTED_SIZE = 10_000
+
+
+def _size(value):
+    """The number of elements of an array-like value (numpy, torch), else 0.
+
+    :param value: the value.
+    :rtype: int
+    """
+    size = getattr(value, "size", 0)
+    size = size() if callable(size) else size   # torch: a method returning a Size
+    try:
+        return int(math.prod(size)) if isinstance(size, tuple) else int(size)
+    except (TypeError, ValueError):
+        return 0
+
+
+def _plain_object(value):
+    """Whether ``value`` is an instance of a library or user class with public state to read (not a module,
+    class, function, number, string, container or array).
+
+    :param value: the value.
+    :rtype: bool
+    """
+    if isinstance(value, (type, types.ModuleType, types.FunctionType, types.MethodType, str, bytes, Mapping,
+                          list, tuple, set, frozenset, enum.Enum)) or callable(value) or _fmi_value(value, True):
+        return False
+    return type(value).__module__ not in ("builtins",) and hasattr(value, "__dict__")
+
+
+def _table_children(value):
+    """``[(label, value)]`` for a pandas Series, a DataFrame or an xarray Dataset of single values.
+
+    A one-row DataFrame gives each column's value; a longer one its numeric columns as arrays
+    (neuralforecast's forecast column, pandapipes' result tables), each read by its label. Recognised
+    by module and class name, so pandas/xarray aren't imported; only string labels.
 
     :param value: the value.
     :return: the pairs, or None for anything else.
@@ -1283,6 +1385,8 @@ def _table_children(value):
             pairs = list(value.items())
         elif library == "pandas" and kind == "DataFrame" and len(value) == 1:
             pairs = [(c, value[c].iloc[0]) for c in value.columns]
+        elif library == "pandas" and kind == "DataFrame" and len(value) > 1:
+            pairs = [(c, value[c].to_numpy()) for c in value.columns if value[c].dtype.kind in "biuf"]
         elif library == "xarray" and kind == "Dataset":
             pairs = [(k, v.item()) for k, v in value.data_vars.items() if v.size == 1]
         else:
@@ -1386,6 +1490,32 @@ def _numeric_attributes(obj, arrays=False):
     except TypeError:
         return {}
     return {k: _snapshot(v) for k, v in attrs.items() if not k.startswith("_") and _fmi_value(v, arrays)}
+
+
+def _dynamic_values(obj, arrays=False):
+    """Snapshots of public attributes the object provides itself (``__getattr__`` listed by ``__dir__``),
+    not its class or ``__dict__``: tellurium's RoadRunner gives each species (``rr.S1``) this way.
+
+    :param obj: the model object.
+    :param arrays: whether arrays may be FMU variables (FMI 3).
+    :type arrays: bool
+    :rtype: dict
+    """
+    try:
+        names = set(dir(obj)) - set(dir(type(obj))) - set(getattr(obj, "__dict__", {}))
+    except Exception:
+        return {}
+    values = {}
+    for name in sorted(names):
+        if name.startswith("_") or not name.isidentifier():
+            continue
+        try:
+            value = getattr(obj, name)
+        except Exception:
+            continue
+        if _fmi_value(value, arrays) or _table_children(value):   # tables: pandapipes' net.res_junction
+            values[name] = _snapshot(value)
+    return values
 
 
 def _snapshot(value):
