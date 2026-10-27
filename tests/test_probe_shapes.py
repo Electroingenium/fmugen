@@ -459,6 +459,95 @@ def test_constructor_arrays_are_retried_as_numpy(tmp_path):
     assert "passed as numpy arrays: building the model failed with lists" in text
 
 
+def test_reset_is_called_when_the_step_needs_it(tmp_path):
+    # like gymnasium's environments: step() before reset() raises
+    path = write(tmp_path, "env.py", """
+        class Env:
+            def __init__(self, g=9.81):
+                self.state = None
+                self.g = g
+
+            def reset(self, seed=None):
+                self.state = 0.0
+                return self.state, {}
+
+            def step(self, action=0.5):
+                if self.state is None:
+                    raise RuntimeError("Cannot call env.step() before calling env.reset()")
+                self.state += action
+                return self.state, 1.0, False, False, {}
+    """)
+    data, text = probe(f"{path}:Env", tmp_path)
+    assert data["model"]["setup"] == ["reset"] and "y0" in data["outputs"]
+    assert "reset() before the first step" in text
+
+
+def test_a_factory_of_a_torch_like_module_reads_forward(tmp_path):
+    # like timm's create_model(...)(x): __call__(*args, **kwargs) runs forward(x)
+    path = write(tmp_path, "nets.py", """
+        class Module:
+            def __call__(self, *args, **kwargs):
+                return self.forward(*args, **kwargs)
+
+        class Net(Module):
+            def __init__(self, scale):
+                self.scale = scale
+
+            def forward(self, x):
+                return [self.scale * v for v in x]
+
+        def create_model(model_name="net", scale=2.0):
+            return Net(scale)
+    """)
+    data, _ = probe(f"{path}:create_model", tmp_path, starts={"x": [1.0, 2.0]}, fmi_version=3)
+    assert data["model"]["call"] == "__call__" and data["inputs"]["x"]["dimensions"] == [2]
+
+
+def test_a_classmethod_builds_the_object_when_the_constructor_cant(tmp_path):
+    # like stable-baselines3's PPO(policy, env): a saved agent comes from PPO.load(path)
+    (tmp_path / "agent.txt").write_text("0.5")
+    path = write(tmp_path, "agents.py", """
+        class PPO:
+            def __init__(self, policy, env, learning_rate=3e-4):
+                self.k = learning_rate
+
+            @classmethod
+            def load(cls, path, device="auto"):
+                agent = cls("MlpPolicy", None)
+                agent.k = float(open(path).read())
+                return agent
+
+            @classmethod
+            def describe(cls):
+                return "ppo"
+
+            def predict(self, observation=1.0):
+                return self.k * observation
+    """)
+    data, text = probe(f"{path}:PPO", tmp_path, starts={"path": {"python": "'agent.txt'"}, "observation": 2.0})
+    assert data["model"]["create"] == "load" and data["model"]["call"] == "predict"
+    assert "PPO.load(...) builds it: path not arguments of PPO()" in text   # observation: predict's
+
+
+def test_the_step_methods_own_names_dont_call_for_a_classmethod(tmp_path):
+    # like CFTOC: --start solve_x0 is the step method's copy of the constructor's x0, not a sign __init__ can't build it
+    path = write(tmp_path, "ctrl.py", """
+        class Ctrl:
+            def __init__(self, x0, N=5):
+                self.x0, self.N = x0, N
+
+            @classmethod
+            def from_dict(cls, d, **kwargs):
+                return cls(**d)
+
+            def solve(self, x0):
+                return {"u": float(sum(x0)) + self.x0[0]}
+    """)
+    data, _ = probe(f"{path}:Ctrl", tmp_path, call="solve", fmi_version=3,
+                    starts={"x0": [1.0], "solve_x0": [2.0, 3.0]})
+    assert "create" not in data["model"] and data["outputs"] == {"u": {"from": "return:u"}}
+
+
 def test_a_history_that_grows_each_step_gives_its_last_entry(tmp_path):
     # like seirsplus' numS: one more entry per run_epoch()
     path = write(tmp_path, "epi.py", """

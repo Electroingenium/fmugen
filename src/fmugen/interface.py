@@ -29,7 +29,7 @@ from fmugen.toml_output import render_toml
 from fmugen.arguments import (
     SCALARS, POSITIONAL_STARTS, START_ERRORS, NO_SIGNATURE, PROBED,
     _number_like, _array_info, _dotted_names, _arguments, _apply_converts,
-    _assign_starts, assumptions, guessed_outputs, unfit_outputs, class_called,
+    _assign_starts, assumptions, guessed_outputs, unfit_outputs, class_called, _only_varargs,
 )
 from fmugen.probe import (
     ConstantError, _run_setup, _probe_call, _probe_class,
@@ -881,6 +881,10 @@ def _infer_class(cls, call, data, comments, arrays=False, starts=None, create=No
     """
     if factory and cls is None:
         cls = static.factory_class(factory)   # from its return annotation; else known only by calling it
+    if not create and not factory and cls is not None:
+        create, why = _pick_create(cls, starts)
+        if create:
+            comments[("model", "create")] = why
     if call:
         method_name = call
     else:
@@ -1123,6 +1127,66 @@ def _results_only(cls):
     return True
 
 
+def _pick_create(cls, starts):
+    """The classmethod that builds the object, when the constructor can't take the ``--start`` / ``--const`` names.
+
+    The constructor can't when it doesn't declare one of them (and takes no ``**kwargs``), or when it
+    requires an argument they don't give. Then the only public classmethod whose required arguments
+    are among them, and that takes some of them, builds it: stable-baselines3's ``PPO.load(path)``,
+    chronos' ``from_pretrained(pretrained_model_name_or_path)``. Checked against the recorded --create
+    of 79 tested classes: 7 found, none wrong.
+
+    :param cls: the class.
+    :type cls: type
+    :param starts: the ``--start`` / ``--const`` values.
+    :type starts: dict or None
+    :return: ``(classmethod name, comment)``, or ``(None, None)``.
+    :rtype: tuple
+    """
+    if not starts:
+        return None, None
+    names = {n.partition(".")[0] for n in starts}
+    try:
+        init = inspect.signature(cls.__init__).parameters if cls.__init__ is not object.__init__ else {}
+    except (TypeError, ValueError):
+        return None, None
+    declared = {n for n, p in init.items() if p.kind not in (p.VAR_POSITIONAL, p.VAR_KEYWORD) and n != "self"}
+    takes_any = any(p.kind is p.VAR_KEYWORD for p in init.values())
+    # names a public method takes, or a method's copy of a constructor argument (calculate_optimal_actuation_x0),
+    # are for the step: they don't say the constructor can't build it
+    for_steps = set()
+    for m in dir(cls):
+        if m.startswith("_") or isinstance(inspect.getattr_static(cls, m, None), (classmethod, staticmethod, property)):
+            continue
+        try:
+            for_steps |= set(inspect.signature(getattr(cls, m)).parameters)
+        except (TypeError, ValueError):
+            continue
+        for_steps |= {n for n in names if n.startswith(f"{m.strip('_')}_")}
+    blocked = set() if takes_any else names - declared - for_steps
+    missing = {n for n in declared if init[n].default is init[n].empty} - names
+    if not blocked and not missing:
+        return None, None
+    fits = []
+    for m in dir(cls):
+        if m.startswith("_") or not isinstance(inspect.getattr_static(cls, m, None), classmethod):
+            continue
+        try:
+            params = inspect.signature(getattr(cls, m)).parameters.values()
+        except (TypeError, ValueError):
+            continue
+        own = {p.name for p in params if p.kind not in (p.VAR_POSITIONAL, p.VAR_KEYWORD)}
+        kwargs = any(p.kind is p.VAR_KEYWORD for p in params)
+        required = {p.name for p in params if p.kind not in (p.VAR_POSITIONAL, p.VAR_KEYWORD) and p.default is p.empty}
+        if required <= names and (names & own or kwargs) and (not blocked or blocked & own or kwargs):
+            fits.append(m)
+    if len(fits) == 1:
+        why = (f"{', '.join(sorted(blocked))} not arguments of {cls.__name__}()" if blocked
+               else f"{cls.__name__}() requires {', '.join(sorted(missing))}")
+        return fits[0], f"{cls.__name__}.{fits[0]}(...) builds it: {why}, and it's the only classmethod that fits"
+    return None, None
+
+
 def _method_from_starts(cls, starts, constructor):
     """The step method the ``--start`` / ``--const`` names point at, when the constructor may take some of them too.
 
@@ -1268,5 +1332,7 @@ def _returns_callable(fn, data, starts):
     if inspect.isclass(model) or not callable(model):
         return []
     call = model if isinstance(model, (types.FunctionType, types.MethodType)) else type(model).__call__
+    if not _fits(call, left) and _only_varargs(call) and callable(getattr(type(model), "forward", None)):
+        call = type(model).forward   # a torch module: __call__(*args, **kwargs) runs forward(x, ...)
     return left if _fits(call, left) else []
 

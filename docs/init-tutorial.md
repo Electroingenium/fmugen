@@ -221,7 +221,7 @@ Not every config has every section; `init` writes only those that apply. The ord
 | Key | What `init` writes | When to edit |
 |---|---|---|
 | `entry` | The function or class. | Rarely. |
-| `call` | The step method, if it's not `__call__`: `step`, `do_step`, `update`, the only public method, or `--call`. | If `init` picked the wrong method. `pykalman`'s `KalmanFilter` needs `--call filter_update`. |
+| `call` | The step method, if it's not `__call__`: `step`, `do_step`, `update`, the only public method, `forward` for a torch module returned by a factory, or `--call`. | If `init` picked the wrong method. `pykalman`'s `KalmanFilter` needs `--call filter_update`. |
 | `fmi_version` | `3` with `--fmi 3`. | To switch versions. `fmugen build --fmi` also overrides it. |
 | `requirements` | The installed packages the model needs, pinned to the installed versions. | When a version should be looser, or a package is missing (`init` says so in a comment). |
 | `sources` | Local modules the model imports, under the config's folder. | Add data files (CSV, JSON, weights) the model reads. |
@@ -464,7 +464,11 @@ Rerun with `--kind function`: the class is built with the inputs on every step a
 
 ### The class is built with `from_pretrained` (or another classmethod).
 
-Rerun with `--create from_pretrained`.
+When the constructor can't take your `--start`/`--const` names and exactly one public classmethod can (`PPO.load(path=...)`), `init` uses it and says so in a comment. Otherwise rerun with `--create from_pretrained`.
+
+### The step fails until `reset()` is called.
+
+With `--probe`, `init` tries `reset()` (when it takes no arguments) before the first step and, if the step then works, adds `setup = ["reset"]` with a comment (gymnasium environments). Otherwise rerun with `--setup reset`.
 
 ### Why is my variable Integer?
 

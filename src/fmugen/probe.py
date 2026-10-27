@@ -134,8 +134,15 @@ def _probe_class(cls, method_name, data, comments, arrays, call_starts, create, 
     except ConstantError:
         raise
     except Exception as e:
-        comments[("outputs", None)] = f"probe call failed ({e!r}); outputs below are read from the code"
-        return obj, set(), set(getattr(obj, "__dict__", {}))
+        if not _reset_first(obj, method_name, data, comments):
+            comments[("outputs", None)] = f"probe call failed ({e!r}); outputs below are read from the code"
+            return obj, set(), set(getattr(obj, "__dict__", {}))
+        # reset() worked: the object is the one the step starts from, so its "before" is now
+        before, state_before = _numeric_attributes(obj, arrays), _state_bytes(obj)
+        dynamic_before = _dynamic_values(obj, arrays)
+        descriptors_before = _descriptor_values(obj, arrays)
+        unread_before = _unreadable(obj)
+        result = _probe_call(_step_method(obj, method_name, data), data, comments, constants_key="call_constants")
     comments[PROBED] = True
     if result is obj:   # a step returning its object for chaining (imufusion's update): it returns nothing new
         result = None
@@ -219,6 +226,41 @@ def _probe_class(cls, method_name, data, comments, arrays, call_starts, create, 
     _check_sizes(obj, method_name, data, comments)
     _check_tunable(obj, method_name, data, comments, arrays)
     return obj, returned, set(getattr(obj, "__dict__", {})) | set(_property_values(obj, arrays)) | unfit
+
+
+def _reset_first(obj, method_name, data, comments):
+    """After a failed probe step: if the object has a ``reset()`` taking no required argument, and the step
+    works after it, run it in ``[model] setup`` (gymnasium's environments refuse ``step()`` before ``reset()``).
+
+    :param obj: the model object.
+    :param method_name: the step method.
+    :type method_name: str
+    :param data: the config being inferred; updated in place.
+    :type data: dict
+    :param comments: ``(section, key) -> text`` for :func:`render_toml`; updated in place.
+    :type comments: dict
+    :return: whether ``reset`` was added (the object is then reset; the step itself isn't run here).
+    :rtype: bool
+    """
+    reset = getattr(obj, "reset", None)
+    if "reset" in data["model"].get("setup", []) or method_name == "reset" or not callable(reset):
+        return False
+    try:
+        required = [p for p in inspect.signature(reset).parameters.values()
+                    if p.default is p.empty and p.kind in (p.POSITIONAL_ONLY, p.POSITIONAL_OR_KEYWORD, p.KEYWORD_ONLY)]
+    except (TypeError, ValueError):
+        return False
+    if required:
+        return False
+    try:
+        reset()
+        _call_with_probe_inputs(_step_method(obj, method_name, data), data, "call_constants")
+        reset()   # back to the state the FMU starts from, for the probe's own step
+    except Exception:
+        return False
+    data["model"]["setup"] = [*data["model"].get("setup", []), "reset"]
+    comments[("model", "setup")] = f"reset() before the first step: {method_name}() failed without it in the probe"
+    return True
 
 
 #: The comment on a parameter kept as a writable attribute, before the probe checks whether the step reads it.
