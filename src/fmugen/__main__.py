@@ -40,15 +40,39 @@ def _literal(text):
     """A ``--start`` / ``--const`` VALUE: a Python literal (:func:`ast.literal_eval`, never executed),
     ``true`` / ``false`` in any case as Booleans, anything else a string.
 
+    ``inf`` and ``nan`` are floats, also inside lists (tmm's layer thicknesses ``[inf, 100.0, inf]``),
+    as in TOML.
+
     :param text: the VALUE.
     :type text: str
     """
     import ast
+    import math
     if text.lower() in ("true", "false"):
         return text.lower() == "true"
     try:
         return ast.literal_eval(text)
     except (ValueError, SyntaxError):
+        pass
+    try:
+        tree = ast.parse(text, mode="eval")
+    except SyntaxError:
+        return text
+    names = {"inf": math.inf, "nan": math.nan}
+
+    def value(node):
+        if isinstance(node, ast.Name) and node.id in names:
+            return names[node.id]
+        if isinstance(node, ast.UnaryOp) and isinstance(node.op, ast.USub):
+            return -value(node.operand)
+        if isinstance(node, (ast.List, ast.Tuple)):
+            items = [value(e) for e in node.elts]
+            return items if isinstance(node, ast.List) else tuple(items)
+        return ast.literal_eval(node)
+
+    try:
+        return value(tree.body)
+    except (ValueError, TypeError, SyntaxError):
         return text
 
 

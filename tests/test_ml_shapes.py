@@ -17,8 +17,10 @@ def write(tmp_path, source):
 
 
 def test_start_values_in_toml_spelling_and_computed_constants():
-    starts = _parse_starts(["fast=true", "slow=FALSE", "n=3", "name=abc"])
-    assert starts == {"fast": True, "slow": False, "n": 3, "name": "abc"}
+    starts = _parse_starts(["fast=true", "slow=FALSE", "n=3", "name=abc", "d=[inf, 100.0, -inf]", "x=nan"])
+    assert {k: v for k, v in starts.items() if k != "x"} == {"fast": True, "slow": False, "n": 3, "name": "abc",
+                                                             "d": [float("inf"), 100.0, float("-inf")]}
+    assert starts["x"] != starts["x"]   # nan
     with pytest.raises(InterfaceError, match="give it with --const path=call:"):
         _parse_starts(["path=call:os.path:join('a', 'b')"])
     consts = _parse_consts(["path=call:os.path:join('a', 'b')", "model=yolo11n.pt", "size=[640, 480]", "on=TRUE"])
