@@ -271,6 +271,12 @@ def _infer_config(target, call, config_dir, fmi_version, starts, setup, kind, cr
         if create:
             raise InterfaceError("--create only applies to classes; a function with --call is already a factory")
         _infer_class(None, call, data, comments, factory=entry, **options)
+    elif probe and kind != "function" and not create and (left := _returns_callable(entry, data, starts)):
+        # the --start names it doesn't take are the arguments of the model it returns (silero's load_silero_vad)
+        _infer_class(None, "__call__", data, comments, factory=entry, **options)
+        data["model"]["call"] = "__call__"
+        comments[("model", "call")] = (f"{entry_name}() returns the model: {', '.join(left)} are arguments of "
+                                       "calling it, not of the function")
     else:
         if call or create:
             raise InterfaceError("--call and --create only apply to classes")
@@ -805,7 +811,12 @@ def _infer_class(cls, call, data, comments, arrays=False, starts=None, create=No
     """
     if factory and cls is None:
         cls = static.factory_class(factory)   # from its return annotation; else known only by calling it
-    method_name = call or _pick_method(cls)
+    if call:
+        method_name = call
+    else:
+        method_name, why = _pick_method(cls, starts, getattr(cls, create, None) if create else cls.__init__)
+        if why:
+            comments[("model", "call")] = why
     object_step = ":" in method_name   # "module:function(self, ...)": a function taking the object (pandapipes)
     if object_step:
         from fmugen.config import _object_call
@@ -901,25 +912,123 @@ def _infer_class(cls, call, data, comments, arrays=False, starts=None, create=No
 
 
 
-def _pick_method(cls):
-    """The step method of a class: the first of :data:`CALL_NAMES` it has, else its only public method.
+def _pick_method(cls, starts=None, constructor=None):
+    """The step method of a class: the first of :data:`CALL_NAMES` it has, else the only method the
+    ``--start`` names fit (:func:`_methods_taking`), else its only public method.
+
+    The ``--start`` names the constructor doesn't take must be arguments of the method, and cover its
+    required ones: JOS3's ``times`` and ``dtime`` fit only ``simulate``.
 
     :param cls: the class.
     :type cls: type
-    :rtype: str
-    :raises InterfaceError: none of these, and not exactly one public method.
+    :param starts: the ``--start`` / ``--const`` values.
+    :type starts: dict or None
+    :param constructor: the constructor (or ``--create`` classmethod), for the names it takes.
+    :return: ``(method, comment)``; the comment says why, when the ``--start`` names chose it.
+    :rtype: tuple[str, str or None]
+    :raises InterfaceError: none of these, and not exactly one public method or fitting method.
     """
     for name in CALL_NAMES:
         if name == "__call__":
             if any("__call__" in vars(k) for k in cls.__mro__[:-1]):
-                return name
+                return name, None
         elif callable(getattr(cls, name, None)):
-            return name
+            return name, None
     public = [n for n, v in vars(cls).items() if not n.startswith("_") and inspect.isfunction(v)]
+    left = _leftover_starts(constructor, starts)
+    fitting = _methods_taking(cls, left) if left else []
+    if len(fitting) == 1:   # before the only public method: skfem's MeshTri defines element_finder, refined is inherited
+        return fitting[0], (f"{fitting[0]}() from the --start names: {', '.join(left)} are its arguments, not the "
+                            "constructor's, and no other method takes them")
     if len(public) == 1:
-        return public[0]
+        return public[0], None
     raise InterfaceError(
-        f"cannot tell which method of {cls.__name__} runs a step (public methods: {', '.join(public) or 'none'}); "
-        "pass --call METHOD"
+        f"cannot tell which method of {cls.__name__} runs a step (public methods: {', '.join(public) or 'none'}"
+        + (f"; the --start names {', '.join(left)} fit {', '.join(fitting)}" if len(fitting) > 1 else "")
+        + "); pass --call METHOD"
     )
+
+
+def _leftover_starts(fn, starts):
+    """The ``--start`` / ``--const`` names ``fn`` doesn't declare (left for the step), or ``[]``.
+
+    ``[]`` when ``fn`` takes ``**kwargs`` or has no signature: then any name may be its own.
+
+    :param fn: the constructor or factory, or None.
+    :param starts: the values.
+    :type starts: dict or None
+    :rtype: list[str]
+    """
+    if fn is None or not starts:
+        return []
+    if fn is object.__init__:   # a class without its own constructor takes nothing
+        return [n for n in starts]
+    try:
+        params = inspect.signature(fn).parameters
+    except (TypeError, ValueError):
+        return []
+    if any(p.kind is p.VAR_KEYWORD for p in params.values()):
+        return []
+    return [n for n in starts if n.partition(".")[0] not in params]
+
+
+def _fits(fn, names):
+    """Whether ``names`` are all arguments of ``fn`` and cover its required ones.
+
+    :param fn: a function or method.
+    :param names: argument names.
+    :type names: list[str]
+    :rtype: bool
+    """
+    try:
+        params = [p for p in inspect.signature(fn).parameters.values()
+                  if p.name != "self" and p.kind not in (p.VAR_POSITIONAL, p.VAR_KEYWORD)]
+    except (TypeError, ValueError):
+        return False
+    declared = {p.name for p in params}
+    required = {p.name for p in params if p.default is p.empty}
+    wanted = {n.partition(".")[0] for n in names}
+    return wanted <= declared and required <= wanted
+
+
+def _methods_taking(cls, names):
+    """Public methods of ``cls`` (inherited too) that ``names`` fit (:func:`_fits`).
+
+    :param cls: the class.
+    :type cls: type
+    :param names: the ``--start`` names left for the step.
+    :type names: list[str]
+    :rtype: list[str]
+    """
+    return [m for m in dir(cls) if not m.startswith("_") and callable(getattr(cls, m, None))
+            and _fits(getattr(cls, m), names)]
+
+
+def _returns_callable(fn, data, starts):
+    """Whether ``fn`` is a factory of a callable model: the ``--start`` names it doesn't take fit the
+    ``__call__`` of what it returns (silero's ``load_silero_vad()(x, sr)``).
+
+    Calls ``fn`` once with the values it takes, after the setup calls: only with ``--probe``.
+
+    :param fn: the entry function.
+    :param data: the config being inferred (for its setup calls).
+    :type data: dict
+    :param starts: the ``--start`` / ``--const`` values.
+    :type starts: dict
+    :return: the names left for ``__call__``, or ``[]``.
+    :rtype: list[str]
+    """
+    left = _leftover_starts(fn, starts)
+    if not left:
+        return []
+    from fmugen.templates.fmugen_runtime import resolve_constant
+    try:
+        _run_setup(data)
+        model = fn(**{n: resolve_constant(v) for n, v in starts.items() if n not in left})
+    except Exception:
+        return []
+    if inspect.isclass(model) or not callable(model):
+        return []
+    call = model if isinstance(model, (types.FunctionType, types.MethodType)) else type(model).__call__
+    return left if _fits(call, left) else []
 

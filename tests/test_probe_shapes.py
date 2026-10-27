@@ -6,6 +6,7 @@ import textwrap
 import pytest
 
 from fmugen.builder import init, isolated_imports
+from fmugen.config import InterfaceError
 
 
 def write(tmp_path, name, source):
@@ -157,6 +158,81 @@ def test_const_values_are_fixed_and_their_files_copied(tmp_path):
     assert "parameters" not in data and data["inputs"] == {"source": {"start": "img.txt"}}
     assert sorted(data["model"]["sources"]) == ["img.txt", "w.bin"] and data["model"]["cwd"] == "."
     assert data["outputs"] == {"y": {"from": "return"}}
+
+
+def test_the_start_names_pick_the_step_method(tmp_path):
+    # like pythermalcomfort's JOS3: no step/update method, several public ones; times and dtime fit only simulate
+    path = write(tmp_path, "body.py", """
+        class Body:
+            def __init__(self, height=1.7):
+                self.height, self.t = height, 0.0
+
+            def simulate(self, times, dtime=60.0):
+                self.t += times * dtime
+                return {"t_core": 37.0 + 0.001 * self.t}
+
+            def results(self):
+                return {"t": self.t}
+
+            def to_csv(self, path):
+                pass
+    """)
+    data, text = probe(f"{path}:Body", tmp_path, starts={"times": 1, "dtime": 60.0})
+    assert data["model"]["call"] == "simulate" and set(data["inputs"]) == {"times", "dtime"}
+    assert "simulate() from the --start names" in text
+    with pytest.raises(InterfaceError, match="cannot tell which method of Body"), isolated_imports():
+        init(f"{path}:Body", output="-", probe=True)   # no names: still stops
+
+
+def test_the_start_names_win_over_the_only_own_method(tmp_path):
+    # like scikit-fem's MeshTri: it defines element_finder; refined(times_or_ix), the step, is inherited
+    path = write(tmp_path, "mesh.py", """
+        class Mesh:
+            def refined(self, times_or_ix=1):
+                return {"n": 4 ** times_or_ix}
+
+        class MeshTri(Mesh):
+            def element_finder(self, mapping=None):
+                return None
+    """)
+    data, _ = probe(f"{path}:MeshTri", tmp_path, starts={"times_or_ix": 2})
+    assert data["model"]["call"] == "refined" and data["outputs"] == {"n": {"from": "return:n"}}
+
+
+def test_two_fitting_methods_still_need_call(tmp_path):
+    # like pedon's Genuchten: h fits theta(h), s(h), k(h)
+    path = write(tmp_path, "soil.py", """
+        class Soil:
+            def theta(self, h):
+                return 0.4 - 0.001 * h
+
+            def k(self, h):
+                return 1e-5 / (1 + h)
+    """)
+    with pytest.raises(InterfaceError, match="the --start names h fit k, theta"):
+        probe(f"{path}:Soil", tmp_path, starts={"h": 1.0})
+
+
+def test_a_function_returning_a_callable_model_is_a_factory(tmp_path):
+    # like silero_vad's load_silero_vad(): it takes no x or sr; the model it returns does, when called
+    path = write(tmp_path, "vad.py", """
+        class Model:
+            def __init__(self, gain):
+                self.gain = gain
+
+            def __call__(self, x, sr=16000):
+                return self.gain * x * sr / 16000
+
+            def audio_forward(self, x, sr):
+                return x
+
+        def load(gain=2.0):
+            return Model(gain)
+    """)
+    data, text = probe(f"{path}:load", tmp_path, starts={"x": 0.5, "sr": 16000})
+    assert data["model"]["call"] == "__call__" and set(data["inputs"]) == {"x", "sr"}
+    assert data["parameters"] == {"gain": {"start": 2.0}}
+    assert "load() returns the model: x, sr are arguments of calling it" in text
 
 
 def test_a_history_that_grows_each_step_gives_its_last_entry(tmp_path):

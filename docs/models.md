@@ -110,7 +110,7 @@ output = { from = "return" }
 
 - **Parameters** are passed to the constructor once, when the FMU leaves initialization mode.
 - **Tunable parameters:** a parameter marked `variability = "tunable"` can still change during the simulation. fmugen then writes the new value onto the object (`obj.Kp = value`). Only mark a parameter tunable if the step method reads that attribute. If the constructor only uses it to compute something else, changing the attribute later has no effect, so keep it fixed.
-- **Step method:** `call` names it. The default is `__call__` when the class is callable. `fmugen init` also tries `step`, `do_step`, `update`, and the only public method.
+- **Step method:** `call` names it. The default is `__call__` when the class is callable. `fmugen init` also tries `step`, `do_step` and `update`; then the only method that the `--start` names the constructor doesn't take fit (they are its arguments and cover its required ones: `--start times=1 --start dtime=60` picks JOS3's `simulate`); then the class's only public method. With `--probe`, a function whose `--start` names fit the model it returns, when called, becomes a factory with `call = "__call__"` (silero's `load_silero_vad()(x, sr)`).
 - **Renaming:** `to = "arg:input_"` gives an argument a different FMU name.
 
 Try it: `pip install simple-pid`, then `fmugen init simple_pid:PID -o -` ([tested-models.md](tested-models.md)).
