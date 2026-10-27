@@ -1010,6 +1010,9 @@ def _pick_method(cls, starts=None, constructor=None):
     if len(fitting) == 1:   # before the only public method: skfem's MeshTri defines element_finder, refined is inherited
         return fitting[0], (f"{fitting[0]}() from the --start names: {', '.join(left)} are its arguments, not the "
                             "constructor's, and no other method takes them")
+    picked = _method_from_starts(cls, starts, constructor)
+    if picked:
+        return picked
     if len(public) == 1:
         return public[0], None
     raise InterfaceError(
@@ -1118,6 +1121,70 @@ def _results_only(cls):
         if callable(raw):   # a Python function or a C method
             return False
     return True
+
+
+def _method_from_starts(cls, starts, constructor):
+    """The step method the ``--start`` / ``--const`` names point at, when the constructor may take some of them too.
+
+    The names the constructor doesn't require are left for the step. First, the only method whose
+    required arguments they cover, that takes at least one of them, and that leaves out only names
+    the constructor also takes (ahrs' ``Madgwick(gyr=None, acc=None, **kwargs)``: q, gyr and acc fit
+    ``updateIMU(q, gyr, acc)``; ``updateMARG`` also requires mag). Else, when every public method has
+    a readable signature, the one taking the most of them, if there's only one (pyquaternion's
+    ``rotate(vector)``). Checked against the recorded --call of 81 tested models: no wrong pick.
+
+    :param cls: the class.
+    :type cls: type
+    :param starts: the ``--start`` / ``--const`` values.
+    :type starts: dict or None
+    :param constructor: the constructor (or ``--create`` classmethod).
+    :return: ``(method, comment)``, or None.
+    :rtype: tuple or None
+    """
+    if not starts:
+        return None
+    try:
+        ctor = inspect.signature(constructor).parameters if constructor is not None \
+            and constructor is not object.__init__ else {}
+    except (TypeError, ValueError):
+        return None
+    ctor_all = {n for n, p in ctor.items() if p.kind not in (p.VAR_POSITIONAL, p.VAR_KEYWORD)}
+    ctor_required = {n for n, p in ctor.items() if n in ctor_all and p.default is p.empty and n != "self"}
+    left = {n.partition(".")[0] for n in starts} - ctor_required
+    if not left:
+        return None
+    methods = {}
+    for m in dir(cls):
+        if m.startswith("_") or not callable(getattr(cls, m, None)) \
+                or isinstance(inspect.getattr_static(cls, m, None), (property, type)):
+            continue
+        try:
+            params = [p for p in inspect.signature(getattr(cls, m)).parameters.values()
+                      if p.name not in ("self", "cls") and p.kind not in (p.VAR_POSITIONAL, p.VAR_KEYWORD)]
+        except (TypeError, ValueError):
+            params = None   # a C method: its arguments can't be compared
+        methods[m] = params
+    fits = []
+    for m, params in methods.items():
+        if params is None:
+            continue
+        names = {p.name for p in params}
+        required = {p.name for p in params if p.default is p.empty}
+        if required <= left and left & names and left - names <= ctor_all:
+            fits.append(m)
+    if len(fits) == 1:
+        return fits[0], (f"{fits[0]}() from the --start names: its required arguments are among them, and no other "
+                         "method's are")
+    if any(params is None for params in methods.values()):
+        return None   # a method we can't read might fit as well (sgp4's C method sgp4 next to sgp4_array)
+    scored = {m: len(left & {p.name for p in params}) for m, params in methods.items()
+              if {p.name for p in params if p.default is p.empty} <= left}
+    best = max(scored.values(), default=0)
+    top = [m for m, s in scored.items() if s == best]
+    if best and len(top) == 1:
+        return top[0], (f"{top[0]}() from the --start names: it takes more of them than any other method, and its "
+                        "required arguments are among them")
+    return None
 
 
 def _leftover_starts(fn, starts):

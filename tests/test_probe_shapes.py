@@ -199,6 +199,45 @@ def test_the_start_names_win_over_the_only_own_method(tmp_path):
     assert data["model"]["call"] == "refined" and data["outputs"] == {"n": {"from": "return:n"}}
 
 
+def test_start_names_the_constructor_also_takes_pick_the_method(tmp_path):
+    # like ahrs' Madgwick(gyr=None, acc=None, **kwargs): q, gyr, acc fit updateIMU; updateMARG also needs mag
+    path = write(tmp_path, "ahrs.py", """
+        class Madgwick:
+            def __init__(self, gyr=None, acc=None, mag=None, **kwargs):
+                self.gain = 0.1
+
+            def updateIMU(self, q, gyr, acc, dt=None):
+                return [q[0] - self.gain * gyr[2], q[1], q[2], q[3] + acc[2] * 0.0]
+
+            def updateMARG(self, q, gyr, acc, mag, dt=None):
+                return q
+    """)
+    data, text = probe(f"{path}:Madgwick", tmp_path, fmi_version=3,
+                       starts={"q": [1.0, 0.0, 0.0, 0.0], "gyr": [0.0, 0.0, 0.01], "acc": [0.0, 0.0, 9.81]})
+    assert data["model"]["call"] == "updateIMU" and set(data["inputs"]) >= {"q", "gyr", "acc"}
+    assert "updateIMU() from the --start names" in text
+
+
+def test_the_method_taking_most_start_names_wins(tmp_path):
+    # like pyquaternion's Quaternion(axis=..., angle=...).rotate(vector): vector fits rotate alone
+    path = write(tmp_path, "quat.py", """
+        class Quaternion:
+            def __init__(self, axis=(0.0, 0.0, 1.0), angle=0.0):
+                self.angle = angle
+
+            def rotate(self, vector):
+                return [v * 2.0 for v in vector]
+
+            def normalise(self):
+                return self
+
+            def distance(self, other=None):
+                return 0.0
+    """)
+    data, _ = probe(f"{path}:Quaternion", tmp_path, fmi_version=3, starts={"angle": 0.5, "vector": [1.0, 0.0, 0.0]})
+    assert data["model"]["call"] == "rotate"
+
+
 def test_two_fitting_methods_still_need_call(tmp_path):
     # like pedon's Genuchten: h fits theta(h), s(h), k(h)
     path = write(tmp_path, "soil.py", """
