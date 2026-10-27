@@ -491,7 +491,8 @@ def _rename_duplicates(data, comments):
     :type comments: dict
     """
     method = data["model"].get("call", "call").strip("_")
-    parameters = data.get("parameters", {})
+    # a constructor constant too (CFTOC's --const x0): the method's x0 is then given as <method>_x0
+    parameters = {**data["model"].get("constants", {}), **data.get("parameters", {})}
     for section in ("inputs", "states"):
         variables = data.get(section, {})
         for name in [n for n in variables if n in parameters]:

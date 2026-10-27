@@ -301,6 +301,7 @@ def _assign_starts(init, method, starts):
     step method. Names neither declares go to whichever accepts ``**kwargs`` (method first).
     For a name both declare, ``<method>_NAME`` (the variable name init gives the method's one)
     goes to the method, and then NAME to the constructor: x0 and calculate_optimal_actuation_x0.
+    A ``--const`` NAME both declare always goes to the constructor.
 
     :param init: the constructor (or factory), or None.
     :type init: callable or None
@@ -337,6 +338,8 @@ def _assign_starts(init, method, starts):
             continue   # placed above
         if in_init and in_call and name in call_starts:
             target = init_starts   # the method's copy was given by its own name
+        elif in_init and in_call and isinstance(value, dict) and len(value) == 1 and {*value} <= {"call", "python"}:
+            target = init_starts   # a --const: NAME is the constructor's, <method>_NAME the method's
         elif in_init and in_call:
             target = init_starts if (in_init.default is in_init.empty and in_call.default is not in_call.empty) \
                 else call_starts

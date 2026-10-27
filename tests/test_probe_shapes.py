@@ -648,3 +648,20 @@ def test_a_function_writing_onto_its_argument_suggests_the_object_form(tmp_path)
     """)
     _, text = probe(f"{path}:runpp", tmp_path, starts={"net": {"call": "pp:example()"}})
     assert 'make net the model: fmugen init pp:example --call "pp.py:runpp(self)" --probe' in text
+
+
+def test_a_const_shared_with_the_step_method_goes_to_the_constructor(tmp_path):
+    # like CFTOC: --const x0 is the constructor's, --start calculate_optimal_actuation_x0 the step method's
+    path = write(tmp_path, "ctrl2.py", """
+        class Ctrl:
+            def __init__(self, x0, N=5):
+                self.x0, self.N = x0, N
+
+            def solve(self, x0, Xm):
+                return {"u": float(sum(x0)) + self.x0[0] + Xm[0]}
+    """)
+    data, text = probe(f"{path}:Ctrl", tmp_path, call="solve", fmi_version=3,
+                       starts={"x0": {"call": "builtins:list([1.0])"}, "solve_x0": [2.0], "Xm": [3.0]})
+    assert data["model"]["constants"] == {"x0": {"call": "builtins:list([1.0])"}}
+    assert "call_constants" not in data["model"]
+    assert data["inputs"]["solve_x0"] == {"dimensions": [1], "start": [2.0], "to": "arg:x0"}
