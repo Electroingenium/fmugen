@@ -448,7 +448,7 @@ def _only_varargs(fn, skip_self=True):
 # ---------------- shared ----------------
 
 def _arguments(fn, section, data, comments, skip_self=False, allow_time=True, constants_key="constants",
-               arrays=False, starts=None, positional=True, by_keyword=False):
+               arrays=False, starts=None, positional=True, by_keyword=False, probe=False):
     """Sort the arguments of ``fn`` into variables of ``section`` and time arguments.
 
     Reads the signature with :func:`inspect.signature`. Each parameter becomes, in order of
@@ -482,6 +482,9 @@ def _arguments(fn, section, data, comments, skip_self=False, allow_time=True, co
     :param by_keyword: give ``--start`` values for ``*args, **kwargs`` as keywords, not by position
         (the probe found the callable needs them so).
     :type by_keyword: bool
+    :param probe: whether ``--probe`` is in effect: an argument with no default whose annotation is
+        a class is then built with no arguments (:func:`_default_instance`).
+    :type probe: bool
     :raises InterfaceError: an array ``--start`` for FMI 2, or an unusable value for ``*args``.
     """
     variables = data.setdefault(section, {})
@@ -531,6 +534,9 @@ def _arguments(fn, section, data, comments, skip_self=False, allow_time=True, co
         if p.name in starts and _split_items(p, starts[p.name], variables, section, comments, arrays):
             continue
         if p.name not in starts and _split_fields(fn, p, variables, section, comments, starts, arrays):
+            continue
+        if p.name not in starts and p.default is p.empty and p.kind is not p.POSITIONAL_ONLY \
+                and _default_instance(fn, p, data, comments, constants_key, probe):
             continue
         for name in starts:
             if name.startswith(f"{p.name}."):
@@ -816,6 +822,58 @@ def _split_fields(fn, p, variables, section, comments, starts, arrays):
             _start_error(comments, name, f"{p.name} ({cls.__name__}) has no field {field!r}; "
                                          f"its fields: {', '.join(sorted(names))}")
     variables.update(found)
+    return True
+
+
+#: Annotations that aren't objects to build: FMI values, containers, arrays.
+NOT_BUILT = (bool, int, float, complex, str, bytes, bytearray, list, tuple, dict, set, frozenset, type(None))
+
+
+def _default_instance(fn, p, data, comments, constants_key, probe):
+    """A constant ``{ call = "module:Class()" }`` for an argument with no default whose annotation is a class.
+
+    For model inputs that are objects the library builds (ase's ``atoms: Atoms``): with ``--probe``,
+    the class is built once with no arguments, and the constant is kept if that works, with a comment
+    saying it's a default instance to replace with ``--const``. Without ``--probe`` nothing is called,
+    so it's written commented out, as a suggestion.
+
+    :param fn: the function (for its type hints).
+    :param p: the parameter (no default, no ``--start``).
+    :type p: inspect.Parameter
+    :param data: the config being inferred; updated in place.
+    :type data: dict
+    :param comments: ``(section, key) -> text`` for :func:`render_toml`; updated in place.
+    :type comments: dict
+    :param constants_key: ``"constants"`` or ``"call_constants"``.
+    :type constants_key: str
+    :param probe: whether ``--probe`` is in effect.
+    :type probe: bool
+    :return: whether the argument was handled.
+    :rtype: bool
+    """
+    try:
+        cls = typing.get_type_hints(fn).get(p.name)
+    except Exception:
+        cls = p.annotation if isinstance(p.annotation, type) else None
+    cls = static.unwrap_optional(cls)
+    if not isinstance(cls, type) or issubclass(cls, NOT_BUILT) or cls.__module__ in ("builtins", "typing") \
+            or "<" in cls.__qualname__ or cls.__name__ in ("ndarray", "Tensor", "Array"):   # arrays: a --start
+        return False
+    ref = f"{cls.__module__}:{cls.__qualname__}()"
+    if not probe:   # nothing is called: a suggestion, commented out
+        comments[("model", f"{constants_key}.{p.name}")] = {"call": ref}
+        comments[("constant", f"{constants_key}.{p.name}")] = (
+            f"no default in the code: uncomment to use {cls.__name__}() (its annotation, with no arguments), "
+            f"or give one with --const {p.name}=call:...; init --probe checks that it builds")
+        return True
+    try:
+        cls()
+    except Exception:
+        return False
+    data["model"].setdefault(constants_key, {})[p.name] = {"call": ref}
+    comments[("constant", f"{constants_key}.{p.name}")] = (
+        f"no default in the code: {cls.__name__}() (its annotation, with no arguments); "
+        f"give your own with --const {p.name}=call:...")
     return True
 
 

@@ -94,7 +94,7 @@ def _probe_class(cls, method_name, data, comments, arrays, call_starts, create, 
         if cls is not None and ":" not in method_name:
             _arguments(getattr(cls, method_name), "inputs", data, comments,
                        skip_self=not data["model"].get("call_on_class"),
-                       constants_key="call_constants", arrays=arrays, starts=call_starts)
+                       constants_key="call_constants", arrays=arrays, starts=call_starts, probe=True)
             _apply_converts(data, converts)
         return None, set(), set()
     object_step = ":" in method_name   # "module:function(self, ...)": its arguments are in the call text
@@ -122,7 +122,7 @@ def _probe_class(cls, method_name, data, comments, arrays, call_starts, create, 
     else:
         _arguments(method, "inputs", data, comments, skip_self=not factory and not data["model"].get("call_on_class"),
                    constants_key="call_constants",
-                   arrays=arrays, starts=call_starts)
+                   arrays=arrays, starts=call_starts, probe=True)
     _apply_converts(data, converts)
     before, state_before = _numeric_attributes(obj, arrays), _state_bytes(obj)
     dynamic_before = _dynamic_values(obj, arrays)

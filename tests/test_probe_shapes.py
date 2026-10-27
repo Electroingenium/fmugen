@@ -235,6 +235,45 @@ def test_a_function_returning_a_callable_model_is_a_factory(tmp_path):
     assert "load() returns the model: x, sr are arguments of calling it" in text
 
 
+CRYSTAL = """
+    class Atoms:                 # like ase.Atoms: builds with no arguments (an empty structure)
+        def __init__(self, symbols=""):
+            self.n = len(symbols)
+
+    class Grid:                  # like py-pde's grids: needs its sizes
+        def __init__(self, shape):
+            self.shape = shape
+"""
+
+
+def test_an_annotated_object_argument_gets_a_default_instance(tmp_path, monkeypatch):
+    # like mace / matgl: get_potential_energy(atoms: Atoms); Atoms() is a valid, if trivial, structure
+    write(tmp_path, "crystal.py", CRYSTAL)
+    path = write(tmp_path, "energy.py", """
+        from crystal import Atoms, Grid
+
+        def energy(atoms: Atoms, scale: float = 1.0):
+            return {"E": -1.0 * atoms.n * scale}
+
+        def field(grid: Grid, t: float = 0.0):
+            return {"n": float(grid.shape)}
+    """)
+    monkeypatch.syspath_prepend(str(tmp_path))
+    data, text = probe(f"{path}:energy", tmp_path)
+    assert data["model"]["constants"] == {"atoms": {"call": "crystal:Atoms()"}}
+    assert "inputs" in data and set(data["inputs"]) == {"scale"} and data["outputs"] == {"E": {}}
+    assert ('atoms = { call = "crystal:Atoms()" }  # no default in the code: Atoms() (its annotation, with no '
+            "arguments); give your own with --const atoms=call:...") in text
+    with isolated_imports():   # without --probe nothing is built: a commented suggestion
+        output, plain = init(f"{path}:energy", output=tmp_path / "plain.toml")
+    text = output.read_text()
+    assert "constants" not in plain["model"] and "atoms" not in plain.get("inputs", {})
+    assert '# atoms = { call = "crystal:Atoms()" }  # no default in the code: uncomment to use Atoms()' in text
+    with isolated_imports():   # Grid() fails: no constant, as before
+        _, data = init(f"{path}:field", output=tmp_path / "field.toml", probe=True)
+    assert "constants" not in data["model"] and "grid" in data["inputs"]
+
+
 def test_a_history_that_grows_each_step_gives_its_last_entry(tmp_path):
     # like seirsplus' numS: one more entry per run_epoch()
     path = write(tmp_path, "epi.py", """

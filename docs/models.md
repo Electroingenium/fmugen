@@ -583,6 +583,7 @@ A `--start` or `--const` name that appears in both the constructor and the step 
 Check afterwards:
 
 - **Start values:** arguments without a default get `0.0` unless you pass `--start`; make sure the model is valid there.
+- **Objects without a default:** an argument annotated with a class (`atoms: Atoms`) is an object, not a number. With `--probe`, `init` builds `Atoms()` with no arguments and, if that works, makes it a constant (`atoms = { call = "ase:Atoms()" }`) with a comment saying so: replace it with `--const atoms=call:...` when the model needs a real one. Without `--probe` nothing is built: the line is written commented out. Classes that can't be built without arguments, and unannotated arguments, still need `--const`.
 - **States:** only inputs named like a previous value (`x_prev`, `x_old`, `last_x`, …) are detected. A model that takes its own previous result under another name (Madgwick's `updateIMU(q, ...)` returning the new `q`) needs a `[states]` entry: `q = { dimensions = [4], start = [1.0, 0.0, 0.0, 0.0], next = "return" }`.
 - **Integer vs Real:** an `int` default (`setpoint=0`) gives an Integer. Write `0.0` for a Real.
 - **Units and descriptions:** add them; they can't be inferred.

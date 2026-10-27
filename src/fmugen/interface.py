@@ -726,7 +726,7 @@ def _infer_function(fn, data, comments, arrays=False, starts=None, probe=False, 
     :param converts: ``--convert`` options.
     :type converts: dict or None
     """
-    _arguments(fn, "inputs", data, comments, arrays=arrays, starts=starts)
+    _arguments(fn, "inputs", data, comments, arrays=arrays, starts=starts, probe=probe)
     _apply_converts(data, converts)
     returned_names, seen = set(), set()
     if probe:
@@ -844,7 +844,7 @@ def _infer_class(cls, call, data, comments, arrays=False, starts=None, create=No
     by_keyword = not factory and _varargs_by_keyword(getattr(cls, create) if create else cls, init_starts, data,
                                                      probe)
     _arguments(constructor, "parameters", data, comments, skip_self=not (create or factory), allow_time=False,
-               arrays=arrays, starts=init_starts, positional=False, by_keyword=by_keyword)
+               arrays=arrays, starts=init_starts, positional=False, by_keyword=by_keyword, probe=probe)
     _apply_converts(data, converts)
 
     if method_name != "__call__" or call:
@@ -879,7 +879,7 @@ def _infer_class(cls, call, data, comments, arrays=False, starts=None, create=No
         _arguments(getattr(cls, method_name), "inputs", data, comments,
                    skip_self=not isinstance(method, (staticmethod, classmethod)) and not on_class,
                    constants_key="call_constants",
-                   arrays=arrays, starts=call_starts)
+                   arrays=arrays, starts=call_starts)   # without --probe: suggestions only
         _apply_converts(data, converts)
         copies = static.init_copies(cls) if not factory and not create else set()
         for name in data.get("parameters", {}):
