@@ -4,7 +4,6 @@ import textwrap
 import tomllib
 
 import pytest
-from conftest import EXAMPLES
 
 from fmugen.builder import init, isolated_imports
 from fmugen.__main__ import _parse_converts
@@ -45,23 +44,6 @@ def test_nothing_runs_without_probe(tmp_path):
     assert data["inputs"] == {"power": {"start": 0.0}}
     assert data["outputs"] == {"T": {"from": "return:T"}, "temperature": {}}
     assert "save_state = false  # not checked without --probe" in render_toml(data, comments)
-
-
-def test_psychrometry_outputs_match_its_reviewed_config():
-    data, _ = infer(EXAMPLES / "psychrometry" / "psychrometry.py")
-    reviewed = tomllib.loads((EXAMPLES / "psychrometry" / "fmugen.toml").read_text())
-    assert list(data["outputs"]) == list(reviewed["outputs"])
-    assert set(data["inputs"]) == set(reviewed["inputs"])
-
-
-def test_rc_building_attributes_states_and_locals_through_called_methods():
-    data, comments = infer(f"{EXAMPLES / 'rc_building' / 'rc_simulator' / 'building_physics.py'}:Zone",
-                           call="solve_energy")
-    assert {"t_air", "heating_demand", "cooling_demand", "energy_demand"} <= set(data["outputs"])
-    assert data["states"]["t_m_prev"]["next"] == "attr:t_m_next"
-    assert data["locals"]["has_heating_demand"] == {"type": "Boolean"}
-    assert "h_tr_1" not in data["outputs"]                              # an unannotated property: commented
-    assert "# h_tr_1 = {}  # a property of the object (type unknown)" in render_toml(data, comments)
 
 
 @pytest.mark.parametrize("body, expected", [

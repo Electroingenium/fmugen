@@ -1,10 +1,11 @@
 # Tested models
 
-fmugen has been tried on 210 published, unmodified Python models (three needed a file renamed or a script wrapped in a class, and one synthetic input data; see their notes): the examples in this repository, models from about 132 libraries on PyPI, 46 neural networks and 13 models built on [GEKKO](https://github.com/BYU-PRISM/GEKKO). Each model is listed once, with its most recent result. 207 simulate with useful results; 3 fail because the library has no function or class that is the model. 20 libraries tested at first turned out not to be models: 17 are tools for building one, and 3 (pymunk, PyNite, PyPSA) are empty containers that the user fills with bodies, nodes or buses; they are listed in [discarded-models.md](discarded-models.md).
+fmugen has been tried on 210 unmodified Python models (three needed a file renamed or a script wrapped in a class, and one synthetic input data; see their notes): models from about 132 libraries on PyPI, 46 neural networks, 13 models built on [GEKKO](https://github.com/BYU-PRISM/GEKKO), one model published as source on GitHub and one unpublished model. Each model is listed once, with its most recent result. 207 simulate with useful results; 3 fail because the library has no function or class that is the model. 20 libraries tested at first turned out not to be models: 17 are tools for building one, and 3 (pymunk, PyNite, PyPSA) are empty containers that the user fills with bodies, nodes or buses; they are listed in [discarded-models.md](discarded-models.md).
 
 - [How the models were tested](#how-the-models-were-tested)
 - [Summary](#summary)
-- [Repository examples](#repository-examples)
+- [GitHub repositories](#github-repositories)
+- [Unpublished models](#unpublished-models)
 - [Python libraries](#python-libraries)
 - [Neural networks](#neural-networks)
 - [GEKKO models](#gekko-models)
@@ -21,7 +22,7 @@ Each model went through:
 
 1. `fmugen init` (code only)
 2. `fmugen init --probe`
-3. `fmugen build --capture-output` on each config `init` wrote (and on the committed `fmugen.toml` for the repository examples), then `fmpy.simulate_fmu` for 3 s with 1 s outputs
+3. `fmugen build --capture-output` on each config `init` wrote (and on the hand configs), then `fmpy.simulate_fmu` for 3 s with 1 s outputs
 4. `fmugen build --capture-output --compile pyinstaller` on the best config (the `--probe` one when it simulated), then the same simulation
 
 **FMI 2 by default.** A model was run with FMI 3 only when no FMI 2 config simulated; the results below combine both.
@@ -32,13 +33,13 @@ Setup: fmugen at `6dfc18c` (2026-10-22), WSL 2 (Ubuntu), Python 3.13, `uv` venvs
 
 **Models that need a wrapper count as failures.** 3 libraries have a model but no single function or class that runs it: PVWatts is built by a C built-in and needs weather data set on it, Wav2Vec2 needs CTC decoding and Moirai GluonTS data preparation. `init` has nothing to point at. Each was also tried through a short file written for this test, in [pending-100/wrappers](pending-100/wrappers/), calling the library as its documentation does; the notes say what the wrapper did and whether fmugen handled it. 7 more needed one at first (neuralforecast, floris, pandapipes, sectionproperties, vqf, imufusion, mujoco); they run without one, with hand configs in [pending-100/hand](pending-100/hand/), using `get:` outputs, `attr:` paths through keys, a step that is a function taking the object and `substeps` without `integrate`, all added for them.
 
-Columns: **`init` / `init --probe`**: ✓ if the config of either one builds, simulates and outputs the model's results; otherwise how they failed (✗ no useful outputs: it runs, but only outputs parameters, settings or constants). **Hand config**: a config written by hand (for the examples, the repository's `fmugen.toml`), ✓ if it builds, simulates and outputs the model's results, with a link to it; — when the model needs none: ✓, ✗ no config (`init` stopped), ✗ build fails, ✗ simulate fails, or — (not run). **Compiled**: the best config compiled with PyInstaller, built and simulated. **Notes**: what was checked, or the error of each config that failed ("`init`:", "`init --probe`:").
+Columns: **`init` / `init --probe`**: ✓ if the config of either one builds, simulates and outputs the model's results; otherwise how they failed (✗ no useful outputs: it runs, but only outputs parameters, settings or constants). **Hand config**: a config written by hand, ✓ if it builds, simulates and outputs the model's results, with a link to it; — when the model needs none: ✓, ✗ no config (`init` stopped), ✗ build fails, ✗ simulate fails, or — (not run). **Compiled**: the best config compiled with PyInstaller, built and simulated. **Notes**: what was checked, or the error of each config that failed ("`init`:", "`init --probe`:").
 
 ---
 
 ## Summary
 
-210 models: 197 from libraries, neural networks and the repository examples, and 13 built on GEKKO. FMI 2 and FMI 3 results are combined: a model counts as passing if it passes with either. The 82 tested later ran on fmugen before the fixes below; the 19 that failed on fmugen problems were run again with the fixes, and those results are counted.
+210 models: 195 from libraries and neural networks, 13 built on GEKKO, one from a GitHub repository and one unpublished. FMI 2 and FMI 3 results are combined: a model counts as passing if it passes with either. The 82 tested later ran on fmugen before the fixes below; the 19 that failed on fmugen problems were run again with the fixes, and those results are counted.
 
 | | Models (210) |
 |---|---|
@@ -57,7 +58,7 @@ How far each step gets:
 |---|---|---|
 | `init` (code only) | 55 of 210 | 26 % |
 | `init --probe` (or `init`, when it already works) | 187 of 210 | 89 % |
-| `init --probe` + a hand-written config (for the examples, the repository's `fmugen.toml`) | 207 of 210 | 99 % |
+| `init --probe` + a hand-written config | 207 of 210 | 99 % |
 
 Without the 3 models that need a wrapper, `init --probe` + a hand config gets all 207.
 
@@ -74,7 +75,7 @@ Of the 131 models tested first, none fails. The last 4 needed fmugen features, a
 | nashpy | `support_enumeration` returns a generator | Generator results are read into a tuple; `init --probe` splits nested tuples into `y0_0`, `y0_1` |
 | pyet | Its inputs must be pandas Series with a date index | `convert = "series"` with an `epoch`, which `init --probe` writes when plain numbers and arrays fail |
 
-**FMU vs direct run** ([report](match-testing-rerun/report.md)): every model was built into FMUs (`init --probe`, plain `init`, and the repository or hand configs; no `--compile`) and compared, output by output and step by step, with the model called directly in plain Python without fmugen. 130 of 134 match (236,621 values; largest relative difference 1.3 × 10⁻¹⁶, otherwise identical), counting psychrolib with numba and the two FMI 3 repository configs as separate entries. Models random by design were compared seeded. The other 4 are nashpy (no outputs to compare), pyet (the FMU fails), sgp4 (no config) and PyTCI's hand config, which differs from a per-step loop only at t = 0 ([PyTCI](#pytci)).
+**FMU vs direct run** ([report](match-testing-rerun/report.md)): every model was built into FMUs (`init --probe`, plain `init`, and the hand configs; no `--compile`) and compared, output by output and step by step, with the model called directly in plain Python without fmugen. 130 of 134 match (236,621 values; largest relative difference 1.3 × 10⁻¹⁶, otherwise identical), counting psychrolib with numba and the two FMI 3 hand configs (filterpy's KalmanFilter, simple-pid's PID with clocks) as separate entries. Models random by design were compared seeded. The other 4 are nashpy (no outputs to compare), pyet (the FMU fails), sgp4 (no config) and PyTCI's hand config, which differs from a per-step loop only at t = 0 ([PyTCI](#pytci)).
 
 Checked later, after the features above: sgp4's hand config, pymunk, pybamm, nashpy and pyet all match the direct run with no difference, and so do their compiled FMUs. The `init --probe` configs of the 9 models added later (CFTOC, commpy, impedance, uncertainties, ambiance, `fluids.units` ×2, metpy, river) match it too, compiled and with no difference: 157 values over t = 0–3 ([probe-9](probe-9/CONCLUSION.md)).
 
@@ -95,15 +96,23 @@ Others found with earlier start values, which the configs above avoid: a `call:`
 
 ---
 
-## Repository examples
+## GitHub repositories
 
-| Model | `init` / `init --probe` | Hand config (the repository's `fmugen.toml`) | Compiled (PyInstaller) | Notes |
+Models published as source on GitHub, not as a package.
+
+| Model | `init` / `init --probe` | Hand config | Compiled (PyInstaller) | Notes |
 |---|---|---|---|---|
-| [examples/psychrometry](../examples/psychrometry) (`compute_balances_simplified`) | ✓ | ✓ | ✓ (`init --probe` config, 108.7 MB) |  |
-| [examples/simple_pid](../examples/simple_pid) (`simple_pid:PID`) | ✓ | ✓ | ✓ (`init --probe` config, 111.0 MB) |  |
-| [examples/rc_building](../examples/rc_building) (`Zone`) | ✓ | ✓† | ✓ (`init --probe` config, 108.8 MB) | †The repo config fixes `step_size = 3600`, so the generic 1 s run is refused (correct); simulated at 3600 s steps. |
-| [examples/kalman](../examples/kalman) (`filterpy.kalman:KalmanFilter`; repo config FMI 3: structural parameters, clock) | ✗ no useful outputs | ✓ | ✓ (repository config (FMI 3), 114.8 MB) | The `init` configs output only filter settings and likelihoods (`dim_x`, …, `alpha`, `likelihood`), not the state estimate. The repository config is driven by `examples/kalman/run.py`. |
-| [examples/sampled_pid](../examples/sampled_pid) (`simple_pid:PID`; repo config: clocks) | ✓ | ✓ | ✓ (repository config (FMI 3), 111.1 MB) | The repo config is driven by `run.py` (clock ticked every 0.1 s, first-order plant). |
+| `building_physics.py:Zone` ([architecture-building-systems/RC_BuildingSimulator](https://github.com/architecture-building-systems/RC_BuildingSimulator) `97c1cdd`) | ✓ | ✓† | ✓ (`init --probe` config, 108.8 MB) | ISO 13790 5R1C thermal model of a building zone, `--call solve_energy`. The hand config feeds `t_m_next` back as `t_m_prev` (`[states]`) and runs two winter days of hourly weather. †It fixes `step_size = 3600`, so the generic 1 s run is refused (correct); simulated at 3600 s steps. |
+
+---
+
+## Unpublished models
+
+Models with no public source: they aren't counted as published models.
+
+| Model | `init` / `init --probe` | Hand config | Compiled (PyInstaller) | Notes |
+|---|---|---|---|---|
+| `psychrometry.py:compute_balances_simplified` (Lucia Royo-Pascual, EIUM) | ✓ | ✓ | ✓ (`init --probe` config, 108.7 MB) | Mass and energy balance of an air-based drying process: a function of 18 temperatures, humidities and flow rates returning a dict. |
 
 ---
 
@@ -137,6 +146,7 @@ Errors such as `y is an array of shape […], not a single value` in the `init` 
 | `ephem:Sun` | ✗ no useful outputs | ✓ ([config](pending-100/hand/ephem/fmugen.toml)) | ✓ (hand config, 46.6 MB) | `Sun`, `--call compute`: the position is in C attributes that exist only after `compute()`; the hand config reads them, with `init_call = true`. |
 | `erfa:gmst06` | ✓ | — | ✓ (`init --probe` config, 46.7 MB) |  |
 | `filterpy.common:Q_discrete_white_noise` | ✓ | — | ✓ (`init --probe` config, 114.8 MB) |  |
+| `filterpy.kalman:KalmanFilter` (hand config FMI 3: structural parameters, clock) | ✗ no useful outputs | ✓ | ✓ (hand config (FMI 3), 114.8 MB) | The `init` configs output only filter settings and likelihoods (`dim_x`, …, `alpha`, `likelihood`), not the state estimate. The hand config was driven by a script feeding it measurements on a triggered clock. |
 | `filterpy.gh:GHFilter` | ✓ | — | ✓ (`init --probe` config, 114.8 MB) | `update(z, g=None, h=None)`'s `h` is a gain: this `init` config bound it to the step size. `init` no longer does: rerun, `h` is a parameter (start 0.2) and there's no `[time]`; both configs match the direct run and the compiled FMU its uncompiled one. |
 | `floris:FlorisModel` | ✓ | ✓ [config](pending-100/hand/floris_lib/fmugen.toml) | ✓ 157 MB, identical | Since `8390062`: `init --probe` alone works: the step returns nothing, so it reads the getters, `get:get_farm_power`, `get:get_turbine_powers` and 10 more `get:` outputs; matches the direct run (120 values). Before: no useful outputs. The hand config sets the conditions in `setup`. |
 | `fluids.core:Reynolds` | ✓ | — | ✓ (`init --probe` config, 104.0 MB) |  |
@@ -239,6 +249,8 @@ Errors such as `y is an array of shape […], not a single value` in the `init` 
 | `shapely:Point` | ✓ | — | ✓ (`init --probe` config, 50.3 MB) |  |
 | `simdkalman:KalmanFilter` (FMI 3) | ✗ no useful outputs | ✓ ([config](pending-100/hand/simdkalman/fmugen.toml)) | ✓ (hand config, 48.9 MB) | Kalman smoother of a 24-point series. `smooth` returns a `Result` whose estimates are two levels down (`result.observations.mean`): the hand config reads them (24 levels, 24×2 states). |
 | `simglucose.patient.t1dpatient:T1DPatient` | ✓ | — | ✓ (`init --probe` config, 134.0 MB) |  |
+| `simple_pid:PID` | ✓ | ✓ | ✓ (`init --probe` config, 111.0 MB) |  |
+| `simple_pid:PID` (hand config FMI 3: clocks) | ✓ | ✓ | ✓ (hand config (FMI 3), 111.1 MB) | A sampled-data controller: the hand config runs it on a clock ticked every 0.1 s, driven by a script with a first-order plant. |
 | `simpy:Environment` | ✓ | — | ✓ (`init --probe` config, 44.8 MB) | `--call run`: `until` is bound to the step's end time. |
 | `skfem:MeshTri` (FMI 3) | ✓ | — | ✓ (`init --probe` config, 90.5 MB) | `MeshTri().refined(2)`: the refined mesh's nodes and elements (2-D arrays). |
 | `skfuzzy:interp_membership` | ✓ | — | ✓ (`init --probe` config, 94.5 MB) | **Needs scipy, packaging and networkx installed by hand**: scikit-fuzzy imports them without declaring them. |
@@ -443,7 +455,7 @@ Limitations (not bugs):
 
 The versions are in [match-testing-rerun/results.json](match-testing-rerun/results.json) (`versions`), and for the 82 models tested later in [pending-100/results.json](pending-100/results.json): the latest on PyPI for Python 3.13 when the venvs were made. Pinned where it mattered: pandas 2.3.3 for the CGE model, `setuptools<81` for heartpy.
 
-Only RC_BuildingSimulator (commit `97c1cdd`, MIT amended) is copied into this repository, for [examples/rc_building](../examples/rc_building). The others are installed from PyPI or their repositories when needed.
+None of the models is copied into this repository: they are installed from PyPI or cloned from their repositories when needed.
 
 ---
 

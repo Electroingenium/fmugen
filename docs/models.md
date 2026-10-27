@@ -78,7 +78,7 @@ energy_balance = { unit = "W" }
 
 Values nested in dicts, NamedTuples, dataclasses and `SimpleNamespace`s become outputs named with dots: `{"zone": {"T": 21}}` gives the output `"zone.T"` (quoted in TOML). `init` finds them in dict literals in the code, and with `--probe` in the actual result (up to 4 levels deep).
 
-Full example: [examples/psychrometry](../examples/psychrometry).
+Published functions packaged this way: `fluids.core:Reynolds`, `psychrolib:GetHumRatioFromRelHum` and others in [tested-models.md](tested-models.md).
 
 ---
 
@@ -113,7 +113,7 @@ output = { from = "return" }
 - **Step method:** `call` names it. The default is `__call__` when the class is callable. `fmugen init` also tries `step`, `do_step`, `update`, and the only public method.
 - **Renaming:** `to = "arg:input_"` gives an argument a different FMU name.
 
-Full example: [examples/simple_pid](../examples/simple_pid).
+Try it: `pip install simple-pid`, then `fmugen init simple_pid:PID -o -` ([tested-models.md](tested-models.md)).
 
 ---
 
@@ -452,7 +452,7 @@ x = { dimensions = ["dim_x"] }            # self.x, shape (2, 1) or (2,): any sh
 
 `fmugen init --fmi 3` infers arrays from list, tuple and numpy defaults and results, and `Binary` from `bytes`.
 
-Full example: [examples/kalman](../examples/kalman).
+Try it: `pip install filterpy`, then `fmugen init filterpy.kalman:KalmanFilter --call predict --fmi 3 --start dim_x=2 --start dim_z=1 -o -` ([tested-models.md](tested-models.md)).
 
 ---
 
@@ -513,7 +513,7 @@ After a step that ticks an output clock, `doStep` returns `eventHandlingNeeded`.
 
 What each interval variability means, and the exact rules for activation and reset: [fmi.md](fmi.md#clocks-fmi-3). Clocks can't be inferred; `fmugen init --fmi 3` writes a commented example.
 
-Full examples: [examples/sampled_pid](../examples/sampled_pid), [examples/kalman](../examples/kalman).
+Tested with clocks: simple-pid's `PID` on a periodic clock and filterpy's `KalmanFilter` on a triggered clock ([tested-models.md](tested-models.md)).
 
 ---
 

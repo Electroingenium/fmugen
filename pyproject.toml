@@ -54,7 +54,7 @@ dev = [
     "pytest>=9.1.1",
     # tests validate and simulate the FMUs with FMPy
     "fmpy>=0.3.32",
-    # example models
+    # published models some tests run (simple_pid:PID, filterpy.gh:GHFilter)
     "filterpy==1.4.5",
     "simple-pid==2.0.1",
     # tests check every generated interface.json against src/fmugen/interface.schema.json

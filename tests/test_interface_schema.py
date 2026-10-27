@@ -7,7 +7,6 @@ import pytest
 from fmugen.builder import build
 from test_composite import write_composite
 
-from conftest import EXAMPLES
 
 SCHEMA = json.loads(files("fmugen").joinpath("interface.schema.json").read_text())
 
@@ -25,14 +24,6 @@ def validate(fmu_dir):
 
 
 #: Examples whose config uses clocks: FMI 3 only, so there is no FMI 2 build to check.
-FMI3_ONLY = ("kalman", "sampled_pid")
-
-
-@pytest.mark.parametrize("name,fmi", [(p.name, fmi) for p in sorted(EXAMPLES.iterdir()) if (p / "fmugen.toml").exists()
-                                      for fmi in (2, 3) if fmi == 3 or p.name not in FMI3_ONLY])
-def test_examples_match_the_schema(tmp_path, name, fmi):
-    build(EXAMPLES / name, tmp_path / "out", output_format="folder", fmi_version=fmi)
-    validate(tmp_path / "out")
 
 
 @pytest.mark.parametrize("fmi", [2, 3])

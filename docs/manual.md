@@ -118,7 +118,7 @@ What `init` infers from the code, what only `--probe` finds, where `--start` val
 **Examples:**
 
 ```bash
-fmugen init examples/psychrometry/psychrometry.py -o -
+fmugen init simple_pid:PID -o -
 ```
 
 ```bash
@@ -173,7 +173,7 @@ fmugen build MODEL -o OUTPUT [--fmi {2,3}] [--format {fmu,folder}]
 On success it prints the FMU path, the FMI version, and the number of variables per causality (and clocks):
 
 ```
-Built C:\…\out\rc_building.fmu (FMI 2.0; 12 parameters, 3 calculatedParameters, 3 inputs, 4 locals, 5 outputs)
+Built C:\…\out\pid.fmu (FMI 2.0; 9 parameters, 1 inputs, 1 outputs)
 ```
 
 It may also print `note:` lines, e.g. when `[events]` is ignored for FMI 2.
@@ -182,32 +182,36 @@ It may also print `note:` lines, e.g. when `[events]` is ignored for FMI 2.
 
 **Examples:**
 
+With `pid/fmugen.toml` written by `fmugen init simple_pid:PID -o pid/fmugen.toml` (the `pid` folder must exist):
+
 ```bash
-fmugen build examples/psychrometry -o out/psychrometry.fmu
+fmugen build pid -o out/pid.fmu
 ```
 
 ```bash
-fmugen build examples/simple_pid -o out/simple_pid.fmu
+fmugen build pid -o out/pid_fmi3.fmu --fmi 3
 ```
 
 ```bash
-fmugen build examples/rc_building -o out/rc_building_fmi3.fmu --fmi 3
+fmugen build pid -o out/pid_folder --format folder
 ```
 
+Straight from an installed model, with the config inferred in memory:
+
 ```bash
-fmugen build examples/psychrometry -o out/psychrometry_folder --format folder
+fmugen build fluids.core:Reynolds -o out/reynolds.fmu
 ```
 
 For another machine with Python (offline install from the FMU):
 
 ```bash
-fmugen build examples/simple_pid -o out/simple_pid_vendored.fmu --vendor
+fmugen build pid -o out/pid_vendored.fmu --vendor
 ```
 
 For another machine without Python, with no source code in the FMU:
 
 ```bash
-fmugen build examples/simple_pid -o out/simple_pid_compiled.fmu --compile pyinstaller
+fmugen build pid -o out/pid_compiled.fmu --compile pyinstaller
 ```
 
 ### Model targets

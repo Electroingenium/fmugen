@@ -51,30 +51,44 @@ For your own model:
    fmugen build path/to/fmugen.toml -o out/your_model.fmu
    ```
 
-The examples already have reviewed configs. To see what `init` would infer for one without overwriting it, print to the terminal:
+To try it on a published model, install the PID controller from [simple-pid](https://pypi.org/project/simple-pid/) next to fmugen:
 
 ```bash
-fmugen init examples/psychrometry/psychrometry.py -o -
+pip install simple-pid
 ```
 
-Then build it, validate it, and simulate it:
+See what `init` infers for its `PID` class, printed to the terminal instead of written to a file:
 
 ```bash
-fmugen build examples/psychrometry -o out/psychrometry.fmu
+fmugen init simple_pid:PID -o -
+```
+
+It finds `Kp`, `Ki`, `Kd` and `setpoint` as parameters, `input_` as an input, the control output as `y`, and binds `dt` to the step size. Write it to a file, set `setpoint = { start = 1.0 }`, then build, validate and simulate it:
+
+```bash
+mkdir pid
 ```
 
 ```bash
-fmpy validate out/psychrometry.fmu
+fmugen init simple_pid:PID -o pid/fmugen.toml
 ```
 
 ```bash
-fmpy simulate out/psychrometry.fmu --stop-time 5 --output-file out/psychrometry.csv
+fmugen build pid -o out/pid.fmu
 ```
 
-For a quick try you can skip the config and build straight from a `.py` file. fmugen then infers the config in memory, without units:
+```bash
+fmpy validate out/pid.fmu
+```
 
 ```bash
-fmugen build examples/psychrometry/psychrometry.py -o out/quick.fmu
+fmpy simulate out/pid.fmu --stop-time 5 --output-file out/pid.csv
+```
+
+For a quick try you can skip the config and build straight from the model. fmugen then infers the config in memory, without units:
+
+```bash
+fmugen build simple_pid:PID -o out/quick.fmu
 ```
 
 ---
@@ -83,23 +97,23 @@ fmugen build examples/psychrometry/psychrometry.py -o out/quick.fmu
 
 | Your code | How it runs in the FMU | Example |
 |---|---|---|
-| A function `f(a, b, ...)` returning a dict, tuple, number or object | Called once per step; outputs are read from the return value | [`examples/psychrometry`](examples/psychrometry) |
-| A class `C(params...)` with a method `step(inputs...)` / `__call__` | Built once at initialization; the method is called once per step | [`examples/simple_pid`](examples/simple_pid) |
-| A method that stores its results as attributes | Outputs are read from the object's attributes after each step | [`examples/rc_building`](examples/rc_building) |
-| A method that needs last step's value (`x_prev`) | A *state*: fed back from the result after each step | [`examples/rc_building`](examples/rc_building) |
-| Code that needs the time or step size (`t`, `dt`) | The FMU passes its communication time / step size | [`examples/simple_pid`](examples/simple_pid) |
-| Several files, flat or package imports | Copied into the FMU with their layout | [`examples/rc_building`](examples/rc_building) |
-| A package from PyPI | Installed in your environment; listed as a requirement | [`examples/simple_pid`](examples/simple_pid) |
+| A function `f(a, b, ...)` returning a dict, tuple, number or object | Called once per step; outputs are read from the return value | `fluids.core:Reynolds` ([tested models](docs/tested-models.md)) |
+| A class `C(params...)` with a method `step(inputs...)` / `__call__` | Built once at initialization; the method is called once per step | `simple_pid:PID` |
+| A method that stores its results as attributes | Outputs are read from the object's attributes after each step | RC_BuildingSimulator's `Zone` ([tested models](docs/tested-models.md#github-repositories)) |
+| A method that needs last step's value (`x_prev`) | A *state*: fed back from the result after each step | RC_BuildingSimulator's `Zone` |
+| Code that needs the time or step size (`t`, `dt`) | The FMU passes its communication time / step size | `simple_pid:PID` |
+| Several files, flat or package imports | Copied into the FMU with their layout | RC_BuildingSimulator's `rc_simulator/` |
+| A package from PyPI | Installed in your environment; listed as a requirement | `simple_pid:PID` |
 | A library that must be set up first (`SetUnitSystem(SI)`, `env.reset()`) | `[model] setup` calls run before the model is used | psychrolib, gymnasium ([tested models](docs/tested-models.md)) |
 | A C extension with positional-only arguments | `to = "pos:N"` bindings | CoolProp ([tested models](docs/tested-models.md)) |
 | Setter methods and properties (`lab.Q1(50)`, `lab.T1`) | `to = "call:Q1"` inputs; properties read like attributes | tclab ([tested models](docs/tested-models.md)) |
 | A class whose constructor does all the work | `kind = "function"`: constructed with the inputs every step | iapws ([tested models](docs/tested-models.md)) |
-| Matrices and vectors (lists, numpy), sized by constructor arguments | FMI 3 arrays and structural parameters | [`examples/kalman`](examples/kalman) |
-| A method that should run on events, not every step | FMI 3 clocks: periodic, triggered, or raised by the model | [`examples/sampled_pid`](examples/sampled_pid), [`examples/kalman`](examples/kalman) |
+| Matrices and vectors (lists, numpy), sized by constructor arguments | FMI 3 arrays and structural parameters | `filterpy.kalman:KalmanFilter` ([models.md](docs/models.md)) |
+| A method that should run on events, not every step | FMI 3 clocks: periodic, triggered, or raised by the model | `simple_pid:PID`, `filterpy.kalman:KalmanFilter` ([models.md](docs/models.md#clocks-fmi-3)) |
 
 ## FMI 2 and FMI 3
 
-FMUs are FMI 2.0 by default. Set `[model] fmi_version = 3` in `fmugen.toml`, or pass `--fmi 3` to `fmugen build`, for FMI 3.0. A config that doesn't use FMI 3-only features builds either version; the three FMI 2 examples give the same results as FMI 3.
+FMUs are FMI 2.0 by default. Set `[model] fmi_version = 3` in `fmugen.toml`, or pass `--fmi 3` to `fmugen build`, for FMI 3.0. A config that doesn't use FMI 3-only features builds either version, with the same results.
 
 Both versions support what UniFMU's Python backend supports for Co-Simulation:
 - parameters (fixed and tunable) and calculated parameters
@@ -171,7 +185,7 @@ uv run pytest -m "not slow and not fmu"
 
 The tests cover:
 - **Adapter:** the generated adapters' behaviour for every FMI 2 and FMI 3 call, including clocks, arrays and configuration mode.
-- **Inference:** `fmugen init` on the examples and on small models.
+- **Inference:** `fmugen init` on small models.
 - **FMU validity:** `modelDescription.xml` is checked with FMPy's validator.
 - **Real runs:** simulations through UniFMU for both versions. These cover every supported FMI 3 type, clocks, intervals and shifts, state save/restore, and changing a tunable parameter.
 
@@ -187,4 +201,4 @@ The tests cover:
 ## Credits
 
 - Original psychrometry model and UniFMU workflow by Lucia Royo-Pascual, Ph.D. (EIUM).
-- Example models from [simple-pid](https://github.com/m-lundberg/simple-pid) (MIT, Martin Lundberg), [RC_BuildingSimulator](https://github.com/architecture-building-systems/RC_BuildingSimulator) (MIT, Architecture and Building Systems, ETH Zürich) and [FilterPy](https://github.com/rlabbe/filterpy) (MIT, Roger R. Labbe). See each example's README.
+- Models used in the docs: [simple-pid](https://github.com/m-lundberg/simple-pid) (MIT, Martin Lundberg), [RC_BuildingSimulator](https://github.com/architecture-building-systems/RC_BuildingSimulator) (MIT, Architecture and Building Systems, ETH Zürich) and [FilterPy](https://github.com/rlabbe/filterpy) (MIT, Roger R. Labbe).

@@ -208,7 +208,7 @@ A composite FMU (`[composite]`) has one full single-model file per part, in `res
 
 ## Example
 
-From `examples/psychrometry` (FMI 2, a function model), shortened to one input and one output:
+From a psychrometry model (FMI 2, a function model), shortened to one input and one output:
 
 ```json
 {

@@ -4,7 +4,6 @@ import textwrap
 import tomllib
 
 import pytest
-from conftest import EXAMPLES
 
 from fmugen.builder import init, isolated_imports
 from fmugen.config import Config, InterfaceError, load_config, parse_call
@@ -18,13 +17,6 @@ def infer(target, **kwargs):
         return infer_config(target, **kwargs)
 
 
-def test_function_returning_a_dict():
-    data, _ = infer(EXAMPLES / "psychrometry" / "psychrometry.py")
-    assert data["model"]["entry"] == "psychrometry.py:compute_balances_simplified"
-    assert len(data["inputs"]) == 18
-    assert list(data["outputs"]) == ["mass_balance", "energy_balance", "mdot_air_in", "mdot_air_out", "Q_in", "Q_out"]
-
-
 def test_installed_class_with_time_argument():
     data, comments = infer("simple_pid:PID")
     assert data["time"] == {"dt": "step_size"}
@@ -35,16 +27,6 @@ def test_installed_class_with_time_argument():
     assert data["parameters"]["Kp"] == {"start": 1.0}
     assert "tunable" in comments[("parameters", "Kp")]
     assert comments[("model", "constants.output_limits")] == {"python": "(None, None)"}
-
-
-def test_class_with_attributes_state_and_sources():
-    data, _ = infer(EXAMPLES / "rc_building" / "rc_simulator" / "building_physics.py:Zone",
-                    call="solve_energy", config_dir=EXAMPLES / "rc_building")
-    assert data["model"]["entry"] == "rc_simulator/building_physics.py:Zone"
-    assert data["model"]["sources"] == ["rc_simulator"]
-    assert data["states"]["t_m_prev"]["next"] == "attr:t_m_next"
-    assert "t_air" in data["outputs"] and "heating_demand" in data["outputs"]
-    assert data["parameters"]["max_heating_energy_per_floor_area"] == {"start": float("inf")}
 
 
 def test_rendered_config_round_trips(tmp_path):
@@ -71,13 +53,6 @@ def test_rendered_config_round_trips(tmp_path):
 
     with pytest.raises(FileExistsError):
         init(tmp_path / "tank.py")
-
-
-def test_config_of_a_model_file_must_be_next_to_it_or_above(tmp_path):
-    model = EXAMPLES / "psychrometry" / "psychrometry.py"
-    with pytest.raises(InterfaceError, match="must be in the folder of psychrometry.py or a folder above"):
-        init(model, tmp_path / "fmugen.toml")
-    assert not (tmp_path / "fmugen.toml").exists()
 
 
 def test_ambiguous_module_needs_a_name(tmp_path):
@@ -403,7 +378,6 @@ def test_pydantic_and_attrs_arguments(tmp_path, library):
     data, _ = infer(f"{tmp_path / 'm.py'}:f", starts={"u.T": 1.5})
     assert data["inputs"] == {"u_T": {"start": 1.5, "to": "arg:u.T"}, "u_n": {"start": 2, "to": "arg:u.n"}}
     assert data["outputs"] == {"y": {"from": "return"}}
-
 
 
 def test_int_results_are_real_with_a_note(tmp_path):

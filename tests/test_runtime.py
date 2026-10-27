@@ -1,10 +1,8 @@
 """The generated adapter, driven through its FMI 2 methods without UniFMU."""
-import importlib.util
 import textwrap
 from pathlib import Path
 
 import pytest
-from conftest import EXAMPLES
 
 from fmugen.builder import init, isolated_imports
 from fmugen.config import InterfaceError
@@ -18,73 +16,6 @@ def write(tmp_path, name, source, config=None):
     if config is not None:
         (tmp_path / "fmugen.toml").write_text(textwrap.dedent(config))
     return tmp_path
-
-
-def test_function_outputs_match_the_model(make_fmu, adapter):
-    fmu = adapter(make_fmu(EXAMPLES / "psychrometry"))
-    fmu.initialize()
-    spec = importlib.util.spec_from_file_location("psy", EXAMPLES / "psychrometry" / "psychrometry.py")
-    psy = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(psy)
-    inputs = {v["name"]: v["start"] for v in fmu.engine.variables if v["causality"] == "input"}
-    expected = psy.compute_balances_simplified(**inputs)
-    assert fmu.get("Q_in", "mass_balance") == [expected["Q_in"], expected["mass_balance"]]
-
-    assert fmu.set("temp_1", 30.0) == OK
-    assert fmu.fmi2DoStep(0.0, 1.0, False) == OK
-    assert fmu.get("Q_in") == pytest.approx(2.4 * 1010 * 30.0)
-
-
-def test_class_time_argument_and_tunable_parameter(make_fmu, adapter):
-    fmu = adapter(make_fmu(EXAMPLES / "simple_pid"))
-    fmu.initialize()
-    assert fmu.fmi2DoStep(0.0, 0.1, False) == OK
-    assert fmu.get("output") == pytest.approx(2.0 * 1.0 + 0.5 * 1.0 * 0.1)   # Kp*e + Ki*e*dt
-    assert fmu.get("integral") == pytest.approx(0.05)
-
-    assert fmu.set("Kp", 4.0) == OK                     # tunable: written onto the PID object
-    assert fmu.engine.obj.Kp == 4.0
-    assert fmu.fmi2DoStep(0.1, 0.1, False) == OK
-    assert fmu.get("output") == pytest.approx(4.0 + 0.1)
-
-    assert fmu.set("proportional_on_measurement", True) == ERROR   # fixed after initialization
-    assert fmu.set("output", 1.0) == ERROR                         # outputs cannot be set
-
-
-def test_state_feedback_fixed_step_and_rollback(make_fmu, adapter):
-    fmu = adapter(make_fmu(EXAMPLES / "rc_building"))
-    fmu.initialize()
-    assert fmu.get("t_air") == 20.0                      # start value until the first step
-    assert fmu.get("c_m") == 165000.0 * 35.0            # calculated parameter, read after construction
-
-    assert fmu.fmi2DoStep(0.0, 60.0, False) == ERROR    # only 3600 s steps
-    assert "3600" in fmu.logs[-1][2]
-
-    assert fmu.set("t_out", -5.0) == OK
-    assert fmu.fmi2DoStep(0.0, 3600.0, False) == OK
-    assert fmu.get("t_m_prev") == fmu.engine.obj.t_m_next   # fed back for the next step
-
-    status, saved = fmu.fmi2SerializeFmuState()
-    assert status == OK
-    assert fmu.fmi2DoStep(3600.0, 3600.0, False) == OK
-    first = fmu.get("t_air", "heating_demand", "t_m_prev")
-    assert fmu.fmi2DeserializeFmuState(saved) == OK
-    assert fmu.fmi2DoStep(3600.0, 3600.0, False) == OK
-    assert fmu.get("t_air", "heating_demand", "t_m_prev") == first
-
-    assert fmu.fmi2Reset() == OK
-    assert fmu.get("t_m_prev") == 20.0 and fmu.engine.obj is None
-
-
-def test_parameters_reach_the_constructor(make_fmu, adapter):
-    fmu = adapter(make_fmu(EXAMPLES / "rc_building"))
-    assert fmu.set("floor_area", 100.0) == OK            # before initialization
-    fmu.initialize()
-    assert fmu.engine.obj.floor_area == 100.0
-    assert fmu.get("c_m") == 165000.0 * 100.0
-    assert fmu.set("floor_area", 50.0) == ERROR          # fixed after initialization
-    assert fmu.set("t_set_heating", 22.0) == OK          # tunable
-    assert fmu.engine.obj.t_set_heating == 22.0
 
 
 def test_function_with_state_time_and_logging(tmp_path, make_fmu, adapter):
@@ -773,7 +704,6 @@ def test_rollback_repeats_random_draws(tmp_path, make_fmu, adapter):
     assert fmu.fmi2DeserializeFmuState(state) == OK
     assert fmu.fmi2DoStep(0.0, 1.0, False) == OK
     assert fmu.get("a", "b") == first
-
 
 
 def test_star_args_constructor_gets_positional_parameters(tmp_path, make_fmu, adapter):

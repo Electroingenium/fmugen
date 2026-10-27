@@ -320,7 +320,7 @@ The keys you will touch most:
 
 ### `[clocks.<name>]` and `[events]` (FMI 3)
 
-Clocks run model code on events instead of on every step. They can't be inferred, so `init` always writes the commented example at the end of an FMI 3 config. **Delete it** if you don't need clocks. [models.md](models.md#clocks-fmi-3) and [examples/sampled_pid](../examples/sampled_pid/fmugen.toml) show how to use them.
+Clocks run model code on events instead of on every step. They can't be inferred, so `init` always writes the commented example at the end of an FMI 3 config. **Delete it** if you don't need clocks. [models.md](models.md#clocks-fmi-3) shows how to use them.
 
 ---
 
