@@ -738,7 +738,9 @@ def test_star_args_constructor_and_method_split_by_the_probe(tmp_path, make_fmu,
     """)
     starts = {"mu": 0.0, "sigma": 1.0, "x": 0.5}
     output, data = init(f"{tmp_path / 'normal.py'}:Normal", call="pdf", starts=starts, probe=True)
-    assert data["parameters"] == {"mu": {"start": 0.0, "to": "pos:0"}, "sigma": {"start": 1.0, "to": "pos:1"}}
+    plain = {k: {kk: vv for kk, vv in v.items() if kk not in ("variability", "attr")}   # sigma: tunable, via self.sigma
+             for k, v in data["parameters"].items()}
+    assert plain == {"mu": {"start": 0.0, "to": "pos:0"}, "sigma": {"start": 1.0, "to": "pos:1"}}
     assert data["inputs"] == {"x": {"start": 0.5, "to": "pos:0"}}
     fmu = adapter(make_fmu(output))
     fmu.initialize()

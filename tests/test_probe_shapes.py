@@ -231,7 +231,7 @@ def test_a_function_returning_a_callable_model_is_a_factory(tmp_path):
     """)
     data, text = probe(f"{path}:load", tmp_path, starts={"x": 0.5, "sr": 16000})
     assert data["model"]["call"] == "__call__" and set(data["inputs"]) == {"x", "sr"}
-    assert data["parameters"] == {"gain": {"start": 2.0}}
+    assert data["parameters"] == {"gain": {"start": 2.0, "variability": "tunable"}}
     assert "load() returns the model: x, sr are arguments of calling it" in text
 
 
@@ -304,6 +304,87 @@ def test_a_class_with_only_properties_is_a_function(tmp_path):
     assert "Atmosphere has no methods to run" in text
     with pytest.raises(InterfaceError, match="cannot tell which method of Meter"), isolated_imports():
         init(f"{path}:Meter", output="-", probe=True)
+
+
+def test_a_library_reading_its_own_sources_warns_about_compile(tmp_path, monkeypatch):
+    # like py-pde, which loads pde/backends/*/config.py by path when imported
+    import sysconfig
+    site = tmp_path / "site"
+    (site / "readsrc").mkdir(parents=True)
+    (site / "readsrc" / "config.py").write_text("SPEED = 2.0\n")
+    (site / "readsrc" / "__init__.py").write_text(textwrap.dedent("""
+        import importlib.util, pathlib
+        _spec = importlib.util.spec_from_file_location("readsrc_config", pathlib.Path(__file__).parent / "config.py")
+        _cfg = importlib.util.module_from_spec(_spec)
+        _spec.loader.exec_module(_cfg)
+
+        def run(x=1.0):
+            return {"y": _cfg.SPEED * x}
+    """))
+    monkeypatch.syspath_prepend(str(site))
+    paths = sysconfig.get_paths()
+    monkeypatch.setattr(sysconfig, "get_paths", lambda *a, **k: {**paths, "purelib": str(site), "platlib": str(site)})
+    _, text = probe("readsrc:run", tmp_path)
+    assert "# --compile won't work: the model's libraries read their own source files by path (readsrc/config.py)" in text
+
+
+def test_tunable_parameters_are_checked_by_the_probe(tmp_path):
+    # like simple-pid's PID: Kp is read on every step (tunable); sample_count only when built (fixed)
+    path = write(tmp_path, "ctl.py", """
+        class Ctl:
+            def __init__(self, Kp=2.0, n=3):
+                self.Kp, self.n = Kp, n
+                self.buffer = [0.0] * n
+
+            def step(self, e=1.0):
+                return {"u": self.Kp * e + len(self.buffer)}
+    """)
+    data, text = probe(f"{path}:Ctl", tmp_path)
+    assert data["parameters"]["Kp"]["variability"] == "tunable"
+    assert "variability" not in data["parameters"]["n"]   # only a hint: zero error would hide a gain too
+    assert "changing it in the probe changed nothing, with these start values" in text
+
+
+def test_an_input_returned_with_a_new_value_is_a_state(tmp_path):
+    # like a hand-written integrator: integrate(level, inflow) returns the next level under the same name
+    path = write(tmp_path, "tank.py", """
+        def integrate(level=1.0, inflow=0.5, dt: float = 1.0):
+            return {"level": level + inflow * dt, "overflow": float(level > 10.0)}
+    """)
+    data, text = probe(f"{path}:integrate", tmp_path)
+    assert data["states"] == {"level": {"start": 1.0, "next": "return:level"}}
+    assert set(data["inputs"]) == {"inflow"} and "overflow" in data["outputs"]
+    assert "the model returns a new level" in text
+
+
+def test_units_come_from_numpydoc_docstrings(tmp_path):
+    # like fluids' Reynolds: "rho : float\n    Density, [kg/m^3]"
+    path = write(tmp_path, "flow.py", '''
+        def reynolds(V=1.0, D=0.1, rho=1000.0, mu=1e-3):
+            """Reynolds number.
+
+            Parameters
+            ----------
+            V : float
+                Velocity, [m/s]
+            D : float
+                Diameter, [m]
+            rho : float
+                Density, [kg/m^3]
+            mu : float
+                Dynamic viscosity of the fluid, [Pa*s]
+
+            Returns
+            -------
+            Re : float
+                Reynolds number, [-]
+            """
+            return V * D * rho / mu
+    ''')
+    data, text = probe(f"{path}:reynolds", tmp_path)
+    assert {n: i.get("unit") for n, i in data["inputs"].items()} == {"V": "m/s", "D": "m", "rho": "kg/m^3", "mu": "Pa*s"}
+    assert "unit" not in data["outputs"]["y"]   # [-]: dimensionless, no unit
+    assert 'rho = { start = 1000.0, unit = "kg/m^3" }  # unit from the docstring' in text
 
 
 def test_inputs_through_kwargs_are_retried_by_position(tmp_path):

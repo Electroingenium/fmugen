@@ -156,6 +156,8 @@ def unfit_outputs(comments):
 #: what `fmugen init` prints after the variable names). Read from the final comments, so a guess the
 #: probe later confirmed or replaced isn't reported.
 ASSUMPTIONS = (
+    ("(its annotation, with no arguments)", "objects built with no arguments from their annotation: give real "
+                                           "ones with --const if the model needs them"),
     ("no default in the code", "no default in the code: the start value is made up, check it"),
     ("no default: check the start value", "no default in the code: the start value is made up, check it"),
     ("Integer because the default is an int", "typed Integer because the default is an int; "
@@ -171,6 +173,8 @@ ASSUMPTIONS = (
     ("so a fixed value; to pass the simulation time", "named like a time but given by --start, so a fixed "
                                                      "value: add [time] NAME = ... to pass the simulation time"),
     ("the probe failed with lists", "passed as arrays of another kind, since the probe failed with lists"),
+    ("the model returns a new", "taken as states: the probe saw the model return a new value under the input's "
+                                "own name"),
     ("fed back from", "taken as states from their names (x_prev fed back from x / x_next)"),
     ("set its dimensions and uncomment", "arrays left commented out: set their dimensions and uncomment"),
     ("(type unknown): uncomment", "properties of unknown type left commented out: uncomment the numbers"),
@@ -202,7 +206,7 @@ def assumptions(comments):
                 notes.append(f"[{section}] {text}")
             continue
         name = str(name)
-        if name == "#requirements":
+        if name in ("#requirements", "#compile"):
             notes.append(f"[model] {text}")
             continue
         if name.count("#") > 1 or name == "#save_state":   # unfit outputs: reported on their own

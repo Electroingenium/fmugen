@@ -154,7 +154,7 @@ def test_start_setup_kind_and_errors(tmp_path):
     data, _ = infer(f"{tmp_path / 'gh.py'}:Filter", starts={"x": 0.0, "g": 0.5, "z": 1.0},
                     setup=["gh:start"])
     assert data["model"]["setup"] == ["gh:start"]
-    assert data["parameters"]["g"] == {"start": 0.5} and data["inputs"]["z"] == {"start": 1.0}
+    assert data["parameters"]["g"] == {"start": 0.5, "variability": "tunable"} and data["inputs"]["z"] == {"start": 1.0}
     assert "g" not in data["inputs"] and data["outputs"] == {"y": {"from": "return"}}
 
     # a class whose constructor does the work, called like a function; inputs aren't echoed as outputs
@@ -477,7 +477,7 @@ def test_names_build_would_reject_are_renamed(tmp_path):
     assert data["inputs"]["decay_units"] == {"start": "y", "to": "arg:units"}
     # a descriptor default stands for its `default`; it isn't split into fields
     data, _ = infer(f"{tmp_path / 'names.py'}:Cosmology", call="age", starts={"H0": 70.0, "z": 1.0})
-    assert data["parameters"] == {"H0": {"start": 70.0}, "Neff": {"start": 3.04}}
+    assert data["parameters"] == {"H0": {"start": 70.0, "variability": "tunable"}, "Neff": {"start": 3.04}}
     for target, kwargs in ((f"{tmp_path / 'names.py'}:source", {"starts": {"time": 10.0}, "fmi_version": 3}),
                            (f"{tmp_path / 'names.py'}:Inventory", {"call": "decay",
                                                                    "starts": {"decay_time": 1.0, "units": "y"}})):

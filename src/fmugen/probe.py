@@ -217,7 +217,74 @@ def _probe_class(cls, method_name, data, comments, arrays, call_starts, create, 
             comments[("outputs", attr)] = f"changed by {method_name}(); an output, since the probe found no other"
             comments.pop(("locals", attr), None)
     _check_sizes(obj, method_name, data, comments)
+    _check_tunable(obj, method_name, data, comments, arrays)
     return obj, returned, set(getattr(obj, "__dict__", {})) | set(_property_values(obj, arrays)) | unfit
+
+
+#: The comment on a parameter kept as a writable attribute, before the probe checks whether the step reads it.
+KEPT = "kept as an attribute: add variability = \"tunable\" if the step reads it"
+
+
+def _check_tunable(obj, method_name, data, comments, arrays):
+    """Mark parameters kept as attributes tunable when the step reads them: changing one changes the results.
+
+    On copies of the object after the probe's step: two unchanged copies step once (when they
+    disagree, the model is random and nothing is decided); a third, with the attribute changed,
+    steps too, and its results are compared. When they don't change, the parameter may still be
+    read (a PID with zero error), so it only keeps the suggestion, with a note. Objects that can't be
+    copied keep the suggestion.
+
+    :param obj: the model object.
+    :param method_name: the step method.
+    :type method_name: str
+    :param data: the config being inferred; updated in place.
+    :type data: dict
+    :param comments: ``(section, key) -> text`` for :func:`render_toml`; updated in place.
+    :type comments: dict
+    :param arrays: whether arrays may be FMU variables (FMI 3).
+    :type arrays: bool
+    """
+    import copy
+    names = [n for n, info in data.get("parameters", {}).items()   # kept as a writable attribute, as given
+             if "variability" not in info and isinstance(getattr(obj, n, None), (bool, int, float))
+             and _writable_attribute(obj, n) and _same(getattr(obj, n), info.get("start"))]
+    if not names:
+        return
+
+    def results(o):
+        out = _call_with_probe_inputs(_step_method(o, method_name, data), data, "call_constants")
+        return _snapshot(out), _numeric_attributes(o, arrays)
+
+    def same(a, b, ignore=None):   # the attribute changed by hand isn't a result
+        return _same(a[0], b[0]) and _same({k: v for k, v in a[1].items() if k != ignore},
+                                           {k: v for k, v in b[1].items() if k != ignore})
+
+    try:
+        if not same(results(copy.deepcopy(obj)), base := results(copy.deepcopy(obj))):
+            return   # random by design: changing a value can't be told from chance
+    except Exception:
+        return
+    for name in names:
+        value = getattr(obj, name)
+        changed = (not value) if isinstance(value, bool) else value + 1 if isinstance(value, int) else value * 1.5 + 1.0
+        try:
+            other = copy.deepcopy(obj)
+            setattr(other, name, changed)
+            moved = not same(results(other), base, ignore=name)
+        except Exception:
+            continue
+        before = comments.get(("parameters", name))
+        if moved:
+            before = None if before == KEPT else before   # decided
+            info = data["parameters"][name]
+            info["variability"] = "tunable"
+            if str(info.get("to", "")).startswith("pos:"):   # a new value reaches the model through its attribute
+                info["attr"] = name
+            note = "tunable: the step reads it (changing it in the probe changed the results)"
+        else:   # with these start values it may just not show (a PID with no error): only a hint
+            before = before or KEPT
+            note = "changing it in the probe changed nothing, with these start values"
+        comments[("parameters", name)] = f"{before}; {note}" if before else note
 
 
 #: GEKKO classes that hold solved results: Var/SV/CV, Intermediate, FV/MV (not Param, Const).
@@ -1302,6 +1369,11 @@ def _outputs_from_return(result, data, comments, default_name, is_class, arrays=
         if name in taken and source == "return":   # the whole result, named like an input (lambdify's f(x, y))
             name = next(n for n in ("result", "result_y", f"{default_name}_result") if n not in taken)
         if name in taken:  # e.g. an object that echoes its inputs as attributes
+            given = data.get("inputs", {}).get(name, {})
+            if source == f"return:{name}" and "start" in given and _fmi_value(value, arrays) \
+                    and not _same(_scalar_of(value), given["start"]):
+                # returned under its own name with a new value: the next value of a state (x -> {"x": ...})
+                comments.setdefault(RETURNED_INPUTS, set()).add(name)
             continue
         if _dotted_name(name) and _unfit_value(comments, "outputs", name, value, source, arrays):
             continue
@@ -1338,6 +1410,9 @@ def _complex_parts(name, value, source):
     sep = "." if ":" in source else ":"
     return [(f"{name}_{part}", getattr(value, part), f"{source}{sep}{part}") for part in ("real", "imag")]
 
+
+#: comments key (not rendered): inputs the probe saw returned under their own name with a new value.
+RETURNED_INPUTS = ("init", "returned inputs")
 
 #: How deep nested results are split into dotted outputs.
 MAX_NESTING = 4
@@ -1549,6 +1624,13 @@ def _detect_states(data, comments, returned, attrs):
     """
     inputs = data.get("inputs", {})
     for name in list(inputs):
+        if name in comments.get(RETURNED_INPUTS, ()):   # the probe saw its next value returned under its own name
+            info = inputs.pop(name)
+            data.setdefault("states", {})[name] = {**info, "next": f"return:{name}"}
+            comments[("states", name)] = (f"fed back from return:{name} after each step: the model returns a new "
+                                          f"{name} (seen in the probe); make it an input if that's not its next value")
+            comments.pop(("inputs", name), None)
+            continue
         base = _state_base(name)
         if base is None:
             continue

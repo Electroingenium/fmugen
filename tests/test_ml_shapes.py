@@ -64,7 +64,7 @@ def test_factory_function_with_a_computed_constant(tmp_path, make_fmu, adapter):
         init(f"{model}:make", call="step", probe=True, starts=_starts_and_consts(_parse_starts(["u=1.0"]), _parse_consts(["path=call:lib:weights_file()"])))
     text = (tmp_path / "fmugen.toml").read_text()
     assert 'call = "step"' in text and "[model.constants]" in text and 'path = { call = "lib:weights_file()" }' in text
-    assert "k = { start = 2.0 }" in text and "verbose = { start = false }" in text
+    assert 'k = { start = 2.0, variability = "tunable" }' in text and "verbose = { start = false }" in text
 
     fmu = adapter(make_fmu(tmp_path))
     fmu.initialize()

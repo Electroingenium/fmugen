@@ -16,6 +16,7 @@ import importlib
 import importlib.util
 import inspect
 import os
+import re
 import sys
 import threading
 import traceback
@@ -158,11 +159,71 @@ def infer_config(target, call=None, config_dir=None, fmi_version=None, starts=No
             f"(not {config_dir})")
     if path:
         target = f"{path.resolve()}" + (f":{name}" if name else "")
-    with contextlib.chdir(config_dir):
+    with contextlib.chdir(config_dir), _source_reads() as reads:
         if probe is True or not probe:
-            return _infer_config(target, call, config_dir, fmi_version, starts, setup, kind, create, probe, converts)
-        return _with_timeout(float(probe), _infer_config, target, call, config_dir, fmi_version, starts, setup, kind,
-                             create, True, converts)
+            data, comments = _infer_config(target, call, config_dir, fmi_version, starts, setup, kind, create, probe,
+                                           converts)
+        else:
+            data, comments = _with_timeout(float(probe), _infer_config, target, call, config_dir, fmi_version, starts,
+                                           setup, kind, create, True, converts)
+    if reads:
+        shown = ", ".join(sorted(reads)[:3]) + (f" and {len(reads) - 3} more" if len(reads) > 3 else "")
+        comments[("model", "#compile")] = (f"--compile won't work: the model's libraries read their own source files "
+                                           f"by path ({shown}), and a compiled FMU has none; build without --compile, "
+                                           "or with --vendor")
+    return data, comments
+
+
+@contextlib.contextmanager
+def _source_reads():
+    """Record ``.py`` files of installed packages read as files (not imported), while the model is imported and probed.
+
+    py-pde loads ``pde/backends/*/config.py`` with :func:`importlib.util.spec_from_file_location`; others
+    ``open()`` them. A compiled FMU (``--compile``) contains no ``.py`` files, so those reads fail there.
+    Regular imports don't go through either, so they aren't recorded.
+
+    :return: a set, filled with paths relative to their ``site-packages`` folder.
+    """
+    import builtins
+    import importlib.util
+    import sysconfig
+    roots = {Path(sysconfig.get_paths()[k]).resolve() for k in ("purelib", "platlib")}
+    own = Path(__file__).resolve().parent
+    reads = set()
+
+    def note(path):
+        try:
+            p = Path(path).resolve()
+        except (TypeError, ValueError, OSError):
+            return
+        if p.suffix != ".py" or p.is_relative_to(own):
+            return
+        root = next((r for r in roots if p.is_relative_to(r)), None)
+        if root is not None:
+            reads.add(p.relative_to(root).as_posix())
+
+    real_open, real_spec = builtins.open, importlib.util.spec_from_file_location
+
+    def watched_open(file, *args, **kwargs):
+        # not the source lines of tracebacks, warnings and inspect (linecache, through tokenize.open), nor
+        # numba's cache keys (a hash of the source file): both do without the file, and those compiled FMUs
+        # work (librosa, pythermalcomfort)
+        caller = Path(sys._getframe(1).f_code.co_filename)
+        if isinstance(file, (str, os.PathLike)) and caller.name not in ("tokenize.py", "linecache.py", "inspect.py") \
+                and "numba" not in caller.parts:
+            note(file)
+        return real_open(file, *args, **kwargs)
+
+    def watched_spec(name, location=None, *args, **kwargs):
+        if location is not None:
+            note(location)
+        return real_spec(name, location, *args, **kwargs)
+
+    builtins.open, importlib.util.spec_from_file_location = watched_open, watched_spec
+    try:
+        yield reads
+    finally:
+        builtins.open, importlib.util.spec_from_file_location = real_open, real_spec
 
 
 def _with_timeout(timeout, fn, *args):
@@ -291,6 +352,11 @@ def _infer_config(target, call, config_dir, fmi_version, starts, setup, kind, cr
     _rename_duplicates(data, comments)
     # FMI 2 too: importers name the simulation time `time` in their results (FMPy), hiding the variable
     _rename_reserved(data, comments, is_class="call" in data["model"] or inspect.isclass(entry))
+    step = data["model"].get("call")
+    _add_docstring_units(data, comments, entry,
+                         getattr(entry, "__init__", None) if inspect.isclass(entry) else None,
+                         getattr(entry, create, None) if inspect.isclass(entry) and create else None,
+                         getattr(entry, step, None) if inspect.isclass(entry) and step and ":" not in step else None)
     if fmi_version == 3:
         _wide_integers(data, comments)
     else:
@@ -951,6 +1017,86 @@ def _pick_method(cls, starts=None, constructor=None):
         + (f"; the --start names {', '.join(left)} fit {', '.join(fitting)}" if len(fitting) > 1 else "")
         + "); pass --call METHOD"
     )
+
+
+#: A numpydoc section header: the name, then a line of dashes.
+_SECTION = re.compile(r"^(\w[\w ]*)\n-{3,}\n", re.M)
+#: A numpydoc entry: ``name : type`` at the section's indentation (or ``name`` alone).
+_ENTRY = re.compile(r"^(\w+)\s*(?::\s*(.*))?$")
+#: A unit in square brackets: ``Temperature, [K]``.
+_BRACKET_UNIT = re.compile(r"\[([^\[\]]+)\]")
+
+
+def docstring_units(*objects):
+    """Units of arguments and results from numpydoc docstrings: ``T : float`` described as ``Temperature, [K]``.
+
+    The first bracketed text of an entry (its type line, then its description) that :func:`units.parse`
+    recognises is its unit; ``[-]`` and other notes are not. fluids, ht, chemicals and thermo write
+    their docstrings this way.
+
+    :param objects: functions, methods or classes whose docstrings are read (later ones don't override).
+    :return: ``({argument: unit}, {result: unit})`` from the Parameters and Returns sections.
+    :rtype: tuple[dict, dict]
+    """
+    from fmugen import units
+    found = ({}, {})
+    for obj in objects:
+        doc = inspect.getdoc(obj) if obj is not None else None
+        if not doc:
+            continue
+        headers = list(_SECTION.finditer(doc))
+        for i, header in enumerate(headers):
+            kind = {"Parameters": 0, "Other Parameters": 0, "Returns": 1}.get(header.group(1).strip())
+            if kind is None:
+                continue
+            body = doc[header.end():headers[i + 1].start() if i + 1 < len(headers) else len(doc)]
+            entries, name = {}, None
+            for line in body.splitlines():
+                entry = _ENTRY.match(line) if line and not line[0].isspace() else None
+                if entry:   # "name : type"; its description follows, indented
+                    name = entry.group(1)
+                    entries[name] = [entry.group(2) or ""]
+                elif name:
+                    entries[name].append(line.strip())
+            for name, text in entries.items():
+                if name in found[kind]:
+                    continue
+                unit = next((u.strip() for u in _BRACKET_UNIT.findall(" ".join(text))   # [1]: a reference, not a unit
+                             if re.search(r"[^\W\d_]", u) and units.parse(u.strip()) is not None), None)
+                if unit:
+                    found[kind][name] = unit
+    return found
+
+
+def _add_docstring_units(data, comments, *objects):
+    """Give variables without a unit the one their docstring states (:func:`docstring_units`), with a comment.
+
+    :param data: the config being inferred; updated in place.
+    :type data: dict
+    :param comments: ``(section, key) -> text``; updated in place.
+    :type comments: dict
+    :param objects: the entry and the callables whose docstrings describe it.
+    """
+    arguments, results = docstring_units(*objects)
+    if not arguments and not results:
+        return
+    single = next(iter(results.values())) if len(results) == 1 else None
+    for section in ("parameters", "structural_parameters", "inputs", "states", "outputs", "locals"):
+        for name, info in data.get(section, {}).items():
+            if "unit" in info or info.get("type") in ("Boolean", "String", "Binary") or "enum" in info \
+                    or isinstance(info.get("start"), (bool, str)):
+                continue   # only numbers have units (pythermalcomfort's limit_inputs mentions °C)
+            if section in ("outputs", "locals"):
+                source = str(info.get("from", f"return:{name}"))
+                key = source.partition(":")[2].split(".")[-1] if ":" in source else name
+                unit = results.get(name) or results.get(key) or (single if source == "return" else None)
+            else:
+                target = str(info.get("to", "")).partition(":")[2].split(".")[0].split("[")[0] or name
+                unit = arguments.get(name) or arguments.get(target)
+            if unit:
+                info["unit"] = unit
+                note = comments.get((section, name))
+                comments[(section, name)] = f"{note}; unit from the docstring" if note else "unit from the docstring"
 
 
 def _results_only(cls):
