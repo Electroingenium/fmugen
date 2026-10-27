@@ -274,6 +274,71 @@ def test_an_annotated_object_argument_gets_a_default_instance(tmp_path, monkeypa
     assert "constants" not in data["model"] and "grid" in data["inputs"]
 
 
+def test_a_class_with_only_properties_is_a_function(tmp_path):
+    # like ambiance's Atmosphere(h): built with the inputs, results as properties; no method to run
+    path = write(tmp_path, "atm.py", """
+        class Atmosphere:
+            def __init__(self, h, check_bounds=True):
+                self.h = h
+
+            @property
+            def temperature(self) -> float:
+                return 288.15 - 0.0065 * self.h
+
+            @classmethod
+            def from_pressure(cls, p):
+                return cls(0.0)
+
+        class Meter:              # a method: still needs --call
+            def __init__(self, rate=1.0):
+                self.rate = rate
+
+            def integrated(self, data):
+                return sum(data)
+
+            def other(self, data):
+                return 0.0
+    """)
+    data, text = probe(f"{path}:Atmosphere", tmp_path, starts={"h": 1000.0})
+    assert data["model"]["kind"] == "function" and data["inputs"]["h"] == {"start": 1000.0}
+    assert "Atmosphere has no methods to run" in text
+    with pytest.raises(InterfaceError, match="cannot tell which method of Meter"), isolated_imports():
+        init(f"{path}:Meter", output="-", probe=True)
+
+
+def test_inputs_through_kwargs_are_retried_by_position(tmp_path):
+    # like neuromancer's Block.forward(*inputs, **kwargs): data only by position
+    path = write(tmp_path, "block.py", """
+        class Block:
+            def forward(self, *inputs, **kwargs):
+                if kwargs:
+                    raise TypeError(f"Block.forward() got an unexpected keyword argument {next(iter(kwargs))!r}")
+                return {"y": 2.0 * sum(inputs[0])}
+    """)
+    data, text = probe(f"{path}:Block", tmp_path, call="forward", starts={"x": [0.5, -0.25]}, fmi_version=3)
+    assert data["inputs"]["x"]["to"] == "pos:0" and data["outputs"] == {"y": {"from": "return:y"}}
+    assert "passed by position: the model takes no keyword arguments there" in text
+
+
+def test_constructor_arrays_are_retried_as_numpy(tmp_path):
+    pytest.importorskip("numpy")
+    # like GPy's GPRegression(X, Y): the constructor reads X.shape
+    path = write(tmp_path, "gp.py", """
+        class GP:
+            def __init__(self, X, Y):
+                self.n = X.shape[0]
+                self.mean = float(Y.mean())
+
+            def predict(self, Xnew):
+                return {"mu": self.mean + 0.0 * float(Xnew[0])}
+    """)
+    data, text = probe(f"{path}:GP", tmp_path, call="predict", starts={"X": [1.0, 2.0], "Y": [3.0, 5.0], "Xnew": [0.5]},
+                       fmi_version=3)
+    assert data["parameters"]["X"]["numpy"] is True and data["parameters"]["Y"]["numpy"] is True
+    assert data["outputs"] == {"mu": {"from": "return:mu"}}
+    assert "passed as numpy arrays: building the model failed with lists" in text
+
+
 def test_a_history_that_grows_each_step_gives_its_last_entry(tmp_path):
     # like seirsplus' numS: one more entry per run_epoch()
     path = write(tmp_path, "epi.py", """

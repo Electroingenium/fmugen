@@ -84,8 +84,7 @@ def _probe_class(cls, method_name, data, comments, arrays, call_starts, create, 
     try:
         _run_setup(data)
         build = factory or (getattr(cls, create) if create else cls)
-        args, kwargs = _probe_args(data, ("parameters",), build, "constants")
-        obj = build(*args, **_probe_constants(data, "constants"), **kwargs)
+        obj = _construct(build, data, comments)
         _run_setup(data, obj)
     except ConstantError:
         raise
@@ -690,7 +689,16 @@ def _probe_once(fn, data, comments, constants_key="constants"):
 
     try:
         return call()
-    except Exception:
+    except Exception as error:
+        moved = _keywords_to_positions(data, comments, error)
+        if moved:   # the model takes them by position only (neuromancer's forward(*inputs)): again, with every retry
+            try:
+                return _probe_once(fn, data, comments, constants_key)
+            except Exception:
+                for name, info in moved.items():
+                    info.pop("to", None)
+                    comments[("inputs", name)] = KWARGS_COMMENT
+                raise error from None
         # A date-time epoch is naive (some models refuse time zones); others need one: retry in UTC
         naive = [source for source in data.get("time", {}).values()
                  if isinstance(source, dict) and datetime.datetime.fromisoformat(source["epoch"]).tzinfo is None]
@@ -740,6 +748,88 @@ def _probe_once(fn, data, comments, constants_key="constants"):
 
 #: Sentinel: :func:`_retry_as_arrays` found no call that works.
 _FAILED = object()
+
+#: The comment of an input passed through ``**kwargs`` (set by :func:`fmugen.arguments._arguments`).
+KWARGS_COMMENT = "start from --start (passed through **kwargs)"
+
+
+def _keywords_to_positions(data, comments, error):
+    """Pass the ``--start`` inputs that went through ``**kwargs`` by position instead, after the others.
+
+    For a step method declaring ``(*args, **kwargs)`` that accepts only positional data
+    (neuromancer's ``Block.forward(*inputs)``): the probe call failed with "unexpected keyword
+    argument". Positions follow those already taken, in ``--start`` order.
+
+    :param data: the config being inferred; updated in place.
+    :type data: dict
+    :param comments: ``(section, key) -> text`` for :func:`render_toml`; updated in place.
+    :type comments: dict
+    :param error: what the probe call raised.
+    :type error: Exception
+    :return: ``{name: info}`` of the inputs moved, empty when it doesn't apply.
+    :rtype: dict
+    """
+    if not isinstance(error, TypeError) or "unexpected keyword argument" not in str(error):
+        return {}
+    inputs = data.get("inputs", {})
+    moved = {n: info for n, info in inputs.items() if comments.get(("inputs", n)) == KWARGS_COMMENT and "to" not in info}
+    if not moved:
+        return {}
+    taken = [int(str(info["to"]).split(":")[1]) for info in inputs.values() if str(info.get("to", "")).startswith("pos:")]
+    taken += [int(k) for k in data["model"].get("call_constants", {}) if str(k).isdigit()]
+    position = max(taken, default=-1) + 1
+    for name, info in moved.items():
+        info["to"] = f"pos:{position}"
+        comments[("inputs", name)] = ("start from --start, passed by position: the model takes no keyword "
+                                      "arguments there (check the order)")
+        position += 1
+    return moved
+
+
+def _construct(build, data, comments):
+    """Build the model object for the probe, retrying list parameters as numpy arrays, then torch tensors.
+
+    As the step's inputs are (:func:`_probe_once`): GPy's ``GPRegression(X, Y)`` takes only arrays.
+    The first form that works is kept in ``data`` with a comment.
+
+    :param build: the class, ``--create`` classmethod or factory.
+    :param data: the config being inferred; updated in place.
+    :type data: dict
+    :param comments: ``(section, key) -> text`` for :func:`render_toml`; updated in place.
+    :type comments: dict
+    :return: the object.
+    :raises Exception: the original error, when no retry works.
+    """
+    def make():
+        args, kwargs = _probe_args(data, ("parameters",), build, "constants")
+        return build(*args, **_probe_constants(data, "constants"), **kwargs)
+
+    try:
+        return make()
+    except ConstantError:
+        raise
+    except Exception:
+        plain = {n: info for n, info in data.get("parameters", {}).items()
+                 if "dimensions" in info and not info.get("numpy") and not info.get("convert")}
+        if not plain:
+            raise
+        for converter in ARRAY_RETRIES:
+            module = "numpy" if converter == "numpy" else converter.partition(":")[0]
+            if importlib.util.find_spec(module) is None:
+                continue
+            for info in plain.values():
+                info.update({"numpy": True} if converter == "numpy" else {"convert": converter})
+            try:
+                obj = make()
+            except Exception:
+                for info in plain.values():
+                    info.pop("numpy", None), info.pop("convert", None)
+                continue
+            shown = "numpy arrays" if converter == "numpy" else converter.replace(":", ".") + "(...)"
+            for name in plain:
+                comments[("parameters", name)] = f"passed as {shown}: building the model failed with lists"
+            return obj
+        raise
 
 
 def _retry_as_arrays(call, data, comments):

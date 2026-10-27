@@ -263,6 +263,10 @@ def _infer_config(target, call, config_dir, fmi_version, starts, setup, kind, cr
     if kind == "function":
         data["model"]["kind"] = "function"
     comments = {}
+    if inspect.isclass(entry) and kind != "function" and not call and not create and _results_only(entry):
+        kind = data["model"]["kind"] = "function"
+        comments[("model", "kind")] = (f"{entry.__name__} has no methods to run: building it computes everything "
+                                       "(its properties are the results), so it's built with the inputs every step")
     options = {"arrays": arrays, "starts": starts, "probe": probe, "converts": dict(converts or {})}
     if inspect.isclass(entry) and kind != "function":
         _infer_class(entry, call, data, comments, create=create, **options)
@@ -947,6 +951,27 @@ def _pick_method(cls, starts=None, constructor=None):
         + (f"; the --start names {', '.join(left)} fit {', '.join(fitting)}" if len(fitting) > 1 else "")
         + "); pass --call METHOD"
     )
+
+
+def _results_only(cls):
+    """Whether a class has no method a step could run: no ``__call__``, no public instance method (inherited
+    or C ones too), only properties, attributes, classmethods and staticmethods (ambiance's ``Atmosphere(h)``).
+
+    :param cls: the class.
+    :type cls: type
+    :rtype: bool
+    """
+    if any("__call__" in vars(k) for k in cls.__mro__[:-1]):
+        return False
+    for name in dir(cls):
+        if name.startswith("_"):
+            continue
+        raw = inspect.getattr_static(cls, name, None)
+        if isinstance(raw, (property, classmethod, staticmethod, type)):
+            continue
+        if callable(raw):   # a Python function or a C method
+            return False
+    return True
 
 
 def _leftover_starts(fn, starts):

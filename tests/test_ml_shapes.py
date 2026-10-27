@@ -30,6 +30,21 @@ def test_start_values_in_toml_spelling_and_computed_constants():
         _starts_and_consts({"n": 3}, {"n": {"python": "3"}})
 
 
+def test_start_and_const_keep_the_command_line_order(tmp_path):
+    # like pinocchio's rnea(model, data, q, v, a), a C function with no signature: positions follow the order given
+    from fmugen.__main__ import main
+    (tmp_path / "lib.py").write_text(textwrap.dedent("""
+        def rnea(*args):
+            model, data, q = args
+            assert model == "M" and data == "D", args
+            return {"tau": 2.0 * q}
+    """))
+    main(["init", f"{tmp_path / 'lib.py'}:rnea", "-o", str(tmp_path / "fmugen.toml"), "--probe",
+          "--const", "model=M", "--const", "data=D", "--start", "q=1.5"])
+    text = (tmp_path / "fmugen.toml").read_text()
+    assert '0 = "M"' in text and '1 = "D"' in text and 'q = { start = 1.5, to = "pos:2" }' in text
+
+
 def test_factory_function_with_a_computed_constant(tmp_path, make_fmu, adapter):
     # like silero_vad.load_silero_vad / torchani.models.ANI2x: a function returns the model object
     model = write(tmp_path, '''

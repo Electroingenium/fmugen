@@ -119,13 +119,18 @@ def _parse_consts(items):
     return consts
 
 
-def _starts_and_consts(starts, consts):
+def _starts_and_consts(starts, consts, order=None):
     """The ``--start`` and ``--const`` values together, as :func:`fmugen.builder.init` takes them.
+
+    In the order they were given on the command line: for callables without a signature (pinocchio's
+    ``rnea(model, data, q, v, a)``) that order is the order of the positional arguments.
 
     :param starts: parsed ``--start`` values.
     :type starts: dict
     :param consts: parsed ``--const`` values.
     :type consts: dict
+    :param order: the names in command-line order (default: the starts, then the consts).
+    :type order: list[str] or None
     :rtype: dict
     :raises InterfaceError: a name given to both.
     """
@@ -133,7 +138,16 @@ def _starts_and_consts(starts, consts):
     if both:
         raise InterfaceError(f"{', '.join(both)}: given with both --start and --const; an argument is either an "
                              "FMU variable (--start) or a fixed value (--const)")
-    return {**starts, **consts}
+    merged = {**starts, **consts}
+    return {name: merged[name] for name in (order or merged)} if order else merged
+
+
+class _InOrder(argparse.Action):
+    """``append`` that also records the option's NAME in one list shared by ``--start`` and ``--const``."""
+
+    def __call__(self, parser, namespace, values, option_string=None):
+        getattr(namespace, self.dest).append(values)
+        namespace.value_order.append(values.partition("=")[0].strip())
 
 
 def main(argv=None):
@@ -159,11 +173,12 @@ def main(argv=None):
     i.add_argument("--call", help="method run on each step, for classes (default: step/do_step/update/__call__)")
     i.add_argument("--force", action="store_true", help="overwrite an existing config")
     i.add_argument("--fmi", type=int, choices=(2, 3), help="target FMI version; 3 also infers Binary, Float32 and resizable arrays")
-    i.add_argument("--start", action="append", default=[], metavar="NAME=VALUE",
+    i.set_defaults(value_order=[])
+    i.add_argument("--start", action=_InOrder, default=[], metavar="NAME=VALUE",
                    help="start (and probe) value of an argument that becomes an FMU variable (a Python literal: "
                         "number, string, bool, list), e.g. for arguments without a default, or ARG.FIELD=VALUE "
                         "for a field of an object argument; repeatable")
-    i.add_argument("--const", action="append", default=[], metavar="NAME=VALUE",
+    i.add_argument("--const", action=_InOrder, default=[], metavar="NAME=VALUE",
                    help="fixed value of an argument, not an FMU variable: a file, a model name, a mode, or "
                         "call:module:function(...) for an object computed when the FMU initializes; repeatable")
     i.add_argument("--setup", action="append", default=[], metavar="CALL",
@@ -232,7 +247,8 @@ def main(argv=None):
     try:
         if args.command == "init":
             output, _data = init(args.model, args.output, args.call, args.force, args.fmi,
-                                _starts_and_consts(_parse_starts(args.start), _parse_consts(args.const)),
+                                _starts_and_consts(_parse_starts(args.start), _parse_consts(args.const),
+                                                   list(dict.fromkeys(args.value_order))),
                                 args.setup, args.kind, args.create, args.probe, _parse_converts(args.convert))
             if output:
                 print(f"Wrote {output.resolve()}; review it, then run: fmugen build {output}")
