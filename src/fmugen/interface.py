@@ -989,7 +989,9 @@ def _infer_class(cls, call, data, comments, arrays=False, starts=None, create=No
 
 def _pick_method(cls, starts=None, constructor=None):
     """The step method of a class: the first of :data:`CALL_NAMES` it has, else the only method the
-    ``--start`` names fit (:func:`_methods_taking`), else its only public method.
+    ``--start`` names fit (:func:`_methods_taking`), else its only public method, else the best of
+    :func:`_rank_methods`: asked at a prompt in a terminal (:func:`_ask_method`), else picked with a warning
+    listing the candidates.
 
     The ``--start`` names the constructor doesn't take must be arguments of the method, and cover its
     required ones: JOS3's ``times`` and ``dtime`` fit only ``simulate``.
@@ -1001,7 +1003,7 @@ def _pick_method(cls, starts=None, constructor=None):
     :param constructor: the constructor (or ``--create`` classmethod), for the names it takes.
     :return: ``(method, comment)``; the comment says why, when the ``--start`` names chose it.
     :rtype: tuple[str, str or None]
-    :raises InterfaceError: none of these, and not exactly one public method or fitting method.
+    :raises InterfaceError: the class has no public method.
     """
     for name in CALL_NAMES:
         if name == "__call__":
@@ -1020,11 +1022,101 @@ def _pick_method(cls, starts=None, constructor=None):
         return picked
     if len(public) == 1:
         return public[0], None
-    raise InterfaceError(
-        f"cannot tell which method of {cls.__name__} runs a step (public methods: {', '.join(public) or 'none'}"
-        + (f"; the --start names {', '.join(left)} fit {', '.join(fitting)}" if len(fitting) > 1 else "")
-        + "); pass --call METHOD"
-    )
+    ranked = _rank_methods(cls, starts, constructor, fitting)
+    if not ranked:
+        raise InterfaceError(f"cannot tell which method of {cls.__name__} runs a step (no public methods); "
+                             "pass --call METHOD")
+    shown = ", ".join(ranked[:8]) + (", …" if len(ranked) > 8 else "")
+    chosen = _ask_method(cls, ranked)
+    if chosen:
+        return chosen, f"{chosen}() chosen at the prompt (candidates, best first: {shown})"
+    sys.stderr.write(f"fmugen: warning: it's not clear which method of {cls.__name__} runs a step; picked "
+                     f"{ranked[0]}() (candidates, best first: {shown}); pass --call METHOD to choose another\n")
+    return ranked[0], (f"{ranked[0]}() guessed: it's not clear which method runs a step (candidates, best first: "
+                       f"{shown}); pass --call METHOD to choose another")
+
+
+def _ask_method(cls, ranked):
+    """Ask which method runs a step, when ``init`` runs in a terminal: the candidates numbered, best first.
+
+    Enter takes the first; a number or a method name (any public one) picks another.
+
+    :param cls: the class.
+    :type cls: type
+    :param ranked: the candidates, best first (:func:`_rank_methods`).
+    :type ranked: list[str]
+    :return: the method, or None when not in a terminal (stdin or stderr redirected) or at end of input.
+    :rtype: str or None
+    """
+    if not (sys.stdin and sys.stdin.isatty() and sys.stderr.isatty()):
+        return None
+    shown = ranked[:9]
+    lines = [f"Which method of {cls.__name__} runs a step? (pass --call METHOD to skip this)"]
+    lines += [f"  {i}. {m}" for i, m in enumerate(shown, 1)]
+    if len(ranked) > len(shown):
+        lines.append(f"  (or type another: {', '.join(ranked[len(shown):])})")
+    sys.stderr.write("\n".join(lines) + "\n")
+    while True:
+        sys.stderr.write(f"Method [1: {shown[0]}]: ")
+        sys.stderr.flush()
+        try:
+            answer = input().strip()
+        except (EOFError, KeyboardInterrupt):
+            sys.stderr.write("\n")
+            raise InterfaceError(f"no step method chosen for {cls.__name__}; pass --call METHOD") from None
+        if not answer:
+            return shown[0]
+        if answer.isdigit() and 1 <= int(answer) <= len(shown):
+            return shown[int(answer) - 1]
+        if answer in ranked:
+            return answer
+        sys.stderr.write(f"  not one of the candidates: type 1–{len(shown)} or a method name\n")
+
+
+#: Method names that usually run a model, best first: picked when nothing else tells the step method
+#: (the --call of the tested models: sklearn-like predict, solve, run, forecast, ...).
+STEP_LIKE = ("predict", "forecast", "simulate", "solve", "run", "run_steps", "compute", "propagate", "forward",
+             "evaluate", "transcribe", "encode", "calculate", "process", "apply")
+#: Method names (or prefixes, ending in _) that set a model up, save, show or copy it: a step last.
+NOT_STEP = ("fit", "train", "reset", "load", "save", "copy", "plot", "show", "summary", "describe", "score",
+            "get_params", "set_params", "to_", "from_", "set_", "plot_", "save_", "load_", "print_")
+
+
+def _rank_methods(cls, starts, constructor, fitting=()):
+    """Public methods of ``cls`` that may run a step, most likely first, for when nothing picks one surely.
+
+    Ranked by: whether the ``--start`` names left for the step cover its required arguments (or its
+    signature can't be read; only when names were given), whether it fits them (:func:`_methods_taking`), whether its name is a
+    :data:`NOT_STEP` one, its place in :data:`STEP_LIKE`, how many of the names it takes, whether the
+    class itself defines it, and its name.
+
+    :param cls: the class.
+    :type cls: type
+    :param starts: the ``--start`` / ``--const`` values.
+    :type starts: dict or None
+    :param constructor: the constructor (or ``--create`` classmethod).
+    :param fitting: the methods the leftover names fit.
+    :rtype: list[str]
+    """
+    left = {n.partition(".")[0] for n in (_leftover_starts(constructor, starts) or starts or {})}
+    keys = {}
+    for m in dir(cls):
+        raw = inspect.getattr_static(cls, m, None)
+        if m.startswith("_") or not callable(getattr(cls, m, None)) or isinstance(raw, (property, type, classmethod)):
+            continue
+        try:
+            params = [p for p in inspect.signature(getattr(cls, m)).parameters.values()
+                      if p.name not in ("self", "cls") and p.kind not in (p.VAR_POSITIONAL, p.VAR_KEYWORD)]
+            required = {p.name for p in params if p.default is p.empty}
+            taken = len(left & {p.name for p in params})
+            covered = required <= left
+        except (TypeError, ValueError):   # a C method: may take anything
+            taken, covered = 0, True
+        not_step = m in NOT_STEP or any(m.startswith(p) for p in NOT_STEP if p.endswith("_"))
+        keys[m] = (bool(left) and not covered, m not in fitting, not_step,
+                   STEP_LIKE.index(m) if m in STEP_LIKE else len(STEP_LIKE),
+                   -taken, m not in vars(cls), m)
+    return sorted(keys, key=keys.get)
 
 
 #: A numpydoc section header: the name, then a line of dashes.

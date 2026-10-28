@@ -180,8 +180,9 @@ def test_the_start_names_pick_the_step_method(tmp_path):
     data, text = probe(f"{path}:Body", tmp_path, starts={"times": 1, "dtime": 60.0})
     assert data["model"]["call"] == "simulate" and set(data["inputs"]) == {"times", "dtime"}
     assert "simulate() from the --start names" in text
-    with pytest.raises(InterfaceError, match="cannot tell which method of Body"), isolated_imports():
-        init(f"{path}:Body", output="-", probe=True)   # no names: still stops
+    data, text = probe(f"{path}:Body", tmp_path, force=True)   # no names: simulate is guessed, with a warning
+    assert data["model"]["call"] == "simulate" and "simulate() guessed" in text
+    assert "candidates, best first: simulate, results, to_csv" in text
 
 
 def test_the_start_names_win_over_the_only_own_method(tmp_path):
@@ -238,7 +239,7 @@ def test_the_method_taking_most_start_names_wins(tmp_path):
     assert data["model"]["call"] == "rotate"
 
 
-def test_two_fitting_methods_still_need_call(tmp_path):
+def test_two_fitting_methods_warn_with_the_candidates(tmp_path, capsys):
     # like pedon's Genuchten: h fits theta(h), s(h), k(h)
     path = write(tmp_path, "soil.py", """
         class Soil:
@@ -248,8 +249,9 @@ def test_two_fitting_methods_still_need_call(tmp_path):
             def k(self, h):
                 return 1e-5 / (1 + h)
     """)
-    with pytest.raises(InterfaceError, match="the --start names h fit k, theta"):
-        probe(f"{path}:Soil", tmp_path, starts={"h": 1.0})
+    data, text = probe(f"{path}:Soil", tmp_path, starts={"h": 1.0})
+    assert data["model"]["call"] == "k" and "candidates, best first: k, theta" in text
+    assert "picked k() (candidates, best first: k, theta); pass --call METHOD" in capsys.readouterr().err
 
 
 def test_a_function_returning_a_callable_model_is_a_factory(tmp_path):
@@ -341,8 +343,9 @@ def test_a_class_with_only_properties_is_a_function(tmp_path):
     data, text = probe(f"{path}:Atmosphere", tmp_path, starts={"h": 1000.0})
     assert data["model"]["kind"] == "function" and data["inputs"]["h"] == {"start": 1000.0}
     assert "Atmosphere has no methods to run" in text
-    with pytest.raises(InterfaceError, match="cannot tell which method of Meter"), isolated_imports():
-        init(f"{path}:Meter", output="-", probe=True)
+    with isolated_imports():
+        _, data = init(f"{path}:Meter", output="-")   # a method: guessed, with a warning
+    assert data["model"]["call"] == "integrated"
 
 
 def test_a_library_reading_its_own_sources_warns_about_compile(tmp_path, monkeypatch):
@@ -665,3 +668,23 @@ def test_a_const_shared_with_the_step_method_goes_to_the_constructor(tmp_path):
     assert data["model"]["constants"] == {"x0": {"call": "builtins:list([1.0])"}}
     assert "call_constants" not in data["model"]
     assert data["inputs"]["solve_x0"] == {"dimensions": [1], "start": [2.0], "to": "arg:x0"}
+
+
+def test_an_unclear_step_method_is_asked_in_a_terminal(tmp_path, monkeypatch, capsys):
+    path = write(tmp_path, "soil.py", """
+        class Soil:
+            def theta(self, h):
+                return 0.4 - 0.001 * h
+
+            def k(self, h):
+                return 1e-5 / (1 + h)
+    """)
+    import sys
+    monkeypatch.setattr(sys.stdin, "isatty", lambda: True, raising=False)
+    monkeypatch.setattr(sys.stderr, "isatty", lambda: True, raising=False)
+    answers = iter(["7", "2"])   # out of range, then theta
+    monkeypatch.setattr("builtins.input", lambda: next(answers))
+    data, text = probe(f"{path}:Soil", tmp_path, starts={"h": 1.0})
+    err = capsys.readouterr().err
+    assert "  1. k\n  2. theta" in err and "not one of the candidates" in err
+    assert data["model"]["call"] == "theta" and "theta() chosen at the prompt" in text
