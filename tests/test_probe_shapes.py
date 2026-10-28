@@ -715,3 +715,19 @@ def test_ranking_set_up_names_and_variants():
     assert _rank_methods(Solver, {}, Solver.__init__)[0] == "solve"
     assert _rank_methods(Solver, {}, Solver.__init__)[-1] == "update"
     assert _rank_methods(Finder, {}, Finder.__init__)[:2] == ["decay", "timezone_at"]
+
+
+def test_ranking_run_like_prefixes_and_clean_up_names():
+    from fmugen.interface import _rank_methods
+
+    class Zone:               # like RC_BuildingSimulator's Zone: solve_energy runs it, calc_* are its parts
+        def calc_energy_demand(self, t): ...
+        def calc_t_air(self, t): ...
+        def solve_energy(self, t): ...
+
+    class Sim:                # like pyswmm's Simulation: close is clean-up, never the step
+        def close(self): ...
+        def report(self): ...
+
+    assert _rank_methods(Zone, {}, Zone.__init__)[0] == "solve_energy"
+    assert _rank_methods(Sim, {}, Sim.__init__) == ["report", "close"]

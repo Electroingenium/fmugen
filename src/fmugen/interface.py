@@ -1081,8 +1081,8 @@ STEP_LIKE = ("predict", "forecast", "simulate", "solve", "run", "run_steps", "co
 #: method (sklearn's fit before predict, osqp's update before solve); without one, fit and train run the
 #: model (lifelines' KaplanMeierFitter.fit), after the :data:`STEP_LIKE` names.
 SETUP_IF_STEP = ("fit", "train", "update", "fit_", "train_")
-#: Method names (or prefixes, ending in _) that set a model up, save, show or copy it: a step last.
-NOT_STEP = ("reset", "load", "save", "copy", "plot", "show", "summary", "describe", "score",
+#: Method names (or prefixes, ending in _) that set a model up, save, show, copy or close it: a step last.
+NOT_STEP = ("close", "stop", "shutdown", "terminate", "release", "dispose", "disconnect", "cleanup", "clear", "reset", "load", "save", "copy", "plot", "show", "summary", "describe", "score",
             "get_params", "set_params", "to_", "from_", "set_", "plot_", "save_", "load_", "print_")
 
 
@@ -1092,7 +1092,8 @@ def _rank_methods(cls, starts, constructor, fitting=()):
     Ranked by: whether the ``--start`` names left for the step cover its required arguments (or its
     signature can't be read; only when names were given), whether it fits them (:func:`_methods_taking`), whether its name is a
     :data:`NOT_STEP` one (or a :data:`SETUP_IF_STEP` one, when a :data:`STEP_LIKE` method is there too),
-    its place in :data:`STEP_LIKE` (fit and train after them, when none is there), whether it's a
+    its place in :data:`STEP_LIKE` (a name starting with one of them, ``solve_energy``, right after it;
+    fit and train after them, when none is there), whether it's a
     variant of another candidate (:func:`_variant_of`: ``certain_timezone_at`` of ``timezone_at``),
     how many of the names it takes, whether the class itself defines it, and its name.
 
@@ -1119,8 +1120,9 @@ def _rank_methods(cls, starts, constructor, fitting=()):
         except (TypeError, ValueError):   # a C method: may take anything
             taken, covered = 0, True
         not_step = _named(m, NOT_STEP) or has_step and _named(m, SETUP_IF_STEP)
-        place = (STEP_LIKE.index(m) if m in STEP_LIKE else len(STEP_LIKE) if m in ("fit", "train")
-                 else len(STEP_LIKE) + 1)
+        first = m.split("_")[0]
+        place = (STEP_LIKE.index(m) if m in STEP_LIKE else STEP_LIKE.index(first) + 0.5 if first in STEP_LIKE
+                 else len(STEP_LIKE) if m in ("fit", "train") else len(STEP_LIKE) + 1)
         keys[m] = (bool(left) and not covered, m not in fitting, not_step, place,
                    any(_variant_of(m, n) for n in names), -taken, m not in vars(cls), m)
     return sorted(keys, key=keys.get)
