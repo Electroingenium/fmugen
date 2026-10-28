@@ -731,3 +731,91 @@ def test_ranking_run_like_prefixes_and_clean_up_names():
 
     assert _rank_methods(Zone, {}, Zone.__init__)[0] == "solve_energy"
     assert _rank_methods(Sim, {}, Sim.__init__) == ["report", "close"]
+
+
+def test_a_documented_array_without_default_is_made_up_as_ones(tmp_path):
+    # like ahrs' Madgwick.updateIMU(q, gyr, acc): numpydoc says q is an array of shape (4,)
+    path = write(tmp_path, "filt.py", '''
+        import numpy as np
+
+        class Filter:
+            def update(self, q, gyr):
+                """One step.
+
+                Parameters
+                ----------
+                q : numpy.ndarray, shape (4,)
+                    Quaternion.
+                gyr : array_like
+                    Angular rates.
+                """
+                q, gyr = np.asarray(q), np.asarray(gyr)
+                if q.shape != (4,):
+                    raise TypeError("q must be given as an array")
+                return float(q.sum() + gyr.sum())
+    ''')
+    data, text = probe(f"{path}:Filter", tmp_path)
+    assert data["inputs"]["q"] == {"dimensions": [4], "start": [1.0] * 4, "numpy": True}
+    assert data["inputs"]["gyr"]["dimensions"] == [3]
+    assert data["outputs"]
+
+
+def test_made_up_inputs_are_retried_as_one_then_as_arrays(tmp_path):
+    # like blackscholes (S must be > 0) and scikit-learn's predict (X must be 2-D); nothing documented
+    path = write(tmp_path, "pricing.py", """
+        import numpy as np
+
+        class Call:
+            def __init__(self, S):
+                assert S > 0, "S needs to be larger than 0"
+                self.S = S
+
+            def predict(self, X):
+                X = np.asarray(X)
+                if X.ndim != 2:
+                    raise ValueError("Expected 2D array, got scalar array instead")
+                return float(self.S * X.sum())
+    """)
+    data, text = probe(f"{path}:Call", tmp_path)
+    assert data["parameters"]["S"]["start"] == 1.0 and "made up, as 1.0" in text
+    assert data["inputs"]["X"]["dimensions"] == [1, 1] and "arrays of ones, shape (1, 1)" in text
+    assert data["outputs"]
+
+
+def test_docstring_array_shapes():
+    from fmugen.interface import docstring_arrays
+
+    def f(q, X, x, opts):
+        """f.
+
+        Parameters
+        ----------
+        q : array_like, shape (4,)
+            A quaternion.
+        X : ndarray of shape (n_samples, n_features)
+            Data.
+        x : array_like
+            Values.
+        opts : dict
+            A list of options.
+        """
+    assert docstring_arrays(f) == {"q": [4], "X": [3, 3], "x": None}
+
+
+def test_a_documented_array_that_takes_a_number_stays_a_number(tmp_path):
+    # like gsw's rho(SA, t, p): array_like in the docstring, but numbers work, and give numbers
+    path = write(tmp_path, "sea.py", '''
+        def rho(SA, CT):
+            """Density.
+
+            Parameters
+            ----------
+            SA : array_like
+                Absolute salinity.
+            CT : array_like
+                Conservative temperature.
+            """
+            return 1000.0 + 0.8 * SA - 0.2 * CT
+    ''')
+    data, text = probe(f"{path}:rho", tmp_path)
+    assert data["inputs"]["SA"] == {"start": 0.0} and data["inputs"]["CT"] == {"start": 0.0}

@@ -555,12 +555,16 @@ def _arguments(fn, section, data, comments, skip_self=False, allow_time=True, co
         has_default = p.default is not p.empty or p.name in starts
         default = starts.get(p.name, None if p.default is p.empty else p.default)
         before = len(variables)
+        if not has_default and arrays and probe:   # tried by the probe if 0.0 fails (gsw's array_like takes numbers)
+            shape = _made_up_array(fn, p)
+            if shape:
+                comments[_shape_key(section, p.name)] = shape
         if not has_default or isinstance(default, SCALARS):
             info = _type_info(default, p.annotation)
             if p.name in starts:
                 comments.setdefault((section, p.name), "start from --start")
             elif not has_default:
-                comments[(section, p.name)] = "no default in the code: check the start value"
+                comments[(section, p.name)] = MADE_UP
             elif type(default) is int and static.unwrap_optional(p.annotation) is not int:
                 comments[(section, p.name)] = "Integer because the default is an int; write a float start for Real"
             variables[p.name] = info
@@ -882,6 +886,36 @@ def _default_instance(fn, p, data, comments, constants_key, probe):
         f"no default in the code: {cls.__name__}() (its annotation, with no arguments); "
         f"give your own with --const {p.name}=call:...")
     return True
+
+
+#: The comment of an argument with no default (and no --start): its start is made up.
+MADE_UP = "no default in the code: check the start value"
+def _shape_key(section, name):
+    """The comments key (not rendered) of the shape of a made-up argument its annotation or docstring
+    says is an array, for the probe to try when the call fails with 0.0."""
+    return ("init", f"made up shape {section}.{name}")
+
+
+def _made_up_array(fn, p):
+    """The shape of an argument with no default that is an array by its annotation or numpydoc docstring.
+
+    The docstring's shape, else a 1-D array of :data:`fmugen.interface.MADE_UP_SIZE` elements.
+
+    :param fn: the function the argument is of.
+    :param p: the parameter.
+    :type p: inspect.Parameter
+    :return: the shape, or None when it isn't an array.
+    :rtype: list[int] or None
+    """
+    from fmugen.interface import MADE_UP_SIZE, docstring_arrays
+    try:
+        documented = docstring_arrays(fn)
+    except Exception:   # an odd docstring: no shape from it
+        documented = {}
+    if p.name not in documented and not static._is_array_hint(static.unwrap_optional(p.annotation)
+                                                            if p.annotation is not p.empty else None):
+        return None
+    return documented.get(p.name) or [MADE_UP_SIZE]
 
 
 def _type_info(value, annotation=inspect.Parameter.empty):

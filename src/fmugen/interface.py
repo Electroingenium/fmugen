@@ -1198,6 +1198,58 @@ def docstring_units(*objects):
     return found
 
 
+#: Words of a numpydoc type line that mean an array.
+_ARRAY_WORDS = re.compile(r"\b(array_like|array-like|ndarray|array|arrays|matrix|tensor|sequence of|list of|"
+                          r"iterable of|vector)\b", re.I)
+#: A shape in a numpydoc entry: ``shape (4,)``, ``of shape (n_samples, n_features)``, ``shape=(n, 3)``.
+_SHAPE = re.compile(r"shape\s*(?:of\s*|=\s*|:\s*)?[(\[]([^)\]]*)[)\]]", re.I)
+#: The size made up for a dimension a docstring names but doesn't fix (``n_samples``).
+MADE_UP_SIZE = 3
+
+
+def docstring_arrays(fn):
+    """Arguments a numpydoc docstring describes as arrays, with their shapes when it gives them.
+
+    ``q : array_like, shape (4,)`` gives ``[4]``; ``X : ndarray of shape (n_samples, n_features)``
+    gives ``[3, 3]`` (named dimensions are :data:`MADE_UP_SIZE`); ``x : array_like`` gives ``None``.
+    For a constructor, the class's docstring is read too (numpydoc puts its parameters there).
+
+    :param fn: a function, method or constructor.
+    :return: ``{argument: shape or None}``.
+    :rtype: dict
+    """
+    docs = [inspect.getdoc(fn)]
+    if getattr(fn, "__name__", "") == "__init__":
+        owner = sys.modules.get(getattr(fn, "__module__", ""), None)
+        for part in getattr(fn, "__qualname__", "").split(".")[:-1]:
+            owner = getattr(owner, part, None)
+        docs.append(inspect.getdoc(owner) if isinstance(owner, type) else None)
+    found = {}
+    for doc in docs:
+        if not doc:
+            continue
+        headers = list(_SECTION.finditer(doc))
+        for i, header in enumerate(headers):
+            if header.group(1).strip() not in ("Parameters", "Other Parameters"):
+                continue
+            body = doc[header.end():headers[i + 1].start() if i + 1 < len(headers) else len(doc)]
+            entries, name = {}, None
+            for line in body.splitlines():
+                entry = _ENTRY.match(line) if line and not line[0].isspace() else None
+                if entry:
+                    name = entry.group(1)
+                    entries[name] = [entry.group(2) or "", ""]
+                elif name:
+                    entries[name][1] += " " + line.strip()
+            for name, (kind, text) in entries.items():
+                if name in found or not _ARRAY_WORDS.search(kind):
+                    continue   # only the type line says what it is: "a list of options" in a description doesn't
+                shape = _SHAPE.search(f"{kind} {text}")
+                dims = [d.strip() for d in shape.group(1).split(",") if d.strip()] if shape else []
+                found[name] = [int(d) if d.isdigit() else MADE_UP_SIZE for d in dims] or None
+    return found
+
+
 def _add_docstring_units(data, comments, *objects):
     """Give variables without a unit the one their docstring states (:func:`docstring_units`), with a comment.
 

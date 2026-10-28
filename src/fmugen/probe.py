@@ -16,7 +16,7 @@ from fmugen import static
 from fmugen.config import InterfaceError
 from fmugen.toml_output import _key, _value
 from fmugen.arguments import (
-    SCALARS, PROBED, DATETIME_BY_NAME, NO_SIGNATURE,
+    MADE_UP, _shape_key, SCALARS, PROBED, DATETIME_BY_NAME, NO_SIGNATURE,
     _fmi_value, _array_info, _scalar_of, _number_like, _typed, _type_name, _same,
     _valid_name, _dotted_name, _misfit, _unfit_value, _unfit, _guessed,
     _apply_converts, _arguments, _only_varargs,
@@ -833,6 +833,8 @@ def _probe_once(fn, data, comments, constants_key="constants"):
             if result is _FAILED:
                 result = _retry_as_pint(call, data, comments)
             if result is _FAILED:
+                result = _retry_made_up(call, data, comments, "inputs")
+            if result is _FAILED:
                 raise
             return result
         for converter in ARRAY_RETRIES:
@@ -921,7 +923,10 @@ def _construct(build, data, comments):
         plain = {n: info for n, info in data.get("parameters", {}).items()
                  if "dimensions" in info and not info.get("numpy") and not info.get("convert")}
         if not plain:
-            raise
+            obj = _retry_made_up(make, data, comments, "parameters")
+            if obj is _FAILED:
+                raise
+            return obj
         for converter in ARRAY_RETRIES:
             module = "numpy" if converter == "numpy" else converter.partition(":")[0]
             if importlib.util.find_spec(module) is None:
@@ -971,6 +976,74 @@ def _retry_as_arrays(call, data, comments):
     for name in numbers:
         comments[("inputs", name)] = "passed as numpy.atleast_1d(...): the probe failed with plain numbers"
     return result
+
+#: Shapes tried for a made-up input that fails as a number: a vector, a one-row and a three-row matrix.
+MADE_UP_SHAPES = ([3], [1, 1], [1, 3], [3, 3])
+
+
+def _retry_made_up(call, data, comments, section):
+    """Call again with the made-up values of ``section`` (no default, no ``--start``) as 1.0, then as arrays of ones.
+
+    The made-up start is 0.0, which models refuse when they check a range or divide by it
+    (blackscholes' "Asset price (S) needs to be larger than 0", pedon's division by zero), or
+    when they need an array (ahrs' quaternion, GPy's ``X``, scikit-learn's ``predict(X)``). Tried
+    in turn: those whose annotation or docstring says they are arrays as arrays of ones in that shape
+    (:func:`fmugen.arguments._shape_key`), the others 1.0; every one as 1.0; every one as an
+    array of ones in each of :data:`MADE_UP_SHAPES`;
+    each one alone as such an array, the others 1.0. The first that works is kept, with a comment.
+
+    :param call: makes the probe call (or builds the object).
+    :type call: callable
+    :param data: the config being inferred; updated in place.
+    :type data: dict
+    :param comments: ``(section, key) -> text`` for :func:`render_toml`; updated in place.
+    :type comments: dict
+    :param section: ``"inputs"`` or ``"parameters"``.
+    :type section: str
+    :return: the result, or :data:`_FAILED`.
+    """
+    made = {name: info for name, info in data.get(section, {}).items()
+            if comments.get((section, name)) == MADE_UP and "dimensions" not in info and not info.get("convert")
+            and isinstance(info.get("start"), (int, float)) and not isinstance(info.get("start"), bool)}
+    if not made:
+        return _FAILED
+    saved = {name: dict(info) for name, info in made.items()}
+
+    def scalar(name):
+        made[name].clear()
+        made[name].update(saved[name], start=1.0 if isinstance(saved[name]["start"], float) else 1)
+
+    def array(name, shape):
+        made[name].clear()
+        made[name].update({k: v for k, v in saved[name].items() if k not in ("start", "type")},
+                          dimensions=list(shape), start=[1.0] * math.prod(shape), numpy=True)
+
+    tries = [("as 1.0", {n: None for n in made})]
+    documented = {n: comments[_shape_key(section, n)] for n in made if _shape_key(section, n) in comments}
+    if documented and importlib.util.find_spec("numpy") is not None:
+        tries.insert(0, ("the arrays as arrays of ones in their documented shape, the others 1.0",
+                         {n: documented.get(n) for n in made}))
+    if importlib.util.find_spec("numpy") is not None:
+        tries += [(f"as arrays of ones, shape {tuple(s)}", {n: s for n in made}) for s in MADE_UP_SHAPES]
+        if len(made) > 1:
+            tries += [(f"{n} as an array of ones, shape {tuple(s)}, the others 1.0",
+                       {m: s if m == n else None for m in made}) for n in made for s in MADE_UP_SHAPES]
+    for how, plan in tries:
+        for name, shape in plan.items():
+            scalar(name) if shape is None else array(name, shape)
+        try:
+            result = call()
+        except Exception:
+            continue
+        for name in made:
+            comments[(section, name)] = (f"no default in the code: made up, {how} (the probe failed with 0.0); "
+                                         "check it")
+        return result
+    for name, info in made.items():
+        info.clear()
+        info.update(saved[name])
+    return _FAILED
+
 
 def _retry_as_series(call, data, comments):
     """Call again with each number input as a one-value pandas Series indexed by a date (``convert = "series"``).
