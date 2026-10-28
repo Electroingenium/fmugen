@@ -24,6 +24,15 @@ Each was tried through a short file written for the test, in [pending-100/wrappe
 | `pf_tft.py:TFTForecast` (pytorch-forecasting) | ✗ no model to point `init` at | — | ✗ (wrapper only) | Wrapper ([pf_tft.py](pending-100/wrappers/pf_tft.py)): the Temporal Fusion Transformer is built from a `TimeSeriesDataSet` and trained with a Lightning `Trainer`. Hidden size 8, 1 epoch, seeded. |
 | `sbi_gauss.py:Posterior` (sbi) | ✗ no model to point `init` at | — | ✗ (wrapper only) | Wrapper ([sbi_gauss.py](pending-100/wrappers/sbi_gauss.py)): NPE needs simulations and a training run before it gives a posterior. Trained on 500 seeded simulations; the posterior mean for an observation. |
 
+## Impractical to run
+
+These two ran and passed (see their notes), but `init --probe` on each used all the memory of a 23 GB WSL 2 machine on 2026-10-28, and the out-of-memory kill crashed WSL. They were moved here from [tested-models.md](tested-models.md) because checking them again isn't practical; their last results are kept below.
+
+| Model | `init` / `init --probe` | … with other options | Hand config | Compiled (PyInstaller) | Notes |
+|---|---|---|---|---|---|
+| `facenet_pytorch:MTCNN` | needs options | ✓ (`--call`, `--const`) | — | ✓ (`init --probe` config, 301 MB) | Failed before the fixes: `init --probe` finds no output: boxes and probabilities are numpy arrays of `dtype=object`. Face detection on ultralytics' `zidane.jpg`: 3 boxes and probabilities (numpy arrays of `dtype=object`). |
+| `ultralytics:YOLO` (FMI 3) | needs options | ✓ (`init --probe`, since 2026-10-27) (`--call`, `--const`, `--start` ×2) | ✓ ([config](pending-100/hand/yolo/fmugen.toml)) | ✓ (hand config) | Before the fixes, the compiled FMU failed to instantiate with no error message: torchvision's `_C_stable.so`, loaded by path, isn't collected. YOLO11n on ultralytics' `bus.jpg`. `predict` returns `Results` objects whose detections are tensors (`results[0].boxes.xyxy`): the hand config reads the 5 boxes, classes and confidences. **2026-10-27:** `init --probe` alone: the `Results` objects in the returned list are read, giving the boxes, classes and confidences (`y0.boxes.xyxy`, …) and the timings; FMU identical to the direct run (201 values, timings and paths left out). |
+
 ## Empty containers
 
 These are containers the user fills before there is anything to simulate: a physics space with no bodies, a frame with no nodes or members, a power network with no buses. Called as they are, the step does nothing, so `init --probe` finds only settings (`damping`, `is_solved`). They ran with hand configs that built a model in `setup`, but that model was written for the test, so it doesn't count either.

@@ -1,6 +1,6 @@
 # Tested models
 
-fmugen has been tried on 210 unmodified Python models (three needed a file renamed or a script wrapped in a class, and one synthetic input data; see their notes): models from about 132 libraries on PyPI, 46 neural networks, 13 models built on [GEKKO](https://github.com/BYU-PRISM/GEKKO), one model published as source on GitHub and one unpublished model. Each model is listed once, with its most recent result. 207 simulate with useful results; 3 fail because the library has no function or class that is the model. 20 libraries tested at first turned out not to be models: 17 are tools for building one, and 3 (pymunk, PyNite, PyPSA) are empty containers that the user fills with bodies, nodes or buses; they are listed in [discarded-models.md](discarded-models.md).
+fmugen has been tried on 208 unmodified Python models (three needed a file renamed or a script wrapped in a class, and one synthetic input data; see their notes): models from about 132 libraries on PyPI, 44 neural networks, 13 models built on [GEKKO](https://github.com/BYU-PRISM/GEKKO), one model published as source on GitHub and one unpublished model. Each model is listed once, with its most recent result. 207 simulate with useful results; 3 fail because the library has no function or class that is the model. 20 libraries tested at first turned out not to be models: 17 are tools for building one, and 3 (pymunk, PyNite, PyPSA) are empty containers that the user fills with bodies, nodes or buses; they are listed in [discarded-models.md](discarded-models.md).
 
 - [How the models were tested](#how-the-models-were-tested)
 - [Summary](#summary)
@@ -39,18 +39,18 @@ Columns: **`init` / `init --probe`**: given only the model and `--start` values 
 
 ## Summary
 
-210 models: 195 from libraries and neural networks, 13 built on GEKKO, one from a GitHub repository and one unpublished. FMI 2 and FMI 3 results are combined: a model counts as passing if it passes with either. The 82 tested later ran on fmugen before the fixes below; the 19 that failed on fmugen problems were run again with the fixes, and those results are counted.
+208 models: 193 from libraries and neural networks, 13 built on GEKKO, one from a GitHub repository and one unpublished. FMI 2 and FMI 3 results are combined: a model counts as passing if it passes with either. The 82 tested later ran on fmugen before the fixes below; the 19 that failed on fmugen problems were run again with the fixes, and those results are counted.
 
-| | Models (210) |
+| | Models (208) |
 |---|---|
-| `init` writes a config | 188 |
-| `init --probe` writes a config | 194 |
-| **Simulates with useful results** (a config from `init` or `init --probe`) | **197** |
+| `init` writes a config | 186 |
+| `init --probe` writes a config | 192 |
+| **Simulates with useful results** (a config from `init` or `init --probe`) | **195** |
 | …of which given only the model and `--start` values | **98** |
-| …of which given other options (`--call`, `--const`, `--setup`, …) | **99** |
-| …or with a hand-written config | **207** |
+| …of which given other options (`--call`, `--const`, `--setup`, …) | **97** |
+| …or with a hand-written config | **205** |
 | Fails | **3**: all need a wrapper |
-| **Compiled FMU simulates** | **209**; py-pde simulates uncompiled only |
+| **Compiled FMU simulates** | **207**; py-pde simulates uncompiled only |
 
 A config only counts as a success if the FMU simulates **and** gives the model's results. An FMU that runs but only outputs its own parameters, settings or constants counts as a failure.
 
@@ -58,12 +58,12 @@ How far each step gets:
 
 | Config | Models | Success |
 |---|---|---|
-| `init` (code only), given other options where needed | 55 of 210 | 26 % |
-| `init --probe` (or `init`, when it already works), given only the model and `--start` values | 98 of 210 | 47 % |
-| `init --probe` (or `init`), given other options where needed (`--call`, `--const`, `--setup`, …) | 197 of 210 | 94 % |
-| `init --probe` + a hand-written config | 207 of 210 | 99 % |
+| `init` (code only), given other options where needed | 55 of 208 | 26 % |
+| `init --probe` (or `init`, when it already works), given only the model and `--start` values | 98 of 208 | 47 % |
+| `init --probe` (or `init`), given other options where needed (`--call`, `--const`, `--setup`, …) | 195 of 208 | 94 % |
+| `init --probe` + a hand-written config | 205 of 208 | 99 % |
 
-Without the 3 models that need a wrapper, `init --probe` + a hand config gets all 207.
+Without the 3 models that need a wrapper, `init --probe` + a hand config gets all 205.
 
 The `init` config fails mostly on models that return arrays, tuples, strings or objects, which only `--probe` types correctly; the error message points to it. Of the 67 `init` configs of the first group that simulate, 23 only output parameters, settings or constants. GEKKO models keep their results in GEKKO variables, which only `--probe` finds. The hand configs add `PropsSI`, cantera, PyTCI and the kalman example ([Hand configs](#hand-configs)), pandapower, seirsplus, tellurium, the GEKKO model OpenHENS, sgp4 and pybamm ([configs](match-testing-rerun/configs/)).
 
@@ -296,7 +296,6 @@ Each was installed as published (`pip install <package>`) into its own venv toge
 | `deepxde.nn:FNN` | needs options | ✓ (seeded) (`--const` ×2, `--start` ×2) | — | ✓ (seeded config, 368 MB) | Failed before the fixes: the integer list start is typed Real, so the model gets float sizes (`empty(): argument 'size' must be tuple of ints`). A 1-16-16-1 tanh network (PyTorch backend, `DDE_BACKEND=pytorch`). Random weights: compared seeded (`torch:manual_seed(0)` in `setup`). |
 | `easyocr:Reader` (FMI 3) | needs options | ✓ (`--call`, `--const`, `--start` ×4) | — | ✓ (`init --probe` config) | Before the fixes, the compiled FMU failed to instantiate with no error message: torchvision's `_C_stable.so`, loaded by path, isn't collected. OCR of a rendered `FMUGEN 2026` image (bytes): the text. |
 | `equinox.nn:MLP` | needs options | ✓ (`--const`, `--start` ×5) | — | ✓ (`init --probe` config, 273.1 MB) | A 2-8-8-1 MLP, seeded by its `PRNGKey(0)`. |
-| `facenet_pytorch:MTCNN` | needs options | ✓ (`--call`, `--const`) | — | ✓ (`init --probe` config, 301 MB) | Failed before the fixes: `init --probe` finds no output: boxes and probabilities are numpy arrays of `dtype=object`. Face detection on ultralytics' `zidane.jpg`: 3 boxes and probabilities (numpy arrays of `dtype=object`). |
 | `kan:KAN` | ✓ | — (`--start` ×6) | — | ✓ 365 MB, identical (`init --probe` config) | Since `8390062`: the `init --probe` config sets `init_call = true` and matches the direct run (56 values). Before, it failed at initialization (`missing input data x`); before the earlier fixes, `width=[2, 3, 1]` was typed Real (`'float' object is not subscriptable`). A 2-3-1 KAN (grid 3, k 3, seed 0). **Needs scikit-learn, pandas, matplotlib, pyyaml and tqdm installed by hand.** |
 | `keras.applications:MobileNetV2` | needs options | ✓ (`--call`, `--const` ×2, `--start`) | — | ✓ (`init --probe` config, 283.0 MB) | MobileNetV2 (ImageNet), `--call predict`, **Keras on its JAX backend** (`KERAS_BACKEND=jax`): TensorFlow needs protobuf ≥ 5.28 and fmugen pins 5.27.3 (UniFMU 0.14's). |
 | `mace.calculators:mace_mp` | needs options | ✓ (`--call`, `--const` ×2, `--start` ×2) | — | ✓ (`init --probe` config) | Before the fixes, the compiled FMU failed to instantiate with no error message: TorchScript needs the `.py` sources of the functions it compiles at import. MACE-MP-0 small, `--call get_potential_energy` on ASE's fcc copper. |
@@ -332,7 +331,6 @@ Each was installed as published (`pip install <package>`) into its own venv toge
 | `torchvision.models:resnet18` | needs options | ✓ (`--call`, `--const` ×2) | — | ✓ (`init --probe` config, 298.1 MB) | ImageNet weights on a 224×224 image tensor: 1000 logits. |
 | `transformers:pipeline` | needs options | ✓ (`--call`, `--const` ×2, `--start`) | — | ✓ (`init --probe` config) | Before the fixes, the compiled FMU failed to instantiate with no error message. `"sentiment-analysis"` (DistilBERT SST-2), `--call __call__`: label and score. Plain `init` stops: the object the factory returns is only known by running it. |
 | `tsfm_public.toolkit.get_model:get_model` | needs options | ✓ (`--call`, `--const`, `--start` ×3) | — | ✓ (`init --probe` config, 4.3 GB) |  |
-| `ultralytics:YOLO` (FMI 3) | needs options | ✓ (`init --probe`, since 2026-10-27) (`--call`, `--const`, `--start` ×2) | ✓ ([config](pending-100/hand/yolo/fmugen.toml)) | ✓ (hand config) | Before the fixes, the compiled FMU failed to instantiate with no error message: torchvision's `_C_stable.so`, loaded by path, isn't collected. YOLO11n on ultralytics' `bus.jpg`. `predict` returns `Results` objects whose detections are tensors (`results[0].boxes.xyxy`): the hand config reads the 5 boxes, classes and confidences. **2026-10-27:** `init --probe` alone: the `Results` objects in the returned list are read, giving the boxes, classes and confidences (`y0.boxes.xyxy`, …) and the timings; FMU identical to the direct run (201 values, timings and paths left out). |
 | `w2v_asr.py:Wav2Vec2ASR` (torchaudio) | — | ✗ no model to point `init` at (`--call`, `--const`) | — | ✗ (wrapper only) | **Fails: the library has no function or class that is the model**, so `init` has nothing to point at. Tried through a wrapper written for this test: **Fails: `init --probe` writes invalid TOML**: a comment quotes a multi-line error (why the object can't be pickled). Plain `init` types the transcript as Real. Passes with the fixes. Wrapper ([w2v_asr.py](pending-100/wrappers/w2v_asr.py)): the pretrained model is a bundle constant's `get_model()`, and CTC decoding is code. The transcript of the speech clip. |
 | `whisper:load_model` | needs options | ✓ (`--call`, `--const` ×2, `--start` ×2) | — | ✓ (`init --probe` config, 735.9 MB) | `tiny`, `--call transcribe` on 5 s of whisper's `jfk.flac` (16 kHz numpy array): the text. A file path needs ffmpeg. |
 
