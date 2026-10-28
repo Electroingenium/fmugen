@@ -1077,8 +1077,12 @@ def _ask_method(cls, ranked):
 #: (the --call of the tested models: sklearn-like predict, solve, run, forecast, ...).
 STEP_LIKE = ("predict", "forecast", "simulate", "solve", "run", "run_steps", "compute", "propagate", "forward",
              "evaluate", "transcribe", "encode", "calculate", "process", "apply")
+#: Method names (or prefixes, ending in _) that set a model up when the class also has a :data:`STEP_LIKE`
+#: method (sklearn's fit before predict, osqp's update before solve); without one, fit and train run the
+#: model (lifelines' KaplanMeierFitter.fit), after the :data:`STEP_LIKE` names.
+SETUP_IF_STEP = ("fit", "train", "update", "fit_", "train_")
 #: Method names (or prefixes, ending in _) that set a model up, save, show or copy it: a step last.
-NOT_STEP = ("fit", "train", "reset", "load", "save", "copy", "plot", "show", "summary", "describe", "score",
+NOT_STEP = ("reset", "load", "save", "copy", "plot", "show", "summary", "describe", "score",
             "get_params", "set_params", "to_", "from_", "set_", "plot_", "save_", "load_", "print_")
 
 
@@ -1087,8 +1091,10 @@ def _rank_methods(cls, starts, constructor, fitting=()):
 
     Ranked by: whether the ``--start`` names left for the step cover its required arguments (or its
     signature can't be read; only when names were given), whether it fits them (:func:`_methods_taking`), whether its name is a
-    :data:`NOT_STEP` one, its place in :data:`STEP_LIKE`, how many of the names it takes, whether the
-    class itself defines it, and its name.
+    :data:`NOT_STEP` one (or a :data:`SETUP_IF_STEP` one, when a :data:`STEP_LIKE` method is there too),
+    its place in :data:`STEP_LIKE` (fit and train after them, when none is there), whether it's a
+    variant of another candidate (:func:`_variant_of`: ``certain_timezone_at`` of ``timezone_at``),
+    how many of the names it takes, whether the class itself defines it, and its name.
 
     :param cls: the class.
     :type cls: type
@@ -1099,11 +1105,11 @@ def _rank_methods(cls, starts, constructor, fitting=()):
     :rtype: list[str]
     """
     left = {n.partition(".")[0] for n in (_leftover_starts(constructor, starts) or starts or {})}
+    names = [m for m in dir(cls) if not m.startswith("_") and callable(getattr(cls, m, None))
+             and not isinstance(inspect.getattr_static(cls, m, None), (property, type, classmethod))]
+    has_step = any(m in STEP_LIKE for m in names)
     keys = {}
-    for m in dir(cls):
-        raw = inspect.getattr_static(cls, m, None)
-        if m.startswith("_") or not callable(getattr(cls, m, None)) or isinstance(raw, (property, type, classmethod)):
-            continue
+    for m in names:
         try:
             params = [p for p in inspect.signature(getattr(cls, m)).parameters.values()
                       if p.name not in ("self", "cls") and p.kind not in (p.VAR_POSITIONAL, p.VAR_KEYWORD)]
@@ -1112,11 +1118,33 @@ def _rank_methods(cls, starts, constructor, fitting=()):
             covered = required <= left
         except (TypeError, ValueError):   # a C method: may take anything
             taken, covered = 0, True
-        not_step = m in NOT_STEP or any(m.startswith(p) for p in NOT_STEP if p.endswith("_"))
-        keys[m] = (bool(left) and not covered, m not in fitting, not_step,
-                   STEP_LIKE.index(m) if m in STEP_LIKE else len(STEP_LIKE),
-                   -taken, m not in vars(cls), m)
+        not_step = _named(m, NOT_STEP) or has_step and _named(m, SETUP_IF_STEP)
+        place = (STEP_LIKE.index(m) if m in STEP_LIKE else len(STEP_LIKE) if m in ("fit", "train")
+                 else len(STEP_LIKE) + 1)
+        keys[m] = (bool(left) and not covered, m not in fitting, not_step, place,
+                   any(_variant_of(m, n) for n in names), -taken, m not in vars(cls), m)
     return sorted(keys, key=keys.get)
+
+
+def _named(name, names):
+    """Whether ``name`` is one of ``names``, or starts with one of those ending in ``_`` (``to_``)."""
+    return name in names or any(name.startswith(p) for p in names if p.endswith("_"))
+
+
+def _variant_of(name, other):
+    """Whether method ``name`` is a qualified variant of method ``other``: ``other`` as whole words of it,
+    maybe plural (``certain_timezone_at`` of ``timezone_at``, ``cumulative_decays`` of ``decay``).
+
+    :rtype: bool
+    """
+    if name == other:
+        return False
+    words, part = name.split("_"), other.split("_")
+    for plural in ("", "s"):
+        want = part[:-1] + [part[-1] + plural]
+        if any(words[i:i + len(want)] == want for i in range(len(words) - len(want) + 1)):
+            return True
+    return False
 
 
 #: A numpydoc section header: the name, then a line of dashes.

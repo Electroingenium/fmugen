@@ -46,8 +46,8 @@ Columns: **`init` / `init --probe`**: given only the model and `--start` values 
 | `init` writes a config | 188 |
 | `init --probe` writes a config | 194 |
 | **Simulates with useful results** (a config from `init` or `init --probe`) | **197** |
-| …of which given only the model and `--start` values | **96** |
-| …of which given other options (`--call`, `--const`, `--setup`, …) | **101** |
+| …of which given only the model and `--start` values | **98** |
+| …of which given other options (`--call`, `--const`, `--setup`, …) | **99** |
 | …or with a hand-written config | **207** |
 | Fails | **3**: all need a wrapper |
 | **Compiled FMU simulates** | **209**; py-pde simulates uncompiled only |
@@ -59,7 +59,7 @@ How far each step gets:
 | Config | Models | Success |
 |---|---|---|
 | `init` (code only), given other options where needed | 55 of 210 | 26 % |
-| `init --probe` (or `init`, when it already works), given only the model and `--start` values | 96 of 210 | 46 % |
+| `init --probe` (or `init`, when it already works), given only the model and `--start` values | 98 of 210 | 47 % |
 | `init --probe` (or `init`), given other options where needed (`--call`, `--const`, `--setup`, …) | 197 of 210 | 94 % |
 | `init --probe` + a hand-written config | 207 of 210 | 99 % |
 
@@ -71,7 +71,7 @@ Later, `init --probe` got 9 more without a hand config, each built, compiled wit
 
 On 2026-10-27, `init --probe` got 10 more without a hand config, each built and compared in WSL 2 with the model called directly, with the same inputs, at every step: all identical (8,916 values). ephem, sgp4, vqf, pinocchio and imufusion: C built-ins without a signature take the `--start` values by position, and the probe gives the step method as many as it takes (ephem's date goes to `compute()`, not `Sun()`); imufusion's step returns its object, now read as returning nothing, so its getters are outputs. simdkalman and YOLO: objects inside the result are read (`observations.mean`, `y0.boxes.xyxy`). neuralforecast: a table's numeric columns are outputs. sympy's `lambdify`: the generated function's own arguments are inputs. pandapipes: `--call "pandapipes:pipeflow(self)"` is accepted, and result tables on the object give their columns. Also new: a history that grows each step gives its last entry (seirsplus' counts, pybamm's `t`), but seirsplus still needs its hand config: `init` binds `dt` to the step size, and with `dt` = 1 `run_epoch` doesn't advance. pandapower's `runpp` returns None; `init` now suggests making `net` the model (`--call "pandapower:runpp(self)"`). tellurium's species are still not found: RoadRunner doesn't list them.
 
-On 2026-10-28, `init` stopped refusing a class whose step method it can't tell: in a terminal it asks which one, the candidates numbered, best first; otherwise it picks the first and prints a warning with the candidates. The 184 recorded commands, run in WSL 2 with the old and the new code, give identical configs (151; 6 fail with both, 27 not run: they need data files). Run without their `--call`, 16 models give the same outputs with the method picked: cv2's KalmanFilter, ephem, GPy, pysindy and statsforecast now need only `init --probe`; anastruct, catboost, hapsira, openap, pastas, py-pde, prophet, pyloudnorm, chronos, tabnet and skorch no longer need `--call`, only their other options. 15 get a wrong method (lifelines' `fit_left_censoring` instead of `fit`, osqp's `update` instead of `solve`, timezonefinder's `certain_timezone_at` instead of `timezone_at`, …) and still need `--call`.
+On 2026-10-28, `init` stopped refusing a class whose step method it can't tell: in a terminal it asks which one, the candidates numbered, best first; otherwise it picks the first and prints a warning with the candidates. The 184 recorded commands, run in WSL 2 with the old and the new code, give identical configs (151; 6 fail with both, 27 not run: they need data files). Run without their `--call`, 20 models give the same outputs with the method picked: cv2's KalmanFilter, ephem, GPy, pysindy, statsforecast, lifelines and timezonefinder now need only `init --probe`; anastruct, catboost, hapsira, openap, pastas, py-pde, prophet, pyloudnorm, chronos, tabnet, skorch, radioactivedecay and scikit-rf no longer need `--call`, only their other options. The ranking puts `fit`, `train` and `update` last only when the class also has a run-like method (`predict`, `solve`, …), so lifelines' `fit` is its step; and a method named after another one plus other words comes after it (`timezone_at` before `certain_timezone_at`, `decay` before `cumulative_decays`). 10 still get a wrong method and need `--call`: osqp and pyfluids (`update` is taken as the step before any ranking), astropy, blackscholes, chaospy, openturns, nashpy, pedon, quantecon and matgl.
 
 Of the 131 models tested first, none fails. The last 4 needed fmugen features, added after the main run and checked on these 4 models only (built, simulated, compiled and compared with a direct run; the other models weren't rerun with them):
 
@@ -178,7 +178,7 @@ Errors such as `y is an array of shape […], not a single value` in the `init` 
 | `impedance.models.circuits:Randles` | ✓ | — (`--call predict`: what init picks by itself; `--start` ×2) | ✓ ([config](match-testing-rerun/configs/impedance.toml)) | ✓ (`init --probe` config, [identical to the direct run](probe-9/CONCLUSION.md)) | `init --probe` splits the complex prediction into `y_real` / `y_imag` at each frequency, identical to `predict` called directly. Needs pandas installed by hand (impedance imports it without declaring it). Before: `init`: outputs only echo `initial_guess`; the complex prediction is left out. The hand config reads `.real` and `.imag` at each frequency. |
 | `joblib:load` | needs options | ✓ (`--call`, `--const`, `--start`) | — | ✓ (`init --probe` config, 112.8 MB) | **Compiled: needs `scikit-learn` added to `[model] requirements` by hand**: the model is unpickled, so nothing imports scikit-learn by name. Uncompiled, it needs nothing extra. |
 | `librosa:hz_to_mel` | ✓ | — (`--start`) | — | ✓ (`init --probe` config, 167.7 MB) |  |
-| `lifelines:KaplanMeierFitter` | needs options | ✓ (`--call`, `--start` ×2) | — | ✓ (`init --probe` config, 142.5 MB) | Kaplan–Meier, `--call fit`: the survival function. |
+| `lifelines:KaplanMeierFitter` | ✓ | — (`--call fit`: what init picks by itself since 2026-10-28, with a warning listing the candidates; `--start` ×2) | — | ✓ (`init --probe` config, 142.5 MB) | Kaplan–Meier, `--call fit`: the survival function. |
 | `lightgbm:LGBMRegressor` | needs options | ✓ (`--call`, `--setup`, `--start` ×5) | — | ✓ (`init --probe` config, 106 MB) | Failed before the fixes: `build` refuses the config `init --probe` wrote: its `setup` has a call as an argument (`fit(numpy.array(...))`), which the probe ran (`[model] setup …: arguments must be literals or names`). `fit` in `setup`, `--call predict`. **Needs scikit-learn installed by hand.** |
 | `mendeleev:element` | ✓ | — (`--start`) | — | ✓ (`init --probe` config, 75.7 MB) |  |
 | `mesa.examples:BoltzmannWealth` | ✓ | — (`--call step`: what init picks by itself) | — | ✓ (seeded config, 105.2 MB) |  |
@@ -244,7 +244,7 @@ Errors such as `y is an array of shape […], not a single value` in the `init` 
 | `qrcode:make` (FMI 3) | ✓ | — (`--start`) | — | ✓ (`init --probe` config, 62.6 MB) | `make("fmugen")`: the QR image's properties (size, box size, …). |
 | `quantecon:LinearStateSpace` | needs options | ✓ (`--call`, `--start` ×3) | — | ✓ (`init --probe` config, 156.1 MB) |  |
 | `QuantLib:blackFormula` | ✓ | — (`--start` ×4) | — | ✓ (`init --probe` config, 78.8 MB) |  |
-| `radioactivedecay:Inventory` | needs options | ✓ (`--call`, `--const`, `--start`) | — | ✓ (`init --probe` config, 135.5 MB) |  |
+| `radioactivedecay:Inventory` | needs options | ✓ (`--const`, `--start`; `--call decay`: what init picks by itself since 2026-10-28, with a warning listing the candidates) | — | ✓ (`init --probe` config, 135.5 MB) |  |
 | `rainflow:count_cycles` | ✓ | — (`--start`) | — | ✓ (`init --probe` config, 48.8 MB) |  |
 | `rdkit.Chem.Descriptors:MolWt` | needs options | ✓ (`--const`) | — | ✓ (`init --probe` config, 110.7 MB) |  |
 | `river.linear_model:LinearRegression` | ✓ | — (`--call learn_one`: what init picks by itself; `--start` ×2) | ✓ ([config](match-testing-rerun/configs/river.toml)) | ✓ (`init --probe` config, [identical to the direct run](probe-9/CONCLUSION.md)) | `init --probe` outputs the learned `intercept` (0.06 after the first step, as `learn_one` called directly): with no other outputs found, the attributes the step changes become outputs instead of locals. The weights (a dict) still need the hand config. Before: `init`: only hyperparameters (`l1`, `l2`, …). The hand config reads the learned weights (`attr:weights.a`, …) and the intercept. |
@@ -262,7 +262,7 @@ Errors such as `y is an array of shape […], not a single value` in the `init` 
 | `skfem:MeshTri` (FMI 3) | ✓ | — (`--call refined`: what init picks by itself; `--start`) | — | ✓ (`init --probe` config, 90.5 MB) | `MeshTri().refined(2)`: the refined mesh's nodes and elements (2-D arrays). |
 | `skfuzzy:interp_membership` | ✓ | — (`--start` ×3) | — | ✓ (`init --probe` config, 94.5 MB) | **Needs scipy, packaging and networkx installed by hand**: scikit-fuzzy imports them without declaring them. |
 | `skimage.color:rgb2hsv` | ✓ | — (`--start`) | — | ✓ (`init --probe` config, 127.1 MB) |  |
-| `skrf.media:DefinedGammaZ0` | needs options | ✓ (`--call`, `--const`, `--start` ×2) | — | ✓ (`init --probe` config, 107.0 MB) | A 90° line (`DefinedGammaZ0.line`) at 3 frequencies: S-parameters, complex, split. |
+| `skrf.media:DefinedGammaZ0` | needs options | ✓ (`--const`, `--start` ×2; `--call line`: what init picks by itself since 2026-10-28, with a warning listing the candidates) | — | ✓ (`init --probe` config, 107.0 MB) | A 90° line (`DefinedGammaZ0.line`) at 3 frequencies: S-parameters, complex, split. |
 | `slycot:sb02md` (FMI 3) | ✓ | — (`--start` ×5) | — | ✓ (`init --probe` config, 69.7 MB) | `sb02md`, the continuous Riccati equation (SLICOT, Fortran): X, eigenvalues, condition. |
 | `ssqueezepy:ssq_cwt` (FMI 3) | ✓ | — (`--start`) | ✓ ([config](pending-100/hand/ssq_cwt/fmugen.toml)) | ✓ 158 MB, identical (`init --probe` config) | Synchrosqueezed CWT of a 64-sample sine. Since `8390062`: the probe fails with the FMU time as `t` (the signal's time vector, default None) and works with the default, so `t` isn't bound: outputs the two transforms (162×64, real and imaginary parts), the frequencies and the scales; matches the direct run (167,184 values). Before, `init` bound `t` to the FMU time and the model got a float. |
 | `statsforecast.models:AutoARIMA` | ✓ | — (`--call forecast`: what init picks by itself since 2026-10-28, with a warning listing the candidates; `--start` ×2) | — | ✓ (`init --probe` config, 225.3 MB) | AutoARIMA, `--call forecast`, h = 4. |
@@ -272,7 +272,7 @@ Errors such as `y is an array of shape […], not a single value` in the `init` 
 | `tellurium:loada` | — | ✗ no useful outputs (`--call`, `--const`, `--start` ×2) | ✓ ([config](match-testing-rerun/configs/tellurium.toml)) | ✓ (hand config, 211.1 MB) | `init`: only `oneStep`'s return (the time reached). The hand config reads the species from the RoadRunner object (`attr:S1`, `attr:S2`). `currentTime` is a fixed input there; bind it with `[time] currentTime = "time"` to follow the simulation clock. On Linux it needs `LD_LIBRARY_PATH` set to Python's `lib` folder. |
 | `thermo:Chemical` | needs options | ✓ (`--const`, `--start` ×2, `--kind`) | — | ✓ (`init --probe` config, 133.1 MB) |  |
 | `thermofeel:calculate_heat_index_simplified` | ✓ | — (`--start` ×2) | — | ✓ (`init --probe` config, 48.9 MB) |  |
-| `timezonefinder:TimezoneFinder` | needs options | ✓ (`--call`, `--start` ×2) | — | ✓ (`init --probe` config, 80.6 MB) |  |
+| `timezonefinder:TimezoneFinder` | ✓ | — (`--call timezone_at`: what init picks by itself since 2026-10-28, with a warning listing the candidates; `--start` ×2) | — | ✓ (`init --probe` config, 80.6 MB) |  |
 | `tmm:coh_tmm` | ✓ | — (`--start` ×5) | — | ✓ (`init --probe` config, 49.1 MB) |  |
 | `transforms3d.euler:euler2quat` | ✓ | — (`--start` ×3) | — | ✓ (`init --probe` config, 47.3 MB) |  |
 | `uncertainties:ufloat` | ✓ | — (`--start` ×2) | ✓ ([config](match-testing-rerun/configs/uncertainties.toml)) | ✓ (`init --probe` config, [identical to the direct run](probe-9/CONCLUSION.md)) | `init --probe` reads the returned object's properties; those named like an argument get the result's name: `y_nominal_value`, `y_std_dev`. Before: `init`: only `s`, the `ufloat` itself. The hand config reads `return:nominal_value` and `return:std_dev`. |
