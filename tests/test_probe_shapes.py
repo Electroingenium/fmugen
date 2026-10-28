@@ -819,3 +819,23 @@ def test_a_documented_array_that_takes_a_number_stays_a_number(tmp_path):
     ''')
     data, text = probe(f"{path}:rho", tmp_path)
     assert data["inputs"]["SA"] == {"start": 0.0} and data["inputs"]["CT"] == {"start": 0.0}
+
+
+def test_a_fitted_model_gets_its_number_of_features(tmp_path):
+    # like catboost and tabnet: fitted by --setup on 4 features, predict(X) needs X with 4 columns
+    path = write(tmp_path, "reg.py", """
+        import numpy as np
+
+        class Regressor:
+            def fit(self, X, y):
+                self.n_features_in_ = np.asarray(X).shape[1]
+
+            def predict(self, X):
+                X = np.asarray(X, dtype=float)
+                if X.ndim != 2 or X.shape[1] != self.n_features_in_:
+                    raise ValueError(f"Feature count mismatch: expecting {self.n_features_in_} features")
+                return X.sum(axis=1)
+    """)
+    data, text = probe(f"{path}:Regressor", tmp_path, call="predict",
+                       setup=["fit(numpy.ones((5, 4)), numpy.ones(5))"])
+    assert data["inputs"]["X"]["dimensions"] == [1, 4] and data["outputs"]

@@ -833,7 +833,7 @@ def _probe_once(fn, data, comments, constants_key="constants"):
             if result is _FAILED:
                 result = _retry_as_pint(call, data, comments)
             if result is _FAILED:
-                result = _retry_made_up(call, data, comments, "inputs")
+                result = _retry_made_up(call, data, comments, "inputs", getattr(fn, "__self__", None))
             if result is _FAILED:
                 raise
             return result
@@ -981,7 +981,12 @@ def _retry_as_arrays(call, data, comments):
 MADE_UP_SHAPES = ([3], [1, 1], [1, 3], [3, 3])
 
 
-def _retry_made_up(call, data, comments, section):
+#: Attributes in which a fitted model keeps how many features it takes: scikit-learn's (catboost,
+#: xgboost, lightgbm), tabnet's, and common others.
+FEATURE_COUNTS = ("n_features_in_", "input_dim", "n_features", "num_features", "input_size")
+
+
+def _retry_made_up(call, data, comments, section, obj=None):
     """Call again with the made-up values of ``section`` (no default, no ``--start``) as 1.0, then as arrays of ones.
 
     The made-up start is 0.0, which models refuse when they check a range or divide by it
@@ -1000,6 +1005,8 @@ def _retry_made_up(call, data, comments, section):
     :type comments: dict
     :param section: ``"inputs"`` or ``"parameters"``.
     :type section: str
+    :param obj: the model object the step is called on, if any: a fitted scikit-learn-style model
+        gives its number of features (:data:`FEATURE_COUNTS`), so ``(1, n)`` and ``(n,)`` are tried first.
     :return: the result, or :data:`_FAILED`.
     """
     made = {name: info for name, info in data.get(section, {}).items()
@@ -1024,10 +1031,19 @@ def _retry_made_up(call, data, comments, section):
         tries.insert(0, ("the arrays as arrays of ones in their documented shape, the others 1.0",
                          {n: documented.get(n) for n in made}))
     if importlib.util.find_spec("numpy") is not None:
-        tries += [(f"as arrays of ones, shape {tuple(s)}", {n: s for n in made}) for s in MADE_UP_SHAPES]
+        features = None
+        for attribute in FEATURE_COUNTS:   # a fitted model knows how many features predict(X) takes
+            try:
+                features = getattr(obj, attribute, None) if obj is not None else None
+            except Exception:
+                continue
+            if isinstance(features, int) and not isinstance(features, bool):
+                break
+        shapes = ([[1, features], [features]] if isinstance(features, int) and features > 0 else []) + list(MADE_UP_SHAPES)
+        tries += [(f"as arrays of ones, shape {tuple(s)}", {n: s for n in made}) for s in shapes]
         if len(made) > 1:
             tries += [(f"{n} as an array of ones, shape {tuple(s)}, the others 1.0",
-                       {m: s if m == n else None for m in made}) for n in made for s in MADE_UP_SHAPES]
+                       {m: s if m == n else None for m in made}) for n in made for s in shapes]
     for how, plan in tries:
         for name, shape in plan.items():
             scalar(name) if shape is None else array(name, shape)
