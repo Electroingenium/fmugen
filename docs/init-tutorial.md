@@ -221,7 +221,7 @@ Not every config has every section; `init` writes only those that apply. The ord
 | Key | What `init` writes | When to edit |
 |---|---|---|
 | `entry` | The function or class. | Rarely. |
-| `call` | The step method, if it's not `__call__`: `step`, `do_step`, `update`, the only public method, `forward` for a torch module returned by a factory, or `--call`. | If `init` picked the wrong method. `pykalman`'s `KalmanFilter` needs `--call filter_update`. |
+| `call` | The step method, if it's not `__call__`: `step`, `do_step`, `update`, the method the `--start` names fit, the only public method, `forward` for a torch module returned by a factory, or `--call`. When it's still unclear, `init` asks which one in a terminal; otherwise it picks the likeliest (`predict`, `forecast`, `simulate`, `solve`, `run`, …; `fit`, `reset`, `save` last) and warns with the candidates. | If `init` picked the wrong method. `pykalman`'s `KalmanFilter` needs `--call filter_update`. |
 | `fmi_version` | `3` with `--fmi 3`. | To switch versions. `fmugen build --fmi` also overrides it. |
 | `requirements` | The installed packages the model needs, pinned to the installed versions. | When a version should be looser, or a package is missing (`init` says so in a comment). |
 | `sources` | Local modules the model imports, under the config's folder. | Add data files (CSV, JSON, weights) the model reads. |
@@ -456,7 +456,7 @@ The results are built in a way the code doesn't show (loops, helper functions, C
 
 ### `init` picked the wrong step method.
 
-Rerun with `--call METHOD`, or edit `[model] call`.
+When it wasn't sure, it said so: in a terminal it asks you to choose from the candidates; otherwise it prints `fmugen: warning: it's not clear which method of … runs a step`, with the candidates, best first. Rerun with `--call METHOD`, or edit `[model] call`.
 
 ### The class's constructor does all the work; there's no step method.
 
