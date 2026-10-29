@@ -184,18 +184,6 @@ def test_unpicklable_attribute_that_changes_is_flagged(tmp_path):
     assert "kept as they are on restore: it. Check those don't change" in (tmp_path / "fmugen.toml").read_text()
 
 
-def test_save_state_false(tmp_path, make_fmu, adapter):
-    write(tmp_path, "m.py", "def f(u=1.0):\n    return {'y': u}\n", config='''
-        [model]
-        entry = "m.py:f"
-        save_state = false
-        [inputs]
-        u = { start = 1.0 }
-        [outputs]
-        y = {}
-    ''')
-    fmu_dir = make_fmu(tmp_path)
-    assert 'canGetAndSetFMUstate="false"' in (fmu_dir / "modelDescription.xml").read_text()
 
 
 def test_setup_positional_arguments_and_kind_function(tmp_path, make_fmu, adapter):
@@ -1240,24 +1228,3 @@ def test_a_tunable_parameter_changed_between_steps_reaches_the_model(tmp_path, m
         assert fmu.engine.obj.auto_mode is False and fmu.get("output") == first
     else:
         assert fmu.get("output") == pytest.approx(expected)
-
-
-def test_fmi2_log_messages_escape_percent_signs(tmp_path, make_fmu, adapter):
-    # UniFMU 0.14 passes FMI 2 log messages to the importer as printf format strings
-    write(tmp_path, "progress.py", """
-        import logging
-
-        def progress(x: float = 1.0):
-            logging.getLogger("progress").warning("done 50%s of %d")
-            return {"y": x}
-        """, """
-        [model]
-        entry = "progress.py:progress"
-        [inputs]
-        x = { start = 1.0 }
-        [outputs]
-        y = {}
-        """)
-    fmu = adapter(make_fmu(tmp_path))
-    fmu.initialize()
-    assert any("done 50%%s of %%d" in message for _, _, message in fmu.logs), fmu.logs

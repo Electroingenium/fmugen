@@ -23,9 +23,6 @@ def validate(fmu_dir):
         jsonschema.validate(json.loads(path.read_text()), SCHEMA, cls=jsonschema.Draft202012Validator)
 
 
-#: Examples whose config uses clocks: FMI 3 only, so there is no FMI 2 build to check.
-
-
 @pytest.mark.parametrize("fmi", [2, 3])
 def test_composite_matches_the_schema(tmp_path, fmi):
     build(write_composite(tmp_path), tmp_path / "out", output_format="folder", fmi_version=fmi)

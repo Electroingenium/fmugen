@@ -11,7 +11,6 @@ from fmpy.validation import validate_fmu
 from fmugen.builder import build
 from fmugen.config import InterfaceError
 from fmugen.templates.fmugen_runtime import Status
-from fmugen.templates.fmugen_runtime import Status
 
 OK, WARNING, ERROR = Status.ok, Status.warning, Status.error
 

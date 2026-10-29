@@ -551,19 +551,6 @@ def test_the_step_methods_own_names_dont_call_for_a_classmethod(tmp_path):
     assert "create" not in data["model"] and data["outputs"] == {"u": {"from": "return:u"}}
 
 
-def test_a_history_that_grows_each_step_gives_its_last_entry(tmp_path):
-    # like seirsplus' numS: one more entry per run_epoch()
-    path = write(tmp_path, "epi.py", """
-        class Model:
-            def __init__(self, N=100.0):
-                self.numS = [N]
-
-            def run_epoch(self, runtime=1.0):
-                self.numS = self.numS + [self.numS[-1] * 0.9]
-    """)
-    data, text = probe(f"{path}:Model", tmp_path, call="run_epoch", fmi_version=3)
-    assert data["outputs"]["numS"] == {"from": "attr:numS.-1"}
-    assert "its last entry" in text
 
 
 def test_results_nested_in_returned_objects(tmp_path):

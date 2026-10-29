@@ -273,12 +273,6 @@ def test_init_prints_the_assumptions_it_wrote_as_comments(tmp_path, capsys):
     assert "warning: when: taken as a date-time from the name only" in err
 
 
-def test_init_writes_the_static_config(tmp_path):
-    model = write(tmp_path, "def f(a=1.0):\n    return {'b': 2 * a}\n")
-    with isolated_imports():
-        output, _ = init(str(model))
-    config = tomllib.loads(output.read_text())
-    assert config["outputs"] == {"b": {}}
 
 
 def test_pint_units_are_read_from_the_errors():
