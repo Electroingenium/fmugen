@@ -362,6 +362,12 @@ def _infer_config(target, call, config_dir, fmi_version, starts, setup, kind, cr
         data["model"]["call"] = "__call__"
         comments[("model", "call")] = (f"{entry_name}() returns the model: {', '.join(left)} are arguments of "
                                        "calling it, not of the function")
+    elif probe and kind != "function" and not create and (found := _returned_method(entry, data, starts)):
+        # the --start names it doesn't take are arguments of a method of what it returns (joblib's load: predict(X))
+        method, left, how = found
+        _infer_class(None, method, data, comments, factory=entry, **options)
+        comments[("model", "call")] = (f"{entry_name}() returns the model: {', '.join(left)} are arguments of its "
+                                       f"{method}(), {how}")
     else:
         if call or create:
             raise InterfaceError("--call and --create only apply to classes")
@@ -1752,6 +1758,53 @@ def _methods_taking(cls, names):
     """
     return [m for m in dir(cls) if not m.startswith("_") and callable(getattr(cls, m, None))
             and _fits(getattr(cls, m), names)]
+
+
+def _returned_method(fn, data, starts):
+    """The method of the object ``fn`` returns that the ``--start`` names it doesn't take fit, for a factory
+    function: joblib's ``load(filename)`` and the estimator's ``predict(X)``, tirex's ``load_model`` and its
+    ``forecast(context, prediction_length)``.
+
+    Calls ``fn`` once with the values it takes, after the setup calls: only with ``--probe``. The only method
+    the names fit (:func:`_methods_taking`), else the one :func:`_method_from_starts` points at, else the first
+    of those they fit by :data:`STEP_LIKE`.
+
+    :param fn: the entry function.
+    :param data: the config being inferred (for its setup calls).
+    :type data: dict
+    :param starts: the ``--start`` / ``--const`` values.
+    :type starts: dict
+    :return: ``(method, names left for it, why)``, or None.
+    :rtype: tuple or None
+    """
+    left = _leftover_starts(fn, starts)
+    if not left:
+        return None
+    from fmugen.templates.fmugen_runtime import resolve_constant
+    try:
+        _run_setup(data)
+        model = fn(**{n: resolve_constant(v) for n, v in starts.items() if n not in left})
+    except Exception:
+        return None
+    if model is None or inspect.isclass(model) or isinstance(model, (types.FunctionType, types.MethodType,
+                                                                      types.ModuleType, *SCALARS)):
+        return None
+    cls = type(model)
+    fitting = _methods_taking(cls, left)
+    if len(fitting) == 1:
+        return fitting[0], left, "the only method they fit"
+    picked = _method_from_starts(cls, {n: starts[n] for n in left}, None)
+    if picked:
+        return picked[0], left, "the method they point at"
+    if fitting:
+        def place(m):
+            first = m.split("_")[0]
+            return (_named(m, NOT_STEP), STEP_LIKE.index(m) if m in STEP_LIKE else
+                    STEP_LIKE.index(first) + 0.5 if first in STEP_LIKE else len(STEP_LIKE), m)
+
+        best = min(fitting, key=place)
+        return best, left, f"the first of those they fit ({', '.join(sorted(fitting, key=place)[:6])}); pass --call to choose another"
+    return None
 
 
 def _returns_callable(fn, data, starts):

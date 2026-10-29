@@ -330,3 +330,37 @@ def test_one_of_several_optional_arguments_is_made_up_when_the_call_needs_it(tmp
     data, text = run(f"{path}:reynolds", tmp_path, probe=True)
     assert data["inputs"]["nu"] == {"start": 1.0} and "rho" not in data["inputs"] and data["outputs"]
     assert "the probe failed without nu" in text
+
+
+def test_an_enum_argument_with_no_default_starts_at_its_first_member(tmp_path):
+    # like pyfluids' Fluid(name: FluidsList)
+    path = write(tmp_path, "fluid.py", """
+        import enum
+
+        class FluidsList(enum.Enum):
+            Water = "water"
+            Air = "air"
+
+        def density(name: FluidsList, T: float = 293.15):
+            return {"rho": 1000.0 if name.value == "water" else 1.2}
+    """)
+    data, text = run(f"{path}:density", tmp_path, probe=True)
+    assert data["inputs"]["name"]["start"] == "Water" and "FluidsList's first member" in text
+
+
+def test_a_function_returning_the_model_steps_with_the_method_the_starts_fit(tmp_path):
+    # like joblib's load(filename) returning an estimator whose predict(X) runs
+    path = write(tmp_path, "store.py", """
+        class Estimator:
+            def predict(self, X):
+                return {"y": 2.0 * X}
+
+            def score(self, X, y):
+                return 1.0
+
+        def load(filename):
+            return Estimator()
+    """)
+    data, text = run(f"{path}:load", tmp_path, probe=True, starts={"filename": "model.pkl", "X": 3.0})
+    assert data["model"]["call"] == "predict" and data["inputs"]["X"]["start"] == 3.0
+    assert "returns the model: X are arguments of its predict()" in text

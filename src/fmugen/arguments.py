@@ -168,6 +168,7 @@ ASSUMPTIONS = (
     ("start from the example in", "start values taken from the package's examples: check them"),
     ("default None, made up as 1.0", "default None in the code, made up as 1.0 as the probe failed without "
                                      "it: check it, or remove it if your model passes another of them"),
+    ("'s first member", "no default in the code: the first member of its Enum, check it"),
     ("no default in the code", "no default in the code: the start value is made up, check it"),
     ("no default: check the start value", "no default in the code: the start value is made up, check it"),
     ("Integer because the default is an int", "typed Integer because the default is an int; "
@@ -564,6 +565,10 @@ def _arguments(fn, section, data, comments, skip_self=False, allow_time=True, co
             raise InterfaceError(f"--start {p.name}: arrays and bytes need --fmi 3 (FMI 2 has only scalar variables)")
         has_default = p.default is not p.empty or p.name in starts
         default = starts.get(p.name, None if p.default is p.empty else p.default)
+        first = _first_member(fn, p) if not has_default else None
+        if first is not None:   # pyfluids' Fluid(name: FluidsList): an enum's first member, not 1.0
+            has_default, default = True, first
+            comments[(section, p.name)] = f"no default in the code: {type(first).__name__}'s first member; check it"
         before = len(variables)
         if not has_default and arrays and probe:   # tried by the probe if 1.0 fails (gsw's array_like takes numbers)
             shape = _made_up_array(fn, p)
@@ -911,6 +916,18 @@ def _default_instance(fn, p, data, comments, constants_key, probe):
 #: ``hidden_size``, ``in_features``, ``units`` (torch layers fail on a float size).
 COUNT_NAME = re.compile(r"^(n|num|number)_\w+$|^(?!.*step)\w*size$|^\w+_(sizes|dim|dims|features|channels|units|layers|"
                         r"neurons|count|heads|classes|outputs|inputs|nodes|states)$|^(units|layers|neurons|n|heads|classes|nodes)$")
+
+
+def _first_member(fn, p):
+    """The first member of the Enum an argument is annotated with (``Optional`` too), or None."""
+    try:
+        hint = typing.get_type_hints(fn).get(p.name, p.annotation)
+    except Exception:
+        hint = p.annotation
+    hint = static.unwrap_optional(hint)
+    if isinstance(hint, type) and issubclass(hint, enum.Enum):
+        return next(iter(hint), None)
+    return None
 
 
 def _counts_by_annotation(annotation):
