@@ -139,6 +139,8 @@ def _probe_class(cls, method_name, data, comments, arrays, call_starts, create, 
         raise
     except Exception as e:
         rebuilt = _rebuild_made_up_as_zero(build, method_name, data, comments)
+        if rebuilt is None:   # options left None build, but the step needs them (reservoirpy's units)
+            rebuilt = _rebuild_with_options(build, method_name, data, comments)
         if rebuilt is not None:   # the made-up parameters as 0.0 (quantecon's A = 1.0: a singular matrix)
             obj = rebuilt
         elif _reset_first(obj, method_name, data, comments):
@@ -254,7 +256,9 @@ def _forwarded(method, method_name, owner):
     """
     from fmugen.arguments import _only_varargs
     forward = getattr(owner, "forward", None)
-    if method_name == "__call__" and callable(forward)             and _only_varargs(method, skip_self=not inspect.ismethod(method))             and not _only_varargs(forward, skip_self=not inspect.ismethod(forward)):
+    if method_name == "__call__" and callable(forward) \
+            and _only_varargs(method, skip_self=not inspect.ismethod(method)) \
+            and not _only_varargs(forward, skip_self=not inspect.ismethod(forward)):
         return forward
     return method
 
@@ -391,7 +395,8 @@ def _setup_first(build, obj, method_name, error, data, comments):
     if not candidates:
         return ""
     name = candidates[0]
-    why = f" (it sets {', '.join(sorted(unset & _assigned(cls, name)))}, which {method_name}() uses)"         if unset & _assigned(cls, name) else ""
+    why = f" (it sets {', '.join(sorted(unset & _assigned(cls, name)))}, which {method_name}() uses)" \
+            if unset & _assigned(cls, name) else ""
     return f"{method_name}() seems to need {name}() first{why}: add --setup \"{name}(...)\""
 
 
@@ -1139,6 +1144,8 @@ def _probe_once(fn, data, comments, constants_key="constants"):
             if result is _FAILED:
                 result = _retry_options(call, fn, data, comments)
             if result is _FAILED:
+                result = _retry_named(call, fn, data, comments, "inputs", error)
+            if result is _FAILED:
                 result = _retry_as_text(call, data, comments, error)
             if result is _FAILED:
                 result = _retry_positional(call, fn, data, comments, error)
@@ -1300,10 +1307,13 @@ def _retry_options(call, fn, data, comments, section="inputs"):
     if not options:
         return _FAILED
     sets = [[n] for n in options] + [list(pair) for pair in itertools.combinations(options, 2)]
+    # a size alone also larger: reservoirpy's Reservoir(units) steps with more than a few units
+    sets = [(chosen, 1) for chosen in sets[:MAX_OPTION_SETS]] + [
+        ([n], v) for n in options if COUNT_NAME.search(n) for v in OTHER_NUMBERS]
     inputs = data.setdefault(section, {})
-    for chosen in sets[:MAX_OPTION_SETS]:
+    for chosen, value in sets:
         for name in chosen:
-            inputs[name] = {"start": 1 if COUNT_NAME.search(name) else 1.0}
+            inputs[name] = {"start": value if COUNT_NAME.search(name) else float(value)}
         try:
             result = call()
         except Exception:
@@ -1317,6 +1327,56 @@ def _retry_options(call, fn, data, comments, section="inputs"):
                                          f"without {' and '.join(chosen)}; check it")
         return result
     if not inputs:
+        data.pop(section)
+    return _FAILED
+
+
+#: A name an error message quotes: "Provide `context_length` and `prediction_length`".
+ERROR_NAME = re.compile(r"[`'\"](\w+)[`'\"]")
+#: Names of lengths, made up as an Integer like counts: ``context_length``, ``max_len``, ``horizon``.
+LENGTH_NAME = re.compile(r"(^|_)(length|len|horizon|steps|window)$")
+#: Values tried for the arguments an error names: a length often has to be one of a model's sizes (512).
+NAMED_VALUES = (1, 4, 16, 100, 512)
+
+
+def _retry_named(call, fn, data, comments, section, error):
+    """Call again giving the arguments the error message quotes (transformers-style "Provide `context_length` and
+    `prediction_length`"), that ``fn`` declares with a None default or takes through ``**kwargs``: all of them
+    made up as each of :data:`NAMED_VALUES` in turn (Integer for counts and lengths). The first that works is kept,
+    with a comment.
+
+    :return: the result, or :data:`_FAILED`.
+    """
+    from fmugen.arguments import COUNT_NAME
+    try:
+        params = inspect.signature(fn).parameters
+    except (TypeError, ValueError):
+        return _FAILED
+    keywords = any(p.kind == p.VAR_KEYWORD for p in params.values())
+    taken = {*data.get("inputs", {}), *data.get("parameters", {}), *data.get("time", {}),
+             *(n for table in ("constants", "call_constants") for n in data["model"].get(table, {}))}
+    names = [n for n in dict.fromkeys(ERROR_NAME.findall(str(error))) if n not in taken and not n[0].isdigit()
+             and (n in params and params[n].default is None and params[n].kind in (
+                  inspect.Parameter.POSITIONAL_OR_KEYWORD, inspect.Parameter.KEYWORD_ONLY)
+                  or n not in params and keywords and "_" in n)][:4]
+    if not names:
+        return _FAILED
+    variables = data.setdefault(section, {})
+    for value in NAMED_VALUES:
+        for name in names:
+            counted = COUNT_NAME.search(name) or LENGTH_NAME.search(name)
+            variables[name] = {"start": value if counted else float(value)}
+        try:
+            result = call()
+        except Exception:
+            continue
+        for name in names:
+            comments[(section, name)] = (f"made up as {variables[name]['start']}: the probe failed without it "
+                                         f"({type(error).__name__}: it asks for {', '.join(names)}); check it")
+        return result
+    for name in names:
+        variables.pop(name)
+    if not variables:
         data.pop(section)
     return _FAILED
 
@@ -1383,13 +1443,15 @@ def _construct(build, data, comments):
         return make()
     except ConstantError:
         raise
-    except Exception:
+    except Exception as error:
         plain = {n: info for n, info in data.get("parameters", {}).items()
                  if "dimensions" in info and not info.get("numpy") and not info.get("convert")}
         if not plain:
             obj = _retry_made_up(make, data, comments, "parameters")
             if obj is _FAILED:
                 obj = _retry_options(make, build, data, comments, "parameters")
+            if obj is _FAILED:
+                obj = _retry_named(make, build, data, comments, "parameters", error)
             if obj is _FAILED:
                 raise
             return obj
@@ -1443,13 +1505,39 @@ def _retry_as_arrays(call, data, comments):
         comments[("inputs", name)] = "passed as numpy.atleast_1d(...): the probe failed with plain numbers"
     return result
 
-#: Shapes tried for a made-up input that fails as a number: a vector, a one-row and a three-row matrix.
-MADE_UP_SHAPES = ([3], [1, 1], [1, 3], [3, 3])
+#: Shapes tried for a made-up input that fails as a number: a vector, a one-row and a three-row matrix, and a vector
+#: of 4 (commpy's modulate takes a whole number of 2- or 4-bit symbols).
+MADE_UP_SHAPES = ([3], [1, 1], [1, 3], [3, 3], [4])
+
+
+#: An error asking for an integer: "'float' object cannot be interpreted as an integer", "must be int".
+INTEGER_ASKED = re.compile(r"\binteger\b|\bmust be int\b|expected int\b|\bint64\b", re.I)
+
+
+#: Numbers tried last for made-up values that fail as 1.0, 0.0, arrays and lists.
+OTHER_NUMBERS = (4, 16, 100)
 
 
 #: Attributes in which a fitted model keeps how many features it takes: scikit-learn's (catboost,
 #: xgboost, lightgbm), tabnet's, and common others.
 FEATURE_COUNTS = ("n_features_in_", "input_dim", "n_features", "num_features", "input_size")
+
+
+def _rebuild_with_options(build, method_name, data, comments):
+    """When the step fails, build the object again giving numeric options whose default is None
+    (:func:`_retry_options`), and keep that if the step works then: reservoirpy's ``Reservoir()`` builds with
+    no ``units``, but its step needs them.
+
+    :return: a new object, built as the step starts from, or None.
+    """
+    def build_and_step():
+        _probe_call(_step_method(_build_set_up(build, data), method_name, data), data, comments,
+                    constants_key="call_constants")
+        return _build_set_up(build, data)
+
+    constructor = build.__init__ if inspect.isclass(build) else build
+    obj = _retry_options(build_and_step, constructor, data, comments, "parameters")
+    return None if obj is _FAILED else obj
 
 
 def _rebuild_made_up_as_zero(build, method_name, data, comments):
@@ -1467,25 +1555,29 @@ def _rebuild_made_up_as_zero(build, method_name, data, comments):
     :return: a new object, built as the step starts from (the trial one was stepped), or None.
     """
     made = {name: info for name, info in data.get("parameters", {}).items()
-            if comments.get(("parameters", name)) == MADE_UP and isinstance(info.get("start"), (int, float))
+            if (comments.get(("parameters", name)) == MADE_UP or str(comments.get(("parameters", name), "")).startswith(
+                "default None, made up as")) and isinstance(info.get("start"), (int, float))
             and not isinstance(info.get("start"), bool) and info["start"] != 0}
     if not made:
         return None
     saved = {name: info["start"] for name, info in made.items()}
-    for info in made.values():
-        info["start"] = type(info["start"])(0)
-
-    try:   # not _construct: its retries would change the parameters again (pedon's n = 0.0 fails)
-        _probe_call(_step_method(_build_set_up(build, data), method_name, data), data, comments,
-                    constants_key="call_constants")
-        obj = _build_set_up(build, data)
-    except Exception:
-        for name, info in made.items():
-            info["start"] = saved[name]
-        return None
-    for name in made:
-        comments[("parameters", name)] = "no default in the code: made up, as 0.0 (the step failed with 1.0); check it"
-    return obj
+    # then larger: reservoirpy's Reservoir(units) builds with 1 unit, but its step needs more
+    for value in (0, *OTHER_NUMBERS):
+        for info in made.values():
+            info["start"] = type(saved[next(n for n in made if made[n] is info)])(value)
+        try:   # not _construct: its retries would change the parameters again (pedon's n = 0.0 fails)
+            _probe_call(_step_method(_build_set_up(build, data), method_name, data), data, comments,
+                        constants_key="call_constants")
+            obj = _build_set_up(build, data)
+        except Exception:
+            continue
+        for name in made:
+            comments[("parameters", name)] = (f"no default in the code: made up, as {made[name]['start']} "
+                                              "(the step failed with 1.0); check it")
+        return obj
+    for name, info in made.items():
+        info["start"] = saved[name]
+    return None
 
 
 #: A shape an error message names: "cannot reshape array of size 1 into shape (7)", "expected shape (1, 4)".
@@ -1540,11 +1632,12 @@ def _retry_made_up(call, data, comments, section, obj=None, error=None):
         made[name].clear()
         made[name].update(saved[name], start=float(value) if isinstance(saved[name]["start"], float) else value)
 
-    def array(name, shape, tensor=False):
+    def array(name, shape, tensor=False, ints=False):
         made[name].clear()
         made[name].update({k: v for k, v in saved[name].items() if k not in ("start", "type")},
-                          dimensions=list(shape), start=[1.0] * math.prod(shape),
-                          **({"convert": "torch:tensor"} if tensor else {"numpy": True}))
+                          dimensions=list(shape), start=[1 if ints else 1.0] * math.prod(shape),
+                          **({"convert": "torch:tensor"} if tensor else {"numpy": True}),
+                          **({"type": "Int64"} if ints else {}))
 
     def listed(name, size):   # a plain list, not an array: FNO's n_modes (sizes), haversine's points
         made[name].clear()
@@ -1562,6 +1655,8 @@ def _retry_made_up(call, data, comments, section, obj=None, error=None):
             made[name].update(saved[name], start=value)
 
     tries = [("as 0.0", {n: 0 for n in made})]
+    if INTEGER_ASKED.search(str(error or "")):   # nengo's run_steps(steps): "cannot be interpreted as an integer"
+        tries.insert(0, ("as the Integer 1", {n: ("integer", 1) for n in made}))
     spaced = {n: _space_value(obj, n) for n in made}
     if any(v is not None for v in spaced.values()):   # gymnasium's step(action): a value of action_space
         tries.insert(0, ("from the model's action or observation space",
@@ -1570,6 +1665,12 @@ def _retry_made_up(call, data, comments, section, obj=None, error=None):
     if documented and importlib.util.find_spec("numpy") is not None:
         tries.insert(0, ("the arrays as arrays of ones in their documented shape, the others as made up",
                          {n: documented.get(n) for n in made}))
+    tensors = {n: comments[_shape_key(section, n, tensor=True)] for n in made
+               if _shape_key(section, n, tensor=True) in comments}
+    if tensors and importlib.util.find_spec("torch") is not None:   # annotated torch.Tensor: chronos' predict(inputs)
+        tries[1:1] = [(f"the tensors as torch tensors of ones, shape {tuple(s)}, the others as made up",
+                       {n: ("tensor", s) if n in tensors else None for n in made})
+                      for s in [list(next(iter(tensors.values())))] + list(MADE_UP_SHAPES) + [[1, 64]]]
     if importlib.util.find_spec("numpy") is not None:
         features = None
         for attribute in FEATURE_COUNTS:   # a fitted model knows how many features predict(X) takes
@@ -1587,11 +1688,18 @@ def _retry_made_up(call, data, comments, section, obj=None, error=None):
                        {m: s if m == n else None for m in made}) for n in made for s in shapes]
     if _torch_module(obj):   # a torch module's forward() takes tensors (norse, snntorch)
         tries += [(f"as torch tensors of ones, shape {tuple(s)}", {n: ("tensor", s) for n in made})
-                  for s in MADE_UP_SHAPES]
+                  for s in list(MADE_UP_SHAPES) + _object_shapes(obj)]
     tries += [("as lists of two ones", {n: ("list", 2) for n in made})]
     if len(made) > 1:
         tries += [(f"{n} as a list of two ones, the others as made up", {m: ("list", 2) if m == n else None for m in made})
                   for n in made]
+    if importlib.util.find_spec("numpy") is not None:   # indices or bits: commpy's modulate(input_bits)
+        tries += [(f"as integer arrays of ones, shape {tuple(s)}", {n: ("ints", s) for n in made}) for s in ([3], [4])]
+    # a larger number: commpy's QAMModem(m) takes a power of 4, reservoirpy's Reservoir(units) more than a few
+    tries += [(f"as {v}", {n: ("number", v) for n in made}) for v in OTHER_NUMBERS]
+    if len(made) > 1:
+        tries += [(f"{n} as {v}, the others as made up", {m: ("number", v) if m == n else None for m in made})
+                  for n in made for v in OTHER_NUMBERS]
     for how, plan in tries:
         for name, shape in plan.items():
             if isinstance(shape, tuple) and shape[0] == "list":
@@ -1600,6 +1708,13 @@ def _retry_made_up(call, data, comments, section, obj=None, error=None):
                 array(name, shape[1], tensor=True)
             elif isinstance(shape, tuple) and shape[0] == "value":
                 valued(name, shape[1])
+            elif isinstance(shape, tuple) and shape[0] == "ints":
+                array(name, shape[1], ints=True)
+            elif isinstance(shape, tuple) and shape[0] == "integer":
+                made[name].clear()
+                made[name].update({k: v for k, v in saved[name].items() if k != "type"}, start=shape[1], type="Int64")
+            elif isinstance(shape, tuple) and shape[0] == "number":
+                scalar(name, shape[1])
             else:
                 scalar(name) if shape is None else scalar(name, 0) if shape == 0 else array(name, shape)
         try:
@@ -1626,7 +1741,8 @@ def _space_value(obj, name):
     :type name: str
     :return: an int, a list of floats, or None when there's no such space.
     """
-    space = getattr(obj, "observation_space" if "obs" in name.lower() else "action_space", None)         if obj is not None else None
+    space = getattr(obj, "observation_space" if "obs" in name.lower() else "action_space", None) \
+            if obj is not None else None
     if space is None:
         return None
     try:
@@ -1638,6 +1754,31 @@ def _space_value(obj, name):
         return [float(x) for x in middle.ravel()]
     except Exception:
         return None
+
+
+def _object_shapes(obj):
+    """Batch shapes from the lengths a model object (or its ``config``) keeps: ``(1, length, channels)`` and
+    ``(1, length)`` for granite's TTM (``config.context_length``, ``config.num_input_channels``).
+
+    :return: up to 4 shapes.
+    :rtype: list[list[int]]
+    """
+    lengths, channels = [], []
+    for holder in (obj, getattr(obj, "config", None)):
+        try:
+            items = vars(holder).items() if holder is not None else ()
+        except TypeError:
+            continue
+        for name, value in items:
+            if isinstance(value, int) and not isinstance(value, bool) and 1 < value <= 4096:
+                if LENGTH_NAME.search(name) and value not in lengths:
+                    lengths.append(value)
+                elif "channel" in name and value not in channels:
+                    channels.append(value)
+    shapes = []
+    for length in lengths[:2]:
+        shapes += [[1, length, (channels or [1])[0]], [1, length]]
+    return shapes
 
 
 def _torch_module(obj):

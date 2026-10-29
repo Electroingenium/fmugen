@@ -46,6 +46,7 @@ class Usage:
         literal), or ``{"call": "module:expr"}`` / ``{"python": repr}`` for a value that isn't an FMU variable.
     :ivar step: the step method's arguments, likewise.
     :ivar dropped: calls before the step left out of ``setup``: their arguments aren't literals or imports.
+    :ivar sources: argument name -> where its value was found, when not in ``source`` (:func:`find_values`).
     """
     source: str
     create: str | None = None
@@ -54,6 +55,7 @@ class Usage:
     init: dict = field(default_factory=dict)
     step: dict = field(default_factory=dict)
     dropped: list = field(default_factory=list)
+    sources: dict = field(default_factory=dict)
 
 
 def find_usage(entry, module, model_path=None):
@@ -82,6 +84,79 @@ def find_usage(entry, module, model_path=None):
             return usage
         found.append(usage)
     return found[0] if found else None
+
+
+def find_values(entry, module, model_path=None):
+    """The values the package's examples pass to arguments of anything of the package they call (not only the
+    model): ``{argument name: (value, source)}``, the first one seen for each name.
+
+    For a model's argument no use of it shows: openap's README builds ``FuelFlow("A320")``, not ``Thrust``, and
+    both take the aircraft as ``ac``. Only arguments with no default where they are passed (as :func:`_bound`).
+
+    :param entry: the model class or function.
+    :param module: the module it was imported from.
+    :param model_path: the model file, for a model given as a file.
+    :rtype: dict
+    """
+    values = {}
+    for source, code in _sources(entry, module, model_path):
+        try:
+            _collect_values(code, source, entry, module, values)
+        except Exception:   # an odd snippet: none from it
+            continue
+    return values
+
+
+def _collect_values(code, source, entry, module, values):
+    """Add the values of one snippet's calls to ``values`` (:func:`find_values`)."""
+    tree = _parse(code)
+    snippet = _Snippet(entry, module)
+    for node, _ in _statements(tree.body):
+        if isinstance(node, (ast.Import, ast.ImportFrom)):
+            _add_import(snippet, node)
+            continue
+        for call in [n for n in ast.walk(node) if isinstance(n, ast.Call)]:
+            dotted = _dotted(call.func)
+            full = snippet.resolve(dotted) if dotted else None
+            if not full or full.partition(".")[0] != snippet.top:   # the package's own: numpy's x isn't the model's
+                continue
+            fn = _imported(full)
+            if fn is None or not callable(fn):
+                continue
+            for name, arg in (_bound(fn, call.args, call.keywords, skip_self=False) or {}).items():
+                if name not in values:
+                    value = snippet.value(arg)
+                    if value is not None:
+                        values[name] = (value, source)
+        if isinstance(node, ast.Assign) and len(node.targets) == 1 and isinstance(node.targets[0], ast.Name):
+            snippet.values[node.targets[0].id] = _Inline(snippet).visit(_copy(node.value))
+
+
+def _imported(dotted):
+    """The object a full dotted name names (a module's attribute, through classes), or None."""
+    if not dotted:
+        return None
+    module = _module_prefix(dotted) if "." in dotted else None
+    if module is None:
+        return None
+    try:
+        obj = importlib.import_module(module)
+        for part in dotted[len(module) + 1:].split("."):
+            obj = getattr(obj, part)
+    except Exception:
+        return None
+    return obj
+
+
+def _add_import(snippet, node):
+    """Bind the names an import statement brings in."""
+    if isinstance(node, ast.Import):
+        for a in node.names:
+            snippet.aliases[a.asname or a.name.partition(".")[0]] = a.name if a.asname else a.name.partition(".")[0]
+    elif node.module and not node.level:
+        for a in node.names:
+            if a.name != "*":
+                snippet.aliases[a.asname or a.name] = f"{node.module}.{a.name}"
 
 
 def _a_variant(cls, name):
@@ -415,15 +490,8 @@ def _read(code, source, entry, module):
     is_class = inspect.isclass(entry)
     obj, built, calls = None, None, []   # calls: (name, call node, loops, result used)
     for node, loops in _statements(tree.body):
-        if isinstance(node, ast.Import):
-            for a in node.names:
-                snippet.aliases[a.asname or a.name.partition(".")[0]] = a.name if a.asname else a.name.partition(".")[0]
-            continue
-        if isinstance(node, ast.ImportFrom):
-            if node.module and not node.level:
-                for a in node.names:
-                    if a.name != "*":
-                        snippet.aliases[a.asname or a.name] = f"{node.module}.{a.name}"
+        if isinstance(node, (ast.Import, ast.ImportFrom)):
+            _add_import(snippet, node)
             continue
         value = node.value if isinstance(node, (ast.Assign, ast.AnnAssign, ast.Expr)) else None
         targets = node.targets if isinstance(node, ast.Assign) else [node.target] if isinstance(node, ast.AnnAssign) else []

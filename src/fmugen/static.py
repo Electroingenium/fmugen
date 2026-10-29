@@ -340,7 +340,8 @@ def returned(fn, namespace=None, attributes=None):
             return f"arg:{value.id}"
         if isinstance(value, ast.Name) and value.id in local_kinds:
             return local_kinds[value.id]
-        if attributes is not None and isinstance(value, ast.Attribute) and isinstance(value.value, ast.Name)                 and value.value.id == self_name:
+        if attributes is not None and isinstance(value, ast.Attribute) and isinstance(value.value, ast.Name) \
+                and value.value.id == self_name:
             return attributes.get(value.attr)
         return _literal_type(value)
 

@@ -574,6 +574,8 @@ def _arguments(fn, section, data, comments, skip_self=False, allow_time=True, co
             shape = _made_up_array(fn, p)
             if shape:
                 comments[_shape_key(section, p.name)] = shape
+                if "Tensor" in repr(p.annotation):   # torch's: tried as tensors (chronos' predict(inputs))
+                    comments[_shape_key(section, p.name, tensor=True)] = shape
         if not has_default or isinstance(default, SCALARS):
             counted = not has_default and COUNT_NAME.search(p.name) and (
                 p.annotation is p.empty or _counts_by_annotation(p.annotation))
@@ -839,8 +841,10 @@ def _split_fields(fn, p, variables, section, comments, starts, arrays):
             value = None
         elif not isinstance(value, SCALARS) and not (arrays and _array_info(value)):
             continue   # None or not an FMI value: the default's value (or the field's default) is kept
-        info = _array_info(value, with_start=True) if value is not None and not isinstance(value, SCALARS)             else _type_info(value, static.unwrap_optional(hint))
-        if isinstance(info.get("start"), int) and not isinstance(info["start"], bool)                 and static.unwrap_optional(hint) is float:
+        info = _array_info(value, with_start=True) if value is not None and not isinstance(value, SCALARS) \
+                else _type_info(value, static.unwrap_optional(hint))
+        if isinstance(info.get("start"), int) and not isinstance(info["start"], bool) \
+                and static.unwrap_optional(hint) is float:
             info["start"] = float(info["start"])
         info["to"] = f"{'init' if section == 'parameters' else 'arg'}:{p.name}.{field}"   # a constructor's
         found[f"{p.name}_{field}"] = info
@@ -938,10 +942,10 @@ def _counts_by_annotation(annotation):
 
 #: The comment of an argument with no default (and no --start): its start is made up.
 MADE_UP = "no default in the code: check the start value"
-def _shape_key(section, name):
+def _shape_key(section, name, tensor=False):
     """The comments key (not rendered) of the shape of a made-up argument its annotation or docstring
     says is an array, for the probe to try when the call fails with 1.0."""
-    return ("init", f"made up shape {section}.{name}")
+    return ("init", f"made up {'tensor' if tensor else 'shape'} {section}.{name}")
 
 
 def _made_up_array(fn, p):

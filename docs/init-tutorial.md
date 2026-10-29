@@ -60,6 +60,8 @@ Before asking you for options, `init` looks at what the package already says abo
   - When the constructor fails with the made-up values, it tries the classmethods that build an object with no arguments from you (`default()`, `create()`, `from_...()`).
   - When the step method was only guessed and its call fails or gives no outputs, it probes the next two candidates and keeps the first that works and gives outputs.
   - A class that is an iterator (with `__next__`) and has no run-like method steps with `__next__`.
+  - When a made-up value fails, it reads the error: other numbers (4, 16, 100, an Integer), arguments the error names (`context_length`), a dict, a dict with the keys a `KeyError` names, an object with the attributes an `AttributeError` names, a dated pandas Series, or a class of the package named as the argument. Each is commented `made up as ...: check it`.
+- **Values from the rest of the package's examples:** an argument no example of the model shows takes the value the examples pass to an argument of the same name of something else in the package.
 
 Use `-o -` to print the config without writing it, and `--force` to overwrite an existing one. Once you have edited a config by hand, rerunning `init` with `--force` throws your edits away, so keep a copy, or use `-o -` and copy the parts you need.
 

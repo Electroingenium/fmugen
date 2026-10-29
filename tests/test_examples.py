@@ -566,3 +566,101 @@ def test_a_method_iterated_in_a_loop_header_is_the_step(tmp_path):
     """)
     data, _ = run(f"{path}:Game", tmp_path, probe=True)
     assert data["model"]["call"] == "equilibria"
+
+
+def test_an_argument_no_example_of_the_model_shows_is_taken_from_another_call_of_the_package(tmp_path):
+    path = write(tmp_path, "tank.py", TANK + """
+
+    class Pump:
+        def __init__(self, area):
+            self.area = area
+""")
+    write(tmp_path, "README.md", """
+        ```python
+        from tank import Pump
+        p = Pump(area=2.5)
+        ```
+    """)
+    data, text = run(f"{path}:Tank", tmp_path, probe=True, call="advance")
+    assert data["parameters"]["area"]["start"] == 2.5
+    assert "start from the example in README.md" in text
+
+
+def test_a_dict_argument_is_made_up_from_the_error(tmp_path):
+    path = write(tmp_path, "learner.py", """
+        class Learner:
+            def learn(self, x):
+                if not isinstance(x, dict):   # river's check
+                    raise TypeError(f"'{type(x).__name__}' object is not an instance of 'dict'")
+                self.total = sum(x.values())
+                return self.total
+    """)
+    data, text = run(f"{path}:Learner", tmp_path, probe=True, call="learn")
+    assert data["inputs"]["a"]["to"] == "arg:x[a]" and "y" in data["outputs"]
+
+
+def test_an_object_argument_is_made_up_with_the_attributes_the_errors_name(tmp_path):
+    path = write(tmp_path, "patient.py", """
+        class Patient:
+            def step(self, action):
+                return action.carbs * 2 + action.insulin
+    """)
+    data, text = run(f"{path}:Patient", tmp_path, probe=True, call="step")
+    assert "made up as an object with carbs, insulin" in text and "y" in data["outputs"]
+
+
+def test_keys_the_step_looks_up_in_its_keyword_arguments_are_made_up(tmp_path):
+    path = write(tmp_path, "surface.py", """
+        class Surface:
+            def __call__(self, **params):
+                return params["depth"] * 2 + params["width"]
+    """)
+    data, text = run(f"{path}:Surface", tmp_path, probe=True, call="__call__")
+    assert {"depth", "width"} <= set(data["inputs"]) and "looks it up in its keyword arguments" in text
+
+
+def test_arguments_an_error_asks_for_are_made_up(tmp_path):
+    path = write(tmp_path, "ttm.py", """
+        class Model:
+            def __init__(self, path, **options):
+                if "context_length" not in options:
+                    raise ValueError("Provide `context_length` when `path` is a hub path")
+                self.length = options["context_length"]
+
+            def forward(self, x):
+                return x * self.length
+    """)
+    data, text = run(f"{path}:Model", tmp_path, probe=True, call="forward", starts={"path": "hub/model"})
+    assert data["parameters"]["context_length"]["start"] == 1 and "it asks for context_length" in text
+
+
+def test_a_made_up_number_the_model_refuses_is_tried_larger(tmp_path):
+    path = write(tmp_path, "modem.py", """
+        class Modem:
+            def __init__(self, m):
+                if m not in (4, 16, 64):
+                    raise OverflowError("cannot convert")
+                self.m = m
+
+            def modulate(self, bits):
+                return bits * self.m
+    """)
+    data, text = run(f"{path}:Modem", tmp_path, probe=True, call="modulate")
+    assert data["parameters"]["m"]["start"] == 4
+
+
+def test_a_series_argument_is_made_up_as_a_dated_series(tmp_path):
+    path = write(tmp_path, "level.py", """
+        import pandas
+
+        class Model:
+            def __init__(self, oseries):
+                if not isinstance(oseries, pandas.Series):
+                    raise ValueError("oseries must be a series")
+                self.mean = float(oseries.mean())
+
+            def simulate(self, k):
+                return self.mean * k
+    """)
+    data, text = run(f"{path}:Model", tmp_path, probe=True, call="simulate")
+    assert "made up as a dated pandas Series" in text and "y" in data["outputs"]
