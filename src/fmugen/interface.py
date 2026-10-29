@@ -380,7 +380,62 @@ def _shaped_starts(data, comments, starts, shaped):
             if not any(n in starts for n in chosen):
                 tries.append((dict.fromkeys(chosen, 1.0), f"made up as 1.0, one of {count} arguments the error asks "
                                                          "for; check it"))
+    if error.startswith("probe construction failed") and not shaped and not data.get("parameters") \
+            and not ARGUMENTS_EXPECTED.search(error) and _takes_only_varargs(data["model"].get("entry", "")):
+        # a (*args) constructor that says nothing of its arguments (nashpy's Game(*args): payoff matrices)
+        name = (_vararg_names(data["model"]["entry"]) or ["arg1"])[0]
+        if name not in starts:
+            tries.append(({name: [[1.0, 0.0], [0.0, 1.0]]}, "made up as a 2 x 2 identity matrix, the argument of a "
+                                                              "(*args) constructor: check it"))
+    if error.startswith("probe construction failed") and not shaped:
+        # an empty-list default the error gives a length for: impedance's Randles(initial_guess=[]), "circuit length (5)"
+        lengths = [int(n) for n in re.findall(r"\((\d+)\)", error) if 1 < int(n) <= 100]
+        for name in _empty_list_defaults(data["model"].get("entry", "")):
+            if name not in starts:
+                for length in dict.fromkeys(reversed(lengths)):
+                    tries.append(({name: [1.0] * length}, f"made up as {length} ones: the probe failed with an "
+                                                          "empty list, and the error asks for that many; check it"))
     return tries[:3]
+
+
+def _empty_list_defaults(entry_ref):
+    """The constructor arguments of the class ``entry_ref`` names whose default is an empty list or tuple, its base
+    classes' too (passed through ``**kwargs``: impedance's ``Randles`` to ``BaseCircuit(initial_guess=[])``)."""
+    cls = _entry_object(entry_ref)
+    if cls is None:
+        return []
+    names = []
+    for klass in getattr(cls, "__mro__", ())[:-1]:
+        try:
+            params = inspect.signature(klass.__init__).parameters.values()
+        except (TypeError, ValueError):
+            continue
+        names += [p.name for p in params if isinstance(p.default, (list, tuple)) and not p.default]
+    return list(dict.fromkeys(names))
+
+
+def _entry_object(entry_ref):
+    """The object a config's ``entry`` names (``module:Name``, or ``file.py:Name`` relative to the config folder),
+    or None."""
+    module, _, name = entry_ref.partition(":")
+    try:
+        obj = load_module(Path(module).resolve()) if module.endswith(".py") else importlib.import_module(module)
+        for part in name.split("."):
+            obj = getattr(obj, part)
+    except Exception:
+        return None
+    return obj
+
+
+def _takes_only_varargs(entry_ref):
+    """Whether the class ``entry_ref`` names is built with ``(*args)`` alone (``**kwargs`` too)."""
+    cls = _entry_object(entry_ref)
+    try:
+        params = list(inspect.signature(cls).parameters.values())
+    except Exception:
+        return False
+    return any(p.kind is p.VAR_POSITIONAL for p in params) \
+        and all(p.kind in (p.VAR_POSITIONAL, p.VAR_KEYWORD) for p in params)
 
 
 #: Names of arguments that are a torch network.
@@ -428,12 +483,8 @@ ARGUMENTS_EXPECTED = re.compile(r"[Ee]xpected ((?:\d+,? (?:or )?)*\d+) (?:positi
 
 def _vararg_names(entry_ref):
     """The arguments a ``(*args)`` class's docstring names, in order (``A, B, C, D : array_like``), or []."""
-    module, _, name = entry_ref.partition(":")
-    try:
-        cls = importlib.import_module(module)
-        for part in name.split("."):
-            cls = getattr(cls, part)
-    except Exception:
+    cls = _entry_object(entry_ref)
+    if cls is None:
         return []
     names = []
     for entry in docstring_parameters(cls, getattr(cls, "__init__", None)):
@@ -648,13 +699,20 @@ def _with_usage(entry, module, path, call, create, setup, starts, probe):
         for name, value in args.items():
             if name in starts or name in taken or any(k.startswith(f"{name}.") for k in starts) or _time_source(name):
                 continue   # a time argument: the simulation's, not the example's
-            if isinstance(value, dict):
+            if isinstance(value, dict) and "expr" in value:
+                value = _computed(value["expr"]) if probe else None
+                if value is None:
+                    continue
+            elif isinstance(value, dict):
                 if not probe:
                     continue
                 try:
                     resolve_constant(value)
-                except Exception:
-                    continue
+                except Exception:   # arithmetic in its arguments, which a config call can't hold: its numbers
+                    module, _, rest = str(value.get("call", "")).partition(":")
+                    value = _computed(f"{module}.{rest}") if rest else None
+                    if value is None:
+                        continue
             taken[name] = value
 
     if not is_class or (new_create or None) == usage.create:
@@ -679,6 +737,41 @@ def _with_usage(entry, module, path, call, create, setup, starts, probe):
         return None
     options = {"call": new_call, "create": new_create, "setup": new_setup, "starts": {**starts, **taken}}
     return usage, taken, options
+
+
+#: The most numbers an example's computed value may have to become a start value (:func:`_computed`).
+MAX_COMPUTED = 2000
+
+
+def _computed(text):
+    """An example's expression over imports (``numpy.stack((3 * numpy.exp(t), ...))``) computed, as a start value:
+    a number or a (nested) list of numbers, rounded to 6 significant digits; or None (other results, too many
+    numbers, or it fails). Only with ``--probe``, like the calls of examples."""
+    names = {}
+    for top in set(re.findall(r"(?<![\w.])([A-Za-z_]\w*)\.", text)):   # numpy of numpy.exp
+        try:
+            names[top] = importlib.import_module(top)
+        except Exception:
+            continue
+    try:
+        value = eval(compile(text, "<example>", "eval"), {"__builtins__": {}}, names)
+        value = value.tolist() if hasattr(value, "tolist") else value
+    except Exception:
+        return None
+    count = 0
+
+    def numbers(v):
+        nonlocal count
+        if isinstance(v, bool) or not isinstance(v, (int, float, list, tuple)):
+            return None
+        if isinstance(v, (list, tuple)):
+            items = [numbers(x) for x in v]
+            return None if not items or any(x is None for x in items) else items
+        count += 1
+        return float(f"{v:.6g}") if isinstance(v, float) else v
+
+    result = numbers(value)
+    return result if result is not None and count <= MAX_COMPUTED else None
 
 
 def _required(fn):

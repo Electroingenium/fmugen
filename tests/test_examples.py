@@ -664,3 +664,56 @@ def test_a_series_argument_is_made_up_as_a_dated_series(tmp_path):
     """)
     data, text = run(f"{path}:Model", tmp_path, probe=True, call="simulate")
     assert "made up as a dated pandas Series" in text and "y" in data["outputs"]
+
+
+def test_an_example_value_with_arithmetic_is_computed(tmp_path):
+    path = write(tmp_path, "fitter.py", """
+        class Fitter:
+            def fit(self, x):
+                self.mean = sum(sum(row) for row in x) / len(x)
+                return self.mean
+    """)
+    write(tmp_path, "README.md", """
+        ```python
+        import numpy as np
+        from fitter import Fitter
+        f = Fitter()
+        f.fit(np.stack((2 * np.ones(3), np.zeros(3)), axis=-1))
+        ```
+    """)
+    data, text = run(f"{path}:Fitter", tmp_path, probe=True, call="fit")
+    assert data["inputs"]["x"]["start"] == [2.0, 0.0, 2.0, 0.0, 2.0, 0.0]
+
+
+def test_a_varargs_constructor_gets_a_made_up_matrix(tmp_path):
+    path = write(tmp_path, "game.py", """
+        class Game:
+            def __init__(self, *args):
+                if len(args) == 1:
+                    self.matrix = args[0]
+                self.size = len(self.matrix)
+
+            def value(self):
+                return self.matrix[0][0]
+    """)
+    data, text = run(f"{path}:Game", tmp_path, probe=True, call="value")
+    assert "made up as a 2 x 2 identity matrix" in text and "y" in data["outputs"]
+
+
+def test_an_empty_list_default_gets_as_many_values_as_the_error_asks(tmp_path):
+    path = write(tmp_path, "circuit.py", """
+        class Base:
+            def __init__(self, initial_guess=[]):
+                if len(initial_guess) != 3:
+                    raise ValueError(f"guesses ({len(initial_guess)}) must equal the circuit length (3)")
+                self.p = initial_guess
+
+        class Circuit(Base):
+            def __init__(self, cpe=False, **kwargs):
+                super().__init__(**kwargs)
+
+            def predict(self, f):
+                return sum(self.p) * f
+    """)
+    data, text = run(f"{path}:Circuit", tmp_path, probe=True, call="predict")
+    assert "made up as 3 ones" in text and "y" in data["outputs"]

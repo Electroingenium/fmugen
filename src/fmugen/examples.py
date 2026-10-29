@@ -370,7 +370,10 @@ class _Snippet:
         names = [n.id for n in ast.walk(node) if isinstance(n, ast.Name)]
         if not names or any(not _importable(n) for n in set(names)):
             return None
-        callee = node.func if isinstance(node, ast.Call) else node
+        if not isinstance(node, ast.Call):   # arithmetic on imports (pysindy's 3 * numpy.exp(...)): computed by init
+            return {"expr": ast.unparse(node)} if all(_module_prefix(d) or _importable(d) for d in _roots(node)) \
+                else None
+        callee = node.func
         while isinstance(callee, (ast.Call, ast.Subscript)):
             callee = callee.func if isinstance(callee, ast.Call) else callee.value
         dotted = _dotted(callee)
@@ -381,11 +384,22 @@ class _Snippet:
             return None
         text = ast.unparse(node)
         if not text.startswith(module + "."):
-            return None
+            return {"expr": text} if all(_module_prefix(d) or _importable(d) for d in _roots(node)) else None
         return {"call": f"{module}:{text[len(module) + 1:]}"}
 
 
 _FAIL = object()
+
+
+def _roots(node):
+    """The dotted names an expression uses (``numpy.exp``), at their longest."""
+    names = []
+    for n in ast.walk(node):
+        if isinstance(n, ast.Attribute) and (dotted := _dotted(n)):
+            names.append(dotted)
+        elif isinstance(n, ast.Name):
+            names.append(n.id)
+    return [d for d in names if not any(o != d and o.startswith(d + ".") for o in names)]
 
 
 def _copy(node):
