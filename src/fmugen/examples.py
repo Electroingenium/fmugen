@@ -71,12 +71,26 @@ def find_usage(entry, module, model_path=None):
             usage = None
         if usage is None:
             continue
-        if usage.call and source == f"the docstring of {entry.__qualname__}.{usage.call}":
-            usage.call, usage.step, usage.setup = None, {}, []   # a method shows itself: not that it's the step
+        if usage.call and source == f"the docstring of {entry.__qualname__}.{usage.call}" and _a_variant(entry, usage.call):
+            # a variant showing itself (timezonefinder's timezones_at, of timezone_at): not that it's the step;
+            # pyproj's transform and radioactivedecay's decay show themselves, and they are
+            usage.call, usage.step, usage.setup = None, {}, []
         if usage.call or not inspect.isclass(entry):
             return usage
         found.append(usage)
     return found[0] if found else None
+
+
+def _a_variant(cls, name):
+    """Whether method ``name`` of ``cls`` is a variant of another of its public methods (:func:`_variant_of`), or
+    the same words in the plural (``timezones_at`` of ``timezone_at``)."""
+    from fmugen.interface import _variant_of
+
+    def singular(method):
+        return [w[:-1] if w.endswith("s") and len(w) > 3 else w for w in method.split("_")]
+
+    others = [m for m in dir(cls) if not m.startswith("_") and m != name and callable(getattr(cls, m, None))]
+    return any(_variant_of(name, m) or singular(name) == singular(m) for m in others)
 
 
 # ---------------- where examples are ----------------

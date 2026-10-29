@@ -319,7 +319,7 @@ def _infer_config(target, call, config_dir, fmi_version, starts, setup, kind, cr
             except InterfaceError:
                 pass
             else:
-                if not (probe and _probe_failed(comments)):
+                if not (probe and (_probe_failed(comments) or not data.get("outputs"))):
                     _note_usage(usage, taken, options, call, create, setup, data, comments)
                     return data, comments
 
@@ -991,12 +991,19 @@ def _infer_class(cls, call, data, comments, arrays=False, starts=None, create=No
                 break
     picked = best[0]["model"].get("call", "__call__")
     why = best[1].get(("model", "call"))
+    note = best[1].get(("outputs", None))
+    # a step that needs a set-up (osqp's solve() before setup()), or fails on an attribute the object doesn't have
+    # yet (tabnet's predict() before fit(): no network): only a run-like method working may replace it
+    needs_set_up = isinstance(note, str) and ("seems to need" in note or f"'{cls.__name__}' object has no attribute" in note)
     if not call and isinstance(why, str) and why.startswith(f"{picked}() guessed") and not _works(best):
         constructor = getattr(cls, create) if create else cls.__init__
         left = _leftover_starts(constructor, starts)
         ranked = _rank_methods(cls, starts, constructor, _methods_taking(cls, left) if left else [])
         failed = [picked]
-        for method in [m for m in ranked if m != picked][:PROBED_CANDIDATES - 1]:
+        others = [m for m in ranked if m != picked and not _named(m, NOT_STEP)   # pyproj's to_json()
+                  and not isinstance(inspect.getattr_static(cls, m, None), (staticmethod, classmethod))
+                  and (not needs_set_up or m in STEP_LIKE)]   # statsforecast's forecast(), not tabnet's predict_func()
+        for method in others[:PROBED_CANDIDATES - 1]:
             try:
                 tried = attempt(method, create)
             except InterfaceError:

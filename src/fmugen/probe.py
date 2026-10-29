@@ -1893,6 +1893,10 @@ def _single(name, value, source):
     return name, value, source
 
 
+#: Attributes a C wrapper adds to every object, not the model's: SWIG's ownership flag (openturns).
+WRAPPER_FLAGS = ("thisown",)
+
+
 def _public_properties(obj, arrays=False):
     """``{name: value}`` of the public properties of obj's class whose value is an FMI value.
 
@@ -1909,7 +1913,7 @@ def _public_properties(obj, arrays=False):
     for name in dir(type(obj)):
         # static lookup: getattr on the class runs descriptors, which can fail (SQLAlchemy hybrid properties)
         prop = inspect.getattr_static(type(obj), name, None)
-        if isinstance(prop, property) and not name.startswith("_") \
+        if isinstance(prop, property) and not name.startswith("_") and name not in WRAPPER_FLAGS \
                 and len(name) > len(by_property.get(id(prop), "")):
             by_property[id(prop)] = name
     values = {}
@@ -1977,7 +1981,8 @@ def _numeric_attributes(obj, arrays=False):
         attrs = vars(obj)
     except TypeError:
         return {}
-    return {k: _snapshot(v) for k, v in attrs.items() if not k.startswith("_") and _fmi_value(v, arrays)}
+    return {k: _snapshot(v) for k, v in attrs.items()
+            if not k.startswith("_") and k not in WRAPPER_FLAGS and _fmi_value(v, arrays)}
 
 
 def _dynamic_values(obj, arrays=False):
@@ -2033,7 +2038,7 @@ def _property_values(obj, arrays=False, everything=False):
            for name, member in vars(klass).items() if isinstance(member, property)}
     values = {}
     for name, prop in inspect.getmembers(type(obj), lambda m: isinstance(m, property)):
-        if name.startswith("_") or prop.fget is None or name not in own:
+        if name.startswith("_") or prop.fget is None or name not in own or name in WRAPPER_FLAGS:
             continue
         try:
             value = getattr(obj, name)

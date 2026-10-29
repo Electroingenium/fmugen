@@ -109,6 +109,23 @@ These now give the recorded outputs, from failing:
 
 14 more work, with other outputs than recorded, from failing: mendeleev, openturns, pedon, pydmd, pymoo, pymsis, pyproj, pyromat, tabnet, pywt, radioactivedecay, simdkalman, statsforecast and thermo. The fit set-ups are unchanged.
 
+Of those 14, compared with the recorded configs:
+- 5 differ only in array sizes (pydmd, pywt, statsforecast, pymoo with the README's 30-variable problem, pymsis with its docstring's 336 dates).
+- 3 pick another valid choice:
+  - mendeleev, the docstring's Si (an element's outputs are the properties it has: Fe 82, Si 76, H 70, U 69; the others are commented out);
+  - pedon, `s()` instead of `theta()`;
+  - thermo, `calculate(T, P)` instead of rebuilding the object every step.
+- 6 were wrong; four of them are fixed:
+  - **openturns:** the docstring's `getSample(5)` returns no FMI value, and SWIG's `thisown` flag passed for an output. Wrapper flags are no longer outputs, and an example whose step gives no outputs is dropped. It fails again, as before, on its C methods.
+  - **pyproj and radioactivedecay:** the step a method's own docstring shows, `transform()` and `decay()`, was dropped. It's now dropped only when the method is a variant of another (timezonefinder's `timezones_at`, of `timezone_at`). The probing had then picked `to_json()`; methods named like set-up, save or conversion (`to_…`) are no longer probed.
+  - **tabnet:** `predict()` failed before `fit()` (`'TabNetRegressor' object has no attribute 'network'`), and the probing picked `predict_func()`. When the guessed step needs a set-up, only run-like names (`forecast`) may replace it, so statsforecast still picks `forecast()`.
+
+  Still wrong:
+  - **pyromat's `get`:** it returns the model object; the step is its `cp()`.
+  - **simdkalman:** made-up scalars where matrices are needed; it picks `predict_next()`.
+
+After these fixes, the 184 recorded commands give the same configs but openturns', without `thisown`. Without `--call`, 50 give the recorded outputs. With no values, 10 more give the recorded outputs than before; stable-baselines3's SAC is new among them. 12 work with other outputs than recorded, 2 of them wrong.
+
 Also on 2026-10-28: how far `init --probe` gets with no values at all, on the 151 recorded commands that run on the local PC: every `--start` and every `--const` dropped, except those naming a file, weights or a pretrained model (`<data>/speech.npy`, `yolo11n.pt`, `amazon/chronos-bolt-tiny`, `hf_hub_download(...)`), and every other option dropped too (or only `--call` kept). Arguments with no default then get made-up values. Since this date, when the probe fails with the made-up `0.0`, it retries: arguments the numpydoc docstring or type hint calls arrays as arrays of ones in their documented shape, then every made-up value as `1.0`, then as arrays of ones of a few shapes. With these retries, 69 of the 151 give a config with outputs (56 before), 52 with the same outputs as the recorded command (counting outputs whose array sizes differ, since sizes follow the input values: tirex's forecast is as long as its `prediction_length`; 34 before, counted without sizes): ahrs ×2, antropy, blackscholes, GPy, iapws, pedon, psychrolib, scikit-image, pyod and SAC now give the same outputs with no values; none got worse. Training a model (`--setup fit(...)`) is the user's part, so it was kept for the 8 models that need it: with it, and with the probe sizing `predict`'s made-up `X` from the fitted model's feature count (`n_features_in_`, tabnet's `input_dim`), catboost, tabnet, prophet and pyod also work: 73 of the 151 give outputs, 56 the recorded ones. With `--call` where the recorded command has one and nothing else (no values, data files kept), 62 give outputs and 52 the recorded ones (66 and 56 with the fit set-ups). The other outputs differ because the model took another path with made-up values (iapws has no liquid phase at the made-up state; PyCO2SYS computes only what its inputs allow) or returned its results in another form (a tuple instead of one value). skorch (its network) and NBEATS (its window lengths) still need values, and lightgbm and xgboost fail with their recorded commands on the local PC. The recorded commands themselves give the same configs as before.
 
 Of the 131 models tested first, none fails. The last 4 needed fmugen features, added after the main run and checked on these 4 models only (built, simulated, compiled and compared with a direct run; the other models weren't rerun with them):
