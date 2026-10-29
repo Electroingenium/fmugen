@@ -1,4 +1,5 @@
 """Probing, output detection and state detection for interface inference."""
+import ast
 import dataclasses
 import datetime
 import enum
@@ -8,6 +9,7 @@ import math
 import pickle
 import re
 import sys
+import textwrap
 import types
 import typing
 from collections.abc import Mapping
@@ -137,10 +139,17 @@ def _probe_class(cls, method_name, data, comments, arrays, call_starts, create, 
         rebuilt = _rebuild_made_up_as_zero(build, method_name, data, comments)
         if rebuilt is not None:   # the made-up parameters as 0.0 (quantecon's A = 1.0: a singular matrix)
             obj = rebuilt
-        elif not _reset_first(obj, method_name, data, comments):
-            comments[("outputs", None)] = f"probe call failed ({e!r}); outputs below are read from the code"
-            return obj, set(), set(getattr(obj, "__dict__", {}))
-        # reset() worked: the object is the one the step starts from, so its "before" is now
+        elif _reset_first(obj, method_name, data, comments):
+            pass
+        else:
+            set_up = _setup_first(build, obj, method_name, e, data, comments)
+            if not isinstance(set_up, str):
+                obj = set_up
+            else:
+                comments[("outputs", None)] = (f"probe call failed ({e!r}); {set_up + '; ' if set_up else ''}"
+                                               "outputs below are read from the code")
+                return obj, set(), set(getattr(obj, "__dict__", {}))
+        # reset() or a set-up worked: the object is the one the step starts from, so its "before" is now
         before, state_before = _numeric_attributes(obj, arrays), _state_bytes(obj)
         dynamic_before = _dynamic_values(obj, arrays)
         descriptors_before = _descriptor_values(obj, arrays)
@@ -264,6 +273,142 @@ def _reset_first(obj, method_name, data, comments):
     data["model"]["setup"] = [*data["model"].get("setup", []), "reset"]
     comments[("model", "setup")] = f"reset() before the first step: {method_name}() failed without it in the probe"
     return True
+
+
+#: An error message asking for a call first: "call compile() first", "Use fit() to train model. Then",
+#: "not fitted yet. Call 'fit'", "not initialized yet. Call 'initialize'".
+SET_UP_ASKED = re.compile(r"\bfirst\b|\bbefore\b|\bthen\b|not (?:yet )?(?:been )?(?:fit|fitted|initiali[sz]ed|compiled|set ?up)\b"
+                          r"|\bhas not been\b|\bmust (?:first )?(?:call|run)\b", re.I)
+
+
+#: Method names (or prefixes, ending in _) that train the model on the user's data: a set-up the user
+#: writes (--setup), never made up (lifelines' fit_interval_censoring, river's learn_many).
+TRAINING = ("fit", "train", "learn", "partial_fit", "fit_", "train_", "learn_")
+
+
+def _setup_first(build, obj, method_name, error, data, comments):
+    """After a failed probe step: find a method that sets the model up, run it in ``[model] setup``
+    and keep it if the step works then (osqp's ``solve()`` before ``setup()``: its solver is None).
+
+    Candidates, in turn: public methods the error message names ("call setup() first"); then
+    methods that assign an attribute the step reads (``self._solver``) which is None or missing on
+    the object (:func:`_unset_attributes`). Each is called with no arguments, or with its required
+    ones made up as 1.0; then the step. A training method (:data:`TRAINING`) is the user's part: it's
+    only named.
+
+    :param build: the class, ``--create`` classmethod or factory (a new object is built for the probe).
+    :param obj: the model object the step failed on.
+    :param method_name: the step method.
+    :type method_name: str
+    :param error: what the step raised.
+    :type error: Exception
+    :param data: the config being inferred; updated in place.
+    :type data: dict
+    :param comments: ``(section, key) -> text`` for :func:`render_toml`; updated in place.
+    :type comments: dict
+    :return: a new object, built and set up as the FMU will, when a set-up worked; else a hint
+        naming the set-up the step seems to need (empty when none is found).
+    :rtype: object or str
+    """
+    cls = type(obj)
+    public = [m for m in dir(cls) if not m.startswith("_") and m != method_name and callable(getattr(cls, m, None))
+              and not isinstance(inspect.getattr_static(cls, m, None), (property, type))]
+    message = str(error)
+    # a method the message tells to call first ("call compile() first", "Call 'fit' ... before"), not one it
+    # names otherwise ("forward() missing 1 required argument", "'float' object is not iterable")
+    asks = SET_UP_ASKED.search(message) is not None
+    named = [m for m in public if asks and re.search(rf"\b{re.escape(m)}\b(?!' object)", message)]
+    unset = _unset_attributes(obj, method_name)
+    assigning = [m for m in public if unset & _assigned(cls, m)]
+    candidates = list(dict.fromkeys(named + assigning))
+    if "reset" in candidates and "reset" in data["model"].get("setup", []):
+        candidates.remove("reset")
+    unhelpful = set()   # set up without an error, and the step still failed: not what it needs
+    for name in candidates:
+        if name in TRAINING or name.startswith(tuple(p for p in TRAINING if p.endswith("_"))):
+            continue
+        try:
+            params = [p for p in inspect.signature(getattr(obj, name)).parameters.values()
+                      if p.default is p.empty and p.kind in (p.POSITIONAL_ONLY, p.POSITIONAL_OR_KEYWORD)]
+        except (TypeError, ValueError):
+            continue
+        step = f"{name}({', '.join('1.0' for _ in params)})"
+        setup = [*data["model"].get("setup", []), step]
+        trial = dict(data, model=dict(data["model"], setup=setup))
+        try:
+            fresh = _build_set_up(build, trial)
+        except Exception:
+            continue
+        try:
+            _call_with_probe_inputs(_step_method(fresh, method_name, data), data, "call_constants")
+            fresh = _build_set_up(build, trial)   # not stepped: the object the FMU starts from
+        except Exception:
+            unhelpful.add(name)
+            continue
+        data["model"]["setup"] = setup
+        made_up = ", its arguments made up as 1.0: check them" if params else ""
+        comments[("model", "setup")] = (f"{name}() before the first step: {method_name}() failed without it in the "
+                                        f"probe{made_up}")
+        return fresh
+    candidates = [m for m in candidates if m not in unhelpful]
+    if not candidates:
+        return ""
+    name = candidates[0]
+    why = f" (it sets {', '.join(sorted(unset & _assigned(cls, name)))}, which {method_name}() uses)"         if unset & _assigned(cls, name) else ""
+    return f"{method_name}() seems to need {name}() first{why}: add --setup \"{name}(...)\""
+
+
+def _build_set_up(build, data):
+    """Build the model object with the probe's parameters and run ``[model] setup`` on it, without retries.
+
+    :param build: the class, ``--create`` classmethod or factory.
+    :param data: the config.
+    :type data: dict
+    :return: the object.
+    """
+    args, kwargs = _probe_args(data, ("parameters",), build, "constants")
+    obj = build(*args, **_probe_constants(data, "constants"), **kwargs)
+    _run_setup(data, obj)
+    return obj
+
+
+def _method_tree(cls, name):
+    """The parsed source of method ``name`` of ``cls``, or None (no Python source: C, SWIG)."""
+    try:
+        return ast.parse(textwrap.dedent(inspect.getsource(getattr(cls, name))))
+    except (OSError, TypeError, SyntaxError, AttributeError):
+        return None
+
+
+def _self_attributes(tree, store):
+    """``self.X`` names in a method's tree: assigned (``store``) or read."""
+    if tree is None:
+        return set()
+    fn = tree.body[0] if tree.body and isinstance(tree.body[0], (ast.FunctionDef, ast.AsyncFunctionDef)) else None
+    args = fn.args.posonlyargs + fn.args.args if fn else []
+    me = args[0].arg if args else "self"
+    want = ast.Store if store else ast.Load
+    return {n.attr for n in ast.walk(tree) if isinstance(n, ast.Attribute) and isinstance(n.value, ast.Name)
+            and n.value.id == me and isinstance(n.ctx, want)}
+
+
+def _assigned(cls, name):
+    """Attributes method ``name`` of ``cls`` assigns (``self.X = ...``)."""
+    return _self_attributes(_method_tree(cls, name), store=True)
+
+
+def _unset_attributes(obj, method_name):
+    """Attributes the step method reads (``self.X``) that are None or missing on ``obj``: something must set them."""
+    unset = set()
+    for attr in _self_attributes(_method_tree(type(obj), method_name), store=False):
+        try:
+            value = inspect.getattr_static(obj, attr)
+        except AttributeError:
+            unset.add(attr)
+            continue
+        if value is None:
+            unset.add(attr)
+    return unset
 
 
 #: The comment on a parameter kept as a writable attribute, before the probe checks whether the step reads it.
@@ -1012,15 +1157,10 @@ def _rebuild_made_up_as_zero(build, method_name, data, comments):
     for info in made.values():
         info["start"] = type(info["start"])(0)
 
-    def make():   # not _construct: its retries would change the parameters again (pedon's n = 0.0 fails)
-        args, kwargs = _probe_args(data, ("parameters",), build, "constants")
-        obj = build(*args, **_probe_constants(data, "constants"), **kwargs)
-        _run_setup(data, obj)
-        return obj
-
-    try:
-        _probe_call(_step_method(make(), method_name, data), data, comments, constants_key="call_constants")
-        obj = make()
+    try:   # not _construct: its retries would change the parameters again (pedon's n = 0.0 fails)
+        _probe_call(_step_method(_build_set_up(build, data), method_name, data), data, comments,
+                    constants_key="call_constants")
+        obj = _build_set_up(build, data)
     except Exception:
         for name, info in made.items():
             info["start"] = saved[name]

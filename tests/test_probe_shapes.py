@@ -844,6 +844,89 @@ def test_made_up_parameters_are_not_retried_as_zero_when_building_fails_then(tmp
     assert "made up" not in text.partition("[parameters]")[2].partition("[inputs]")[0]
 
 
+def test_a_set_up_the_step_needs_is_found(tmp_path):
+    # like osqp's OSQP: solve() fails until setup() makes the solver; setup takes the problem
+    path = write(tmp_path, "qp.py", """
+        class _Solver:
+            def __init__(self, P, q):
+                self.x = q / P
+
+            def solve(self):
+                return self.x
+
+        class QP:
+            def __init__(self):
+                self._solver = None
+
+            def setup(self, P, q):
+                self._solver = _Solver(P, q)
+
+            def update(self, q):
+                self._solver.x = q
+
+            def solve(self):
+                return self._solver.solve()
+    """)
+    data, text = probe(f"{path}:QP", tmp_path, call="solve")
+    assert data["model"]["setup"] == ["setup(1.0, 1.0)"] and "made up as 1.0: check them" in text
+    assert data["outputs"]
+
+
+def test_a_set_up_the_error_names_is_found(tmp_path):
+    path = write(tmp_path, "dev.py", """
+        class Device:
+            def __init__(self):
+                self.ready = False
+
+            def connect(self):
+                self.ready = True
+
+            def read(self):
+                if not self.ready:
+                    raise RuntimeError("call connect() before read()")
+                return 1.5
+    """)
+    data, text = probe(f"{path}:Device", tmp_path, call="read")
+    assert data["model"]["setup"] == ["connect()"] and data["outputs"]
+
+
+def test_training_is_named_not_made_up(tmp_path):
+    # like scikit-learn: predict before fit; fitting on made-up data is the user's part
+    path = write(tmp_path, "reg.py", """
+        class Regressor:
+            def __init__(self):
+                self.coef_ = None
+
+            def fit(self, X, y):
+                self.coef_ = 2.0
+
+            def fit_weighted(self, X, y):
+                self.coef_ = 3.0
+
+            def predict(self, X):
+                return self.coef_ * X
+    """)
+    data, text = probe(f"{path}:Regressor", tmp_path, call="predict")
+    assert "setup" not in data["model"] and 'predict() seems to need fit() first (it sets coef_' in text
+
+
+def test_a_method_the_error_names_otherwise_is_no_set_up(tmp_path):
+    # like torch modules: __call__ runs forward, whose error names it; float() is a method too
+    path = write(tmp_path, "net.py", """
+        class Net:
+            def float(self):
+                return self
+
+            def forward(self, x, graphs):
+                return x
+
+            def __call__(self, x):
+                return self.forward(x)
+    """)
+    data, text = probe(f"{path}:Net", tmp_path)
+    assert "setup" not in data["model"] and "seems to need" not in text
+
+
 def test_docstring_array_shapes():
     from fmugen.interface import docstring_arrays
 
