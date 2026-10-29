@@ -249,3 +249,39 @@ def test_a_step_failing_before_its_set_up_is_kept(tmp_path):
     ''')
     data, text = run(f"{path}:Regressor", tmp_path, probe=True)
     assert data["model"]["call"] == "predict" and "object has no attribute 'network'" in text
+
+
+def test_a_call_passing_its_arguments_to_forward_takes_forwards(tmp_path):
+    # like a torch module: __call__(*args, **kwargs) runs forward(input_tensor)
+    path = write(tmp_path, "cell.py", """
+        class Module:
+            def __call__(self, *args, **kwargs):
+                return self.forward(*args, **kwargs)
+
+
+        class Cell(Module):
+            def __init__(self, gain=2.0):
+                self.gain = gain
+
+            def forward(self, input_tensor):
+                return {"v": self.gain * input_tensor}
+    """)
+    data, _ = run(f"{path}:Cell", tmp_path, probe=True)
+    assert data["inputs"]["input_tensor"]["start"] == 1.0 and data["outputs"]["v"] == {"from": "return:v"}
+
+
+def test_sizes_are_made_up_as_integers_then_as_lists(tmp_path):
+    # like torch layers (hidden_size must be an int) and FNO (n_modes must be a sequence)
+    path = write(tmp_path, "net.py", """
+        class Net:
+            def __init__(self, hidden_size, n_modes):
+                if not isinstance(hidden_size, int):
+                    raise TypeError("size must be an int")
+                self.weights = [0.5] * hidden_size * len(n_modes)
+
+            def predict(self, x):
+                return {"y": sum(self.weights) * x}
+    """)
+    data, text = run(f"{path}:Net", tmp_path, probe=True)
+    assert data["parameters"]["hidden_size"]["start"] == 1 and data["outputs"]
+    assert "dimensions" in data["parameters"]["n_modes"]   # a sequence: arrays of ones, else lists

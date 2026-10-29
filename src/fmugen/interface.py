@@ -33,7 +33,7 @@ from fmugen.arguments import (
     _assign_starts, assumptions, guessed_outputs, unfit_outputs, class_called, _only_varargs, _time_source,
 )
 from fmugen.probe import (
-    ConstantError, _run_setup, _probe_call, _probe_class,
+    ConstantError, _run_setup, _probe_call, _probe_class, _forwarded,
     _outputs_from_return, _add_returned, _add_attributes, _detect_states,
     _taken, _split_varargs, _varargs_by_keyword,
 )
@@ -1154,7 +1154,7 @@ def _infer_class_once(cls, call, data, comments, arrays=False, starts=None, crea
                                       f"inputs and outputs of {method_name}() by hand, or run init --probe")
     else:
         method = inspect.getattr_static(cls, method_name)
-        _arguments(getattr(cls, method_name), "inputs", data, comments,
+        _arguments(_forwarded(getattr(cls, method_name), method_name, cls), "inputs", data, comments,
                    skip_self=not isinstance(method, (staticmethod, classmethod)) and not on_class,
                    constants_key="call_constants",
                    arrays=arrays, starts=call_starts)   # without --probe: suggestions only
@@ -1291,9 +1291,10 @@ STEP_LIKE = ("predict", "forecast", "simulate", "solve", "run", "run_steps", "co
 #: method (sklearn's fit before predict, osqp's update before solve); without one, fit and train run the
 #: model (lifelines' KaplanMeierFitter.fit), after the :data:`STEP_LIKE` names.
 SETUP_IF_STEP = ("fit", "train", "update", "fit_", "train_")
-#: Method names (or prefixes, ending in _) that set a model up, save, show, copy or close it: a step last.
+#: Method names (or prefixes, ending in _) that set a model up, build it (anastruct's add_element), save, show,
+#: copy or close it: a step last.
 NOT_STEP = ("close", "stop", "shutdown", "terminate", "release", "dispose", "disconnect", "cleanup", "clear", "reset", "load", "save", "copy", "plot", "show", "summary", "describe", "score",
-            "get_params", "set_params", "to_", "from_", "set_", "plot_", "save_", "load_", "print_")
+            "get_params", "set_params", "to_", "from_", "set_", "plot_", "save_", "load_", "print_", "add_", "remove_")
 
 
 def _rank_methods(cls, starts, constructor, fitting=()):

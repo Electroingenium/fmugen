@@ -568,7 +568,9 @@ def _arguments(fn, section, data, comments, skip_self=False, allow_time=True, co
             if shape:
                 comments[_shape_key(section, p.name)] = shape
         if not has_default or isinstance(default, SCALARS):
-            info = _type_info(default, p.annotation)
+            counted = not has_default and COUNT_NAME.search(p.name) and (
+                p.annotation is p.empty or _counts_by_annotation(p.annotation))
+            info = _type_info(default, int if counted else p.annotation)   # hidden_size: 1, not 1.0
             if p.name in starts:
                 comments.setdefault((section, p.name), "start from --start")
             elif not has_default:
@@ -901,6 +903,18 @@ def _default_instance(fn, p, data, comments, constants_key, probe):
         f"no default in the code: {cls.__name__}() (its annotation, with no arguments); "
         f"give your own with --const {p.name}=call:...")
     return True
+
+
+#: Names of unannotated arguments that are counts or sizes, made up as an Integer: ``n_inputs``, ``num_layers``,
+#: ``hidden_size``, ``in_features``, ``units`` (torch layers fail on a float size).
+COUNT_NAME = re.compile(r"^(n|num|number)_\w+$|^(?!.*step)\w*size$|^\w+_(sizes|dim|dims|features|channels|units|layers|"
+                        r"neurons|count|heads|classes|outputs|inputs|nodes|states)$|^(units|layers|neurons|n|heads|classes|nodes)$")
+
+
+def _counts_by_annotation(annotation):
+    """Whether an annotation allows an int but not a float: ``int | list[int]`` (ncps' ``input_size``)."""
+    args = typing.get_args(annotation)
+    return int in args and float not in args
 
 
 #: The comment of an argument with no default (and no --start): its start is made up.

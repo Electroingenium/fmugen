@@ -93,7 +93,7 @@ def _probe_class(cls, method_name, data, comments, arrays, call_starts, create, 
     except Exception as e:
         comments[("outputs", None)] = f"probe construction failed ({e!r}); outputs below are read from the code"
         if cls is not None and ":" not in method_name:
-            _arguments(getattr(cls, method_name), "inputs", data, comments,
+            _arguments(_forwarded(getattr(cls, method_name), method_name, cls), "inputs", data, comments,
                        skip_self=not data["model"].get("call_on_class"),
                        constants_key="call_constants", arrays=arrays, starts=call_starts, probe=True)
             _apply_converts(data, converts)
@@ -121,7 +121,8 @@ def _probe_class(cls, method_name, data, comments, arrays, call_starts, create, 
             raise InterfaceError(f"--start {', '.join(call_starts)}: {method_name} takes its arguments in the call "
                                  "text; write them there, or bind inputs by hand (to = \"pos:N\" after those)")
     else:
-        _arguments(method, "inputs", data, comments, skip_self=not factory and not data["model"].get("call_on_class"),
+        _arguments(_forwarded(method, method_name, obj if factory else cls), "inputs", data, comments,
+                   skip_self=not factory and not data["model"].get("call_on_class"),
                    constants_key="call_constants",
                    arrays=arrays, starts=call_starts, probe=True)
     _apply_converts(data, converts)
@@ -238,6 +239,23 @@ def _probe_class(cls, method_name, data, comments, arrays, call_starts, create, 
     _check_sizes(obj, method_name, data, comments)
     _check_tunable(obj, method_name, data, comments, arrays)
     return obj, returned, set(getattr(obj, "__dict__", {})) | set(_property_values(obj, arrays)) | unfit
+
+
+def _forwarded(method, method_name, owner):
+    """The callable whose arguments ``method`` takes: ``forward`` for a ``__call__`` that only declares
+    ``(*args, **kwargs)`` and passes them on to it (torch modules: norse's ``LIFCell()(input_tensor)``).
+
+    :param method: the step method.
+    :param method_name: its name.
+    :type method_name: str
+    :param owner: the class (unbound methods) or the object (bound ones).
+    :return: ``owner.forward``, or ``method``.
+    """
+    from fmugen.arguments import _only_varargs
+    forward = getattr(owner, "forward", None)
+    if method_name == "__call__" and callable(forward)             and _only_varargs(method, skip_self=not inspect.ismethod(method))             and not _only_varargs(forward, skip_self=not inspect.ismethod(forward)):
+        return forward
+    return method
 
 
 def _reset_first(obj, method_name, data, comments):
@@ -1177,10 +1195,13 @@ def _retry_made_up(call, data, comments, section, obj=None):
     by it: blackscholes' "Asset price (S) needs to be larger than 0", pedon's division by zero); some
     models need an array (ahrs' quaternion, GPy's ``X``, scikit-learn's ``predict(X)``). Tried
     in turn: those whose annotation or docstring says they are arrays as arrays of ones in that shape
-    (:func:`fmugen.arguments._shape_key`), the others 1.0; every one as 0.0 (quantecon's matrices,
+    (:func:`fmugen.arguments._shape_key`), the others as made up; every one as 0.0 (quantecon's matrices,
     singular when all ones); every one as an
     array of ones in each of :data:`MADE_UP_SHAPES`;
-    each one alone as such an array, the others 1.0. The first that works is kept, with a comment.
+    each one alone as such an array, the others as made up; for a torch module, every one as a torch
+    tensor of ones in those shapes (norse, snntorch); every one, then each one alone, as a plain list of
+    two ones, of ints for sizes (FNO's ``n_modes``, pytorch-tcn's ``num_channels``, haversine's points).
+    The first that works is kept, with a comment.
 
     :param call: makes the probe call (or builds the object).
     :type call: callable
@@ -1205,15 +1226,23 @@ def _retry_made_up(call, data, comments, section, obj=None):
         made[name].clear()
         made[name].update(saved[name], start=float(value) if isinstance(saved[name]["start"], float) else value)
 
-    def array(name, shape):
+    def array(name, shape, tensor=False):
         made[name].clear()
         made[name].update({k: v for k, v in saved[name].items() if k not in ("start", "type")},
-                          dimensions=list(shape), start=[1.0] * math.prod(shape), numpy=True)
+                          dimensions=list(shape), start=[1.0] * math.prod(shape),
+                          **({"convert": "torch:tensor"} if tensor else {"numpy": True}))
+
+    def listed(name, size):   # a plain list, not an array: FNO's n_modes (sizes), haversine's points
+        made[name].clear()
+        from fmugen.arguments import COUNT_NAME
+        counts = isinstance(saved[name]["start"], int) or bool(COUNT_NAME.search(name))   # num_channels: list[int]
+        made[name].update({k: v for k, v in saved[name].items() if k not in ("start", "type", "numpy")},
+                          dimensions=[size], start=[1 if counts else 1.0] * size, **({"type": "Int64"} if counts else {}))
 
     tries = [("as 0.0", {n: 0 for n in made})]
     documented = {n: comments[_shape_key(section, n)] for n in made if _shape_key(section, n) in comments}
     if documented and importlib.util.find_spec("numpy") is not None:
-        tries.insert(0, ("the arrays as arrays of ones in their documented shape, the others 1.0",
+        tries.insert(0, ("the arrays as arrays of ones in their documented shape, the others as made up",
                          {n: documented.get(n) for n in made}))
     if importlib.util.find_spec("numpy") is not None:
         features = None
@@ -1227,11 +1256,23 @@ def _retry_made_up(call, data, comments, section, obj=None):
         shapes = ([[1, features], [features]] if isinstance(features, int) and features > 0 else []) + list(MADE_UP_SHAPES)
         tries += [(f"as arrays of ones, shape {tuple(s)}", {n: s for n in made}) for s in shapes]
         if len(made) > 1:
-            tries += [(f"{n} as an array of ones, shape {tuple(s)}, the others 1.0",
+            tries += [(f"{n} as an array of ones, shape {tuple(s)}, the others as made up",
                        {m: s if m == n else None for m in made}) for n in made for s in shapes]
+    if _torch_module(obj):   # a torch module's forward() takes tensors (norse, snntorch)
+        tries += [(f"as torch tensors of ones, shape {tuple(s)}", {n: ("tensor", s) for n in made})
+                  for s in MADE_UP_SHAPES]
+    tries += [("as lists of two ones", {n: ("list", 2) for n in made})]
+    if len(made) > 1:
+        tries += [(f"{n} as a list of two ones, the others as made up", {m: ("list", 2) if m == n else None for m in made})
+                  for n in made]
     for how, plan in tries:
         for name, shape in plan.items():
-            scalar(name) if shape is None else scalar(name, 0) if shape == 0 else array(name, shape)
+            if isinstance(shape, tuple) and shape[0] == "list":
+                listed(name, shape[1])
+            elif isinstance(shape, tuple) and shape[0] == "tensor":
+                array(name, shape[1], tensor=True)
+            else:
+                scalar(name) if shape is None else scalar(name, 0) if shape == 0 else array(name, shape)
         try:
             result = call()
         except Exception:
@@ -1244,6 +1285,13 @@ def _retry_made_up(call, data, comments, section, obj=None):
         info.clear()
         info.update(saved[name])
     return _FAILED
+
+
+def _torch_module(obj):
+    """Whether ``obj`` is a torch module (an ``nn.Module`` instance), without importing torch."""
+    torch = sys.modules.get("torch")
+    module = getattr(getattr(torch, "nn", None), "Module", None)
+    return module is not None and isinstance(obj, module)
 
 
 def _retry_as_series(call, data, comments):
