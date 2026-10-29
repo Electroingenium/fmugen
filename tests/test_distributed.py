@@ -2,15 +2,11 @@
 import re
 import subprocess
 import sys
-import tomllib
-import zipfile
 
 import pytest
-from conftest import EXAMPLES
 from fmpy import simulate_fmu
 
 from fmugen.builder import build
-from fmugen.config import InterfaceError
 
 for _module in ("toml", "coloredlogs", "colorama"):   # fmugen[distributed]: the private side imports them
     pytest.importorskip(_module)
@@ -38,50 +34,6 @@ def _simulate(fmu, private, command, fmi_version=2, output="output", **options):
             process.wait(timeout=300)   # a vendored first run installs its wheels
     assert started, "the proxy didn't log its port"
     return list(result[output])
-
-
-def test_options_need_distributed(tmp_path):
-    with pytest.raises(InterfaceError, match="only apply with --distributed"):
-        build(EXAMPLES / "simple_pid", tmp_path / "a.fmu", endpoint="10.0.0.5")
-    with pytest.raises(InterfaceError, match="only apply with --distributed"):
-        build(EXAMPLES / "simple_pid", tmp_path / "a.fmu", private_output=tmp_path / "p")
-
-
-@pytest.mark.fmu
-@pytest.mark.parametrize("fmi_version", [2, 3])
-def test_proxy_and_private_side_simulate_like_a_normal_fmu(tmp_path, fmi_version):
-    expected = list(simulate_fmu(str(build(EXAMPLES / "simple_pid", tmp_path / "pid.fmu", fmi_version=fmi_version)[0]),
-                                 stop_time=1, output=["output"])["output"])
-
-    fmu, interface = build(EXAMPLES / "simple_pid", tmp_path / "proxy.fmu", fmi_version=fmi_version,
-                           distributed=True, endpoint="127.0.0.1")
-    private = tmp_path / "proxy_private"
-    assert interface["private_output"] == private
-    with zipfile.ZipFile(fmu) as z:
-        names = z.namelist()
-        assert tomllib.loads(z.read("resources/launch.toml").decode()) == {"location": "Remote"}
-    assert not any(n.endswith(".py") or n.endswith("interface.json") for n in names)
-    assert any(n.startswith("binaries/") for n in names)
-
-    assert tomllib.loads((private / "endpoint.toml").read_text()) == {"ip": "127.0.0.1"}
-    assert {"toml", "coloredlogs", "colorama"} <= set((private / "requirements.txt").read_text().split())
-    assert (private / "interface.json").exists() and (private / "model.py").exists()
-
-    assert _simulate(fmu, private, [sys.executable, "main.py"], fmi_version) == expected
-
-
-@pytest.mark.fmu
-def test_vendored_private_side_installs_its_wheels(tmp_path, monkeypatch):
-    monkeypatch.setenv("FMUGEN_ENV_DIR", str(tmp_path / "envs"))
-    expected = list(simulate_fmu(str(build(EXAMPLES / "simple_pid", tmp_path / "pid.fmu")[0]),
-                                 stop_time=1, output=["output"])["output"])
-    fmu, interface = build(EXAMPLES / "simple_pid", tmp_path / "proxy.fmu", vendor=True, distributed=True,
-                           private_output=tmp_path / "elsewhere")
-    private = tmp_path / "elsewhere"
-    wheels = {p.name.split("-")[0].lower() for p in (private / "wheels").glob("*.whl")}
-    assert {"toml", "coloredlogs", "colorama", "pyzmq"} <= wheels
-    assert interface["private_start"].endswith("fmugen_launch.py PORT")
-    assert _simulate(fmu, private, [sys.executable, "fmugen_launch.py"]) == expected
 
 
 @pytest.mark.fmu

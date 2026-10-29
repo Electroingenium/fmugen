@@ -156,7 +156,7 @@ differential_on_measurement = { start = true }  # kept as an attribute: add vari
 starting_output = { start = 0.0 }
 
 [inputs]
-input_ = { start = 0.0 }  # no default in the code: check the start value
+input_ = { start = 1.0 }  # no default in the code: check the start value
 
 [outputs]
 y = { from = "return" }
@@ -174,7 +174,7 @@ How this runs inside the FMU:
 Going through the warnings:
 
 - **`setpoint = { start = 0 }` is Integer.** A PID setpoint is a real number, so write `start = 0.0`.
-- **`input_` has no default**, so `0.0` is made up. It's fine here; for models that reject 0 (`Re=0`, `log(0)`), give a realistic `--start`.
+- **`input_` has no default**, so `1.0` is made up (not `0.0`, which models often refuse or divide by). It's fine here. When the probe fails with `1.0`, it tries again by itself: arguments the docstring or type hint calls arrays as arrays of ones in their documented shape (`q : array_like, shape (4,)`), then every made-up value as arrays of ones `(3,)`, `(1, 1)`, `(1, 3)`, `(3, 3)`; the comment says which worked. For models whose values must be specific (`Re` in a range, a matrix matching the constructor's sizes), give a realistic `--start`.
 - **`y` is assumed Real.** Correct for a PID. Rename it to `output` if you like.
 - **Properties left commented out:** `tunings` and `output_limits` are tuples, not numbers, so leave them commented. `components` is a tuple too.
 - **`sample_time = 0.01`:** simple-pid then skips calls closer together than 0.01 s. In an FMU that is usually unwanted: uncomment `[model.constants]` and set `sample_time = { python = "None" }`, and delete `sample_time` from `[parameters]`. A name can't be both a variable and a constant.
@@ -221,7 +221,7 @@ Not every config has every section; `init` writes only those that apply. The ord
 | Key | What `init` writes | When to edit |
 |---|---|---|
 | `entry` | The function or class. | Rarely. |
-| `call` | The step method, if it's not `__call__`: `step`, `do_step`, `update`, the only public method, or `--call`. | If `init` picked the wrong method. `pykalman`'s `KalmanFilter` needs `--call filter_update`. |
+| `call` | The step method, if it's not `__call__`: `step`, `do_step`, `update`, the method the `--start` names fit, the only public method, `forward` for a torch module returned by a factory, or `--call`. When it's still unclear, `init` asks which one in a terminal; otherwise it picks the likeliest (`predict`, `forecast`, `simulate`, `solve`, `run`, …; `fit`, `reset`, `save` last) and warns with the candidates. | If `init` picked the wrong method. `pykalman`'s `KalmanFilter` needs `--call filter_update`. |
 | `fmi_version` | `3` with `--fmi 3`. | To switch versions. `fmugen build --fmi` also overrides it. |
 | `requirements` | The installed packages the model needs, pinned to the installed versions. | When a version should be looser, or a package is missing (`init` says so in a comment). |
 | `sources` | Local modules the model imports, under the config's folder. | Add data files (CSV, JSON, weights) the model reads. |
@@ -247,7 +247,7 @@ solver     = { ref = "scipy.integrate:RK45" }            # an imported object (c
 weights    = { call = "numpy:eye(3)" }                   # the result of a call, made at initialization
 ```
 
-Lines marked `# computed when the FMU initializes` are `call =` constants `init` wrote for you, either from `--start NAME=call:...` or for arguments that need an array to work (pykalman's `filtered_state_mean = { call = "numpy:zeros(1)" }`). They are active, not commented.
+Lines marked `# computed when the FMU initializes` are `call =` constants `init` wrote for you, either from `--const NAME=call:...` or for arguments that need an array to work (pykalman's `filtered_state_mean = { call = "numpy:zeros(1)" }`). They are active, not commented.
 
 ### `[experiment]`: default run settings
 
@@ -320,7 +320,7 @@ The keys you will touch most:
 
 ### `[clocks.<name>]` and `[events]` (FMI 3)
 
-Clocks run model code on events instead of on every step. They can't be inferred, so `init` always writes the commented example at the end of an FMI 3 config. **Delete it** if you don't need clocks. [models.md](models.md#clocks-fmi-3) and [examples/sampled_pid](../examples/sampled_pid/fmugen.toml) show how to use them.
+Clocks run model code on events instead of on every step. They can't be inferred, so `init` always writes the commented example at the end of an FMI 3 config. **Delete it** if you don't need clocks. [models.md](models.md#clocks-fmi-3) shows how to use them.
 
 ---
 
@@ -331,7 +331,8 @@ Inline comments mark guesses and things to check. A comment never changes the bu
 | Comment | What it means | What to do |
 |---|---|---|
 | `# start from --start` | You passed this start value. | Nothing. |
-| `# no default in the code: check the start value` | `0.0` is made up. | Put a realistic value. Many models fail at 0. |
+| `# no default in the code: check the start value` | `1.0` is made up. | Put a realistic value. |
+| `# no default in the code: made up, as arrays of ones, shape (…) (the probe failed with 1.0)` | The probe failed with `1.0` and worked with this. | Put a realistic value (and size, for an array). |
 | `# Integer because the default is an int; write a float start for Real` | The code's default is `0`, not `0.0`. | Write `0.0` if the quantity is real. |
 | `# kept as an attribute: add variability = "tunable" if the step reads it` | The constructor stores this value on the object. | Add `variability = "tunable"` if changing it mid-simulation should have an effect. |
 | `# start from --start, passed by position to *args: check the order` | The constructor only takes `*args`; your `--start` order is the argument order. | Check it matches the model's documentation. |
@@ -456,7 +457,7 @@ The results are built in a way the code doesn't show (loops, helper functions, C
 
 ### `init` picked the wrong step method.
 
-Rerun with `--call METHOD`, or edit `[model] call`.
+When it wasn't sure, it said so: in a terminal it asks you to choose from the candidates; otherwise it prints `fmugen: warning: it's not clear which method of … runs a step`, with the candidates, best first. Rerun with `--call METHOD`, or edit `[model] call`.
 
 ### The class's constructor does all the work; there's no step method.
 
@@ -464,7 +465,13 @@ Rerun with `--kind function`: the class is built with the inputs on every step a
 
 ### The class is built with `from_pretrained` (or another classmethod).
 
-Rerun with `--create from_pretrained`.
+When the constructor can't take your `--start`/`--const` names and exactly one public classmethod can (`PPO.load(path=...)`), `init` uses it and says so in a comment. Otherwise rerun with `--create from_pretrained`.
+
+### The step fails until `reset()` is called.
+
+With `--probe`, `init` tries `reset()` (when it takes no arguments) before the first step and, if the step then works, adds `setup = ["reset"]` with a comment (gymnasium environments). Otherwise rerun with `--setup reset`.
+
+When the step still fails, `init --probe` looks for another set-up the step needs: a method the error message asks to call first ("call connect() first"), or one that assigns an attribute the step reads that is `None` or missing. It tries that method in `[model] setup`, making up its arguments as `1.0`, and keeps it with a comment when the step then works (check the made-up arguments). Training methods (`fit`, `train`, `learn`, `fit_...`) are never made up. The failure comment names them instead, for example `solve() seems to need setup() first (it sets ..., which solve() uses): add --setup "setup(...)"`.
 
 ### Why is my variable Integer?
 

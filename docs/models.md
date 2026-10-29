@@ -78,7 +78,7 @@ energy_balance = { unit = "W" }
 
 Values nested in dicts, NamedTuples, dataclasses and `SimpleNamespace`s become outputs named with dots: `{"zone": {"T": 21}}` gives the output `"zone.T"` (quoted in TOML). `init` finds them in dict literals in the code, and with `--probe` in the actual result (up to 4 levels deep).
 
-Full example: [examples/psychrometry](../examples/psychrometry).
+Published functions packaged this way: `fluids.core:Reynolds`, `psychrolib:GetHumRatioFromRelHum` and others in [tested-models.md](tested-models.md).
 
 ---
 
@@ -110,10 +110,11 @@ output = { from = "return" }
 
 - **Parameters** are passed to the constructor once, when the FMU leaves initialization mode.
 - **Tunable parameters:** a parameter marked `variability = "tunable"` can still change during the simulation. fmugen then writes the new value onto the object (`obj.Kp = value`). Only mark a parameter tunable if the step method reads that attribute. If the constructor only uses it to compute something else, changing the attribute later has no effect, so keep it fixed.
-- **Step method:** `call` names it. The default is `__call__` when the class is callable. `fmugen init` also tries `step`, `do_step`, `update`, and the only public method.
+- **Step method:** `call` names it. The default is `__call__` when the class is callable. `fmugen init` also tries `step`, `do_step` and `update`; then the only method that the `--start` names fit: they are its arguments and cover its required ones (`--start times=1 --start dtime=60` picks JOS3's `simulate`). Names the constructor only takes optionally count too, so `--start q=… --start gyr=… --start acc=…` picks ahrs' `Madgwick.updateIMU(q, gyr, acc)` over `updateMARG`, which also requires `mag`. When several fit and every public method's signature can be read, the one taking the most of the names wins (pyquaternion's `rotate(vector)`). Then the class's only public method. A tie still needs `--call`, and the error names the methods that fit. With `--probe`, a function whose `--start` names fit the model it returns, when called, becomes a factory with `call = "__call__"` (silero's `load_silero_vad()(x, sr)`). A class with no method to run at all (no `__call__`, no public instance method, inherited or C ones included: only properties, attributes, classmethods and staticmethods, like ambiance's `Atmosphere(h)`) gets `kind = "function"`: it's built with the inputs every step, and its properties are the results.
+- **Probe retries:** list inputs and constructor parameters the model refuses are retried as numpy arrays, then torch tensors (GPy's `GPRegression(X, Y)`). `--start` values for a method that only declares `(*args, **kwargs)` are passed by keyword; if it refuses keywords (neuromancer's `forward(*inputs)`), they are retried by position.
 - **Renaming:** `to = "arg:input_"` gives an argument a different FMU name.
 
-Full example: [examples/simple_pid](../examples/simple_pid).
+Try it: `pip install simple-pid`, then `fmugen init simple_pid:PID -o -` ([tested-models.md](tested-models.md)).
 
 ---
 
@@ -311,7 +312,7 @@ cwd = "."                       # the model runs in the FMU's copy of the config
 filename = { start = "proj/723170TYA.CSV" }
 ```
 
-`fmugen init` writes both when a string literal in the model's file, or a `--start` value, names a file next to `fmugen.toml`. `init` itself also runs in that folder.
+`fmugen init` writes both when a string literal in the model's file, or a `--start` or `--const` value, names a file next to `fmugen.toml`. `init` itself also runs in that folder.
 
 Some module names are already taken by UniFMU's backend and fmugen: `model`, `backend`, `main`, `abstract_backend`, `schemas` and `fmugen_runtime`. Your entry module can't use them; rename the file.
 
@@ -372,7 +373,7 @@ fluid  = { start = "Water",  to = "pos:5" }
 value = { from = "return" }    # saturation temperature of water at 1 atm: 373.12 K
 ```
 
-`fmugen init` binds positional-only arguments it can see this way. If a signature can't be inspected at all, as with `PropsSI`, `init` says so and you write the variables by hand.
+`fmugen init` binds positional-only arguments it can see this way. If a signature can't be inspected at all, as with `PropsSI` or sgp4's `Satrec`, `init` passes the `--start` values by position, in the order given (`to = "pos:N"`). For a class, `--probe` also finds which of them go to the constructor and which to the step method, giving the step as many as it takes: `--start line1=… --start line2=… --start jd=… --start fr=…` for `Satrec.twoline2rv(line1, line2).sgp4(jd, fr)`. Without `--start`, write the variables by hand.
 
 ---
 
@@ -452,7 +453,7 @@ x = { dimensions = ["dim_x"] }            # self.x, shape (2, 1) or (2,): any sh
 
 `fmugen init --fmi 3` infers arrays from list, tuple and numpy defaults and results, and `Binary` from `bytes`.
 
-Full example: [examples/kalman](../examples/kalman).
+Try it: `pip install filterpy`, then `fmugen init filterpy.kalman:KalmanFilter --call predict --fmi 3 --start dim_x=2 --start dim_z=1 -o -` ([tested-models.md](tested-models.md)).
 
 ---
 
@@ -513,7 +514,7 @@ After a step that ticks an output clock, `doStep` returns `eventHandlingNeeded`.
 
 What each interval variability means, and the exact rules for activation and reset: [fmi.md](fmi.md#clocks-fmi-3). Clocks can't be inferred; `fmugen init --fmi 3` writes a commented example.
 
-Full examples: [examples/sampled_pid](../examples/sampled_pid), [examples/kalman](../examples/kalman).
+Tested with clocks: simple-pid's `PID` on a periodic clock and filterpy's `KalmanFilter` on a triggered clock ([tested-models.md](tested-models.md)).
 
 ---
 
@@ -563,7 +564,7 @@ fmugen init fluids.friction:friction_factor --start Re=1e5 -o -
 fmugen init psychrolib:GetHumRatioFromRelHum --setup "psychrolib:SetUnitSystem(psychrolib.SI)" --start TDryBulb=25.0 --start RelHum=0.5 --start Pressure=101325.0 -o -
 ```
 
-A `--start` name that appears in both the constructor and the step method goes to the one without a default; on a tie, to the step method. Names that neither declares are passed through `**kwargs`, if one of them accepts it. For a constructor that only declares `(*args, **kwargs)`, such as `control.StateSpace`, they are passed by position instead (`to = "pos:N"`), in the order given. When the step method also takes only `*args` (SWIG classes such as `openturns.Normal(mu, sigma).computePDF(x)`), the signatures can't tell which values go where: with `--probe`, the first values in `--start` order go to the constructor and the rest to the method, and `init` keeps the first split for which both calls work, trying the constructor with as many values as possible first. Without `--probe`, all of them go to the constructor, with a warning. If the constructor and the step method both have an argument `NAME` (radioactivedecay's `Inventory(contents, units).decay(decay_time, units)`), the step method's variable is named `<method>_NAME` (`decay_units`), bound with `to = "arg:NAME"`. To give both a value, pass the step method's by that name: `--start decay_units=…` goes to the step method, and then `--start units=…` to the constructor. With `--fmi 3`, a variable for an argument or result named `time`, which FMI 3 reserves, is named `model_time` and bound with `to` / `from`. A signature default that is a descriptor with a `default` (astropy's `Parameter(default=3.04, ...)`) is read as that default. `ARG.FIELD` names go wherever `ARG` goes; `init` stops with an error if `ARG`'s class can't be told from its default or annotation, or has no such field.
+A `--start` or `--const` name that appears in both the constructor and the step method goes to the one without a default; on a tie, to the step method. Names that neither declares are passed through `**kwargs`, if one of them accepts it. For a constructor that only declares `(*args, **kwargs)`, such as `control.StateSpace`, they are passed by position instead (`to = "pos:N"`), in the order given. When the step method also takes only `*args` (SWIG classes such as `openturns.Normal(mu, sigma).computePDF(x)`), the signatures can't tell which values go where: with `--probe`, the first values in `--start` order go to the constructor and the rest to the method, and `init` keeps the first split for which both calls work, trying the method with as many values as possible first (C built-ins without a signature are split the same way). Without `--probe`, all of them go to the constructor, with a warning. If the constructor and the step method both have an argument `NAME` (radioactivedecay's `Inventory(contents, units).decay(decay_time, units)`), the step method's variable is named `<method>_NAME` (`decay_units`), bound with `to = "arg:NAME"`. To give both a value, pass the step method's by that name: `--start decay_units=…` goes to the step method, and then `--start units=…` to the constructor. With `--fmi 3`, a variable for an argument or result named `time`, which FMI 3 reserves, is named `model_time` and bound with `to` / `from`. A signature default that is a descriptor with a `default` (astropy's `Parameter(default=3.04, ...)`) is read as that default. `ARG.FIELD` names go wherever `ARG` goes; `init` stops with an error if `ARG`'s class can't be told from its default or annotation, or has no such field.
 
 | | Inferred from |
 |---|---|
@@ -583,7 +584,11 @@ A `--start` name that appears in both the constructor and the step method goes t
 Check afterwards:
 
 - **Start values:** arguments without a default get `0.0` unless you pass `--start`; make sure the model is valid there.
-- **States:** only inputs named like a previous value (`x_prev`, `x_old`, `last_x`, …) are detected. A model that takes its own previous result under another name (Madgwick's `updateIMU(q, ...)` returning the new `q`) needs a `[states]` entry: `q = { dimensions = [4], start = [1.0, 0.0, 0.0, 0.0], next = "return" }`.
+- **Objects without a default:** an argument annotated with a class (`atoms: Atoms`) is an object, not a number. With `--probe`, `init` builds `Atoms()` with no arguments and, if that works, makes it a constant (`atoms = { call = "ase:Atoms()" }`) with a comment saying so: replace it with `--const atoms=call:...` when the model needs a real one. Without `--probe` nothing is built: the line is written commented out. Classes that can't be built without arguments, and unannotated arguments, still need `--const`.
+- **States:** inputs named like a previous value (`x_prev`, `x_old`, `last_x`, …) are detected by name. With `--probe`, so is an input the step returns under its own name with a new value (`integrate(level, inflow)` returning `{"level": ...}`): it's fed back from `return:level`. A model that returns its previous result unnamed (Madgwick's `updateIMU(q, ...)` returning the new `q`) still needs a `[states]` entry: `q = { dimensions = [4], start = [1.0, 0.0, 0.0, 0.0], next = "return" }`.
+- **Tunable parameters:** with `--probe`, a parameter kept as an attribute of the object is changed on a copy of the model between two steps; if the results change, it's `variability = "tunable"` (with `attr` when it's passed by position). If they don't, it stays fixed with a note: with the start values used (a PID with no error), a tunable gain may not show. Random models are left undecided.
+- **Units:** a variable with no unit gets the one its numpydoc docstring states, in square brackets after the description (`rho : float` / `Density, [kg/m^3]`, as in fluids, ht, chemicals and thermo), with a comment. `[-]` and anything fmugen doesn't recognise as a unit are left out.
+- **Libraries that read their own source files:** if the model's libraries load their `.py` files by path while it's imported or probed (py-pde's `pde/backends/*/config.py`), the config says `--compile won't work`: a compiled FMU contains no `.py` files.
 - **Integer vs Real:** an `int` default (`setpoint=0`) gives an Integer. Write `0.0` for a Real.
 - **Units and descriptions:** add them; they can't be inferred.
 - **Outputs and locals:** remove the ones you don't need. Types come from annotations and what the code shows (`True`, comparisons, strings, arithmetic, the arguments or attributes returned); everything else is assumed Real, and `init` names those outputs in a warning. If none is found, `init` warns that there are no outputs, and `build` notes it too. Uncomment and complete the commented lines (`dimensions = [...]`, properties, `save_state`), or rerun with `--probe`.

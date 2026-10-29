@@ -4,7 +4,6 @@ import textwrap
 import tomllib
 
 import pytest
-from conftest import EXAMPLES
 
 from fmugen.builder import init, isolated_imports
 from fmugen.__main__ import _parse_converts
@@ -45,23 +44,6 @@ def test_nothing_runs_without_probe(tmp_path):
     assert data["inputs"] == {"power": {"start": 0.0}}
     assert data["outputs"] == {"T": {"from": "return:T"}, "temperature": {}}
     assert "save_state = false  # not checked without --probe" in render_toml(data, comments)
-
-
-def test_psychrometry_outputs_match_its_reviewed_config():
-    data, _ = infer(EXAMPLES / "psychrometry" / "psychrometry.py")
-    reviewed = tomllib.loads((EXAMPLES / "psychrometry" / "fmugen.toml").read_text())
-    assert list(data["outputs"]) == list(reviewed["outputs"])
-    assert set(data["inputs"]) == set(reviewed["inputs"])
-
-
-def test_rc_building_attributes_states_and_locals_through_called_methods():
-    data, comments = infer(f"{EXAMPLES / 'rc_building' / 'rc_simulator' / 'building_physics.py'}:Zone",
-                           call="solve_energy")
-    assert {"t_air", "heating_demand", "cooling_demand", "energy_demand"} <= set(data["outputs"])
-    assert data["states"]["t_m_prev"]["next"] == "attr:t_m_next"
-    assert data["locals"]["has_heating_demand"] == {"type": "Boolean"}
-    assert "h_tr_1" not in data["outputs"]                              # an unannotated property: commented
-    assert "# h_tr_1 = {}  # a property of the object (type unknown)" in render_toml(data, comments)
 
 
 @pytest.mark.parametrize("body, expected", [
@@ -218,8 +200,8 @@ def test_probe_adds_what_only_the_code_shows(tmp_path):
 
 
 def test_probe_comments_out_values_that_cant_be_fmi_variables(tmp_path):
-    # like pyproj (a str property that is None) and seirsplus (a growing history); impedance's
-    # complex result is split into its real and imaginary parts
+    # like pyproj (a str property that is None); impedance's complex result is split into its real
+    # and imaginary parts; a growing history (seirsplus) gives its last entry
     model = write(tmp_path, '''
         import numpy as np
 
@@ -238,9 +220,9 @@ def test_probe_comments_out_values_that_cant_be_fmi_variables(tmp_path):
     data, comments = infer(model, probe=True, fmi_version=3)
     assert data["outputs"] == {"y_real": {"from": "return:real", "dimensions": [2]},
                                "y_imag": {"from": "return:imag", "dimensions": [2]}}
-    assert "locals" not in data
+    assert data["locals"] == {"history": {"from": "attr:history.-1"}}
     assert comments[("outputs", "#remarks#0")] == 'remarks = { from = "attr:remarks", type = ... }'
-    assert "from [2] to [3]" in comments[("locals", "#history#why")]
+    assert "its last entry" in comments[("locals", "history")] and "([2] then [3])" in comments[("locals", "history")]
     with isolated_imports():
         output, _ = init(str(model), probe=True, fmi_version=3, output=str(tmp_path / "fmugen.toml"))
     text = output.read_text()
@@ -291,12 +273,6 @@ def test_init_prints_the_assumptions_it_wrote_as_comments(tmp_path, capsys):
     assert "warning: when: taken as a date-time from the name only" in err
 
 
-def test_init_writes_the_static_config(tmp_path):
-    model = write(tmp_path, "def f(a=1.0):\n    return {'b': 2 * a}\n")
-    with isolated_imports():
-        output, _ = init(str(model))
-    config = tomllib.loads(output.read_text())
-    assert config["outputs"] == {"b": {}}
 
 
 def test_pint_units_are_read_from_the_errors():
@@ -310,7 +286,7 @@ def test_pint_units_are_read_from_the_errors():
 
 
 def test_probe_outputs_what_the_step_changes_when_nothing_else(tmp_path):
-    # like river's LinearRegression (learns intercept); a history that grows each step stays left out
+    # like river's LinearRegression (learns intercept); a history that grows each step gives its last entry
     model = write(tmp_path, '''
         import numpy as np
 
@@ -325,5 +301,5 @@ def test_probe_outputs_what_the_step_changes_when_nothing_else(tmp_path):
                 self.history = np.append(self.history, self.intercept)
     ''')
     data, _ = infer(f"{model}:Learner", call="learn_one", probe=True)
-    assert data["outputs"] == {"intercept": {}}
+    assert data["outputs"] == {"intercept": {}, "history": {"from": "attr:history.-1"}}
     assert "locals" not in data

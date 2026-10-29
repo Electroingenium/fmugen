@@ -156,6 +156,8 @@ def unfit_outputs(comments):
 #: what `fmugen init` prints after the variable names). Read from the final comments, so a guess the
 #: probe later confirmed or replaced isn't reported.
 ASSUMPTIONS = (
+    ("(its annotation, with no arguments)", "objects built with no arguments from their annotation: give real "
+                                           "ones with --const if the model needs them"),
     ("no default in the code", "no default in the code: the start value is made up, check it"),
     ("no default: check the start value", "no default in the code: the start value is made up, check it"),
     ("Integer because the default is an int", "typed Integer because the default is an int; "
@@ -171,6 +173,8 @@ ASSUMPTIONS = (
     ("so a fixed value; to pass the simulation time", "named like a time but given by --start, so a fixed "
                                                      "value: add [time] NAME = ... to pass the simulation time"),
     ("the probe failed with lists", "passed as arrays of another kind, since the probe failed with lists"),
+    ("the model returns a new", "taken as states: the probe saw the model return a new value under the input's "
+                                "own name"),
     ("fed back from", "taken as states from their names (x_prev fed back from x / x_next)"),
     ("set its dimensions and uncomment", "arrays left commented out: set their dimensions and uncomment"),
     ("(type unknown): uncomment", "properties of unknown type left commented out: uncomment the numbers"),
@@ -202,7 +206,7 @@ def assumptions(comments):
                 notes.append(f"[{section}] {text}")
             continue
         name = str(name)
-        if name == "#requirements":
+        if name in ("#requirements", "#compile"):
             notes.append(f"[model] {text}")
             continue
         if name.count("#") > 1 or name == "#save_state":   # unfit outputs: reported on their own
@@ -297,6 +301,7 @@ def _assign_starts(init, method, starts):
     step method. Names neither declares go to whichever accepts ``**kwargs`` (method first).
     For a name both declare, ``<method>_NAME`` (the variable name init gives the method's one)
     goes to the method, and then NAME to the constructor: x0 and calculate_optimal_actuation_x0.
+    A ``--const`` NAME both declare always goes to the constructor.
 
     :param init: the constructor (or factory), or None.
     :type init: callable or None
@@ -308,7 +313,7 @@ def _assign_starts(init, method, starts):
     :rtype: tuple[dict, dict]
     """
     def params(fn):
-        """The parameters of ``fn`` from :func:`inspect.signature`, or ``{}`` without one.
+        """The parameters of ``fn`` from :func:`inspect.signature`; ``(*args)`` for a C built-in without one.
 
         :param fn: a callable, or None.
         :rtype: collections.abc.Mapping
@@ -316,7 +321,7 @@ def _assign_starts(init, method, starts):
         try:
             return inspect.signature(fn).parameters if fn is not None else {}
         except (TypeError, ValueError):
-            return {}
+            return NO_SIGNATURE_PARAMETERS
 
     init_p, call_p = params(init), params(method)
     init_starts, call_starts = {}, {}
@@ -333,6 +338,8 @@ def _assign_starts(init, method, starts):
             continue   # placed above
         if in_init and in_call and name in call_starts:
             target = init_starts   # the method's copy was given by its own name
+        elif in_init and in_call and isinstance(value, dict) and len(value) == 1 and {*value} <= {"call", "python"}:
+            target = init_starts   # a --const: NAME is the constructor's, <method>_NAME the method's
         elif in_init and in_call:
             target = init_starts if (in_init.default is in_init.empty and in_call.default is not in_call.empty) \
                 else call_starts
@@ -363,7 +370,10 @@ def class_called(cls, name):
     raw = inspect.getattr_static(cls, name, None) if cls is not None else None
     if not isinstance(raw, types.FunctionType):
         return False
-    params = list(inspect.signature(raw).parameters.values())
+    try:
+        params = list(inspect.signature(raw).parameters.values())
+    except (TypeError, ValueError):   # no readable signature: a normal method, as for C built-ins
+        return False
     if not params:
         return True
     first = params[0]
@@ -391,8 +401,43 @@ def _keywordless(fn):
     return hasattr(fn, "nin") and type(fn).__module__.split(".")[0] in ("numpy", "numba")
 
 
+def _given_constant(value):
+    """Whether a ``--start`` / ``--const`` value is a ``--const`` one: ``{"call": ...}`` or ``{"python": ...}``.
+
+    :param value: a value of the starts.
+    :rtype: bool
+    """
+    return isinstance(value, dict) and len(value) == 1 and ("call" in value or "python" in value)
+
+
+def _const_entry(value):
+    """How a ``--const`` value is written in the constants table.
+
+    A computed one as ``{call = ...}``; a literal as the plain TOML value when TOML has one (a string,
+    number, bool, or a list of them: ``model = "yolo11n.pt"``), else as ``{python = repr}``.
+
+    :param value: ``{"call": ...}`` or ``{"python": repr}``.
+    :type value: dict
+    :rtype: object
+    """
+    if "call" in value:
+        return dict(value)
+    literal = ast.literal_eval(value["python"])
+
+    def plain(v):
+        return isinstance(v, (str, bool, int, float)) or (isinstance(v, list) and all(plain(x) for x in v))
+
+    return literal if plain(literal) and not (isinstance(literal, float) and math.isnan(literal)) else dict(value)
+
+
+#: The parameters assumed for a callable without a signature (a C built-in): positional arguments only.
+NO_SIGNATURE_PARAMETERS = inspect.Signature([inspect.Parameter("args", inspect.Parameter.VAR_POSITIONAL)]).parameters
+
+
 def _only_varargs(fn, skip_self=True):
     """Whether ``fn`` declares no named arguments, only ``*args`` (and maybe ``**kwargs``).
+
+    A callable without a signature (a C built-in) counts: its arguments can only be given by position.
 
     :param fn: the callable.
     :param skip_self: ignore the first parameter (an unbound method's self).
@@ -402,7 +447,7 @@ def _only_varargs(fn, skip_self=True):
     try:
         params = list(inspect.signature(fn).parameters.values())[1 if skip_self else 0:]
     except (TypeError, ValueError):
-        return False
+        return True
     return any(p.kind is p.VAR_POSITIONAL for p in params) \
         and all(p.kind in (p.VAR_POSITIONAL, p.VAR_KEYWORD) for p in params)
 
@@ -410,7 +455,7 @@ def _only_varargs(fn, skip_self=True):
 # ---------------- shared ----------------
 
 def _arguments(fn, section, data, comments, skip_self=False, allow_time=True, constants_key="constants",
-               arrays=False, starts=None, positional=True, by_keyword=False):
+               arrays=False, starts=None, positional=True, by_keyword=False, probe=False):
     """Sort the arguments of ``fn`` into variables of ``section`` and time arguments.
 
     Reads the signature with :func:`inspect.signature`. Each parameter becomes, in order of
@@ -444,6 +489,9 @@ def _arguments(fn, section, data, comments, skip_self=False, allow_time=True, co
     :param by_keyword: give ``--start`` values for ``*args, **kwargs`` as keywords, not by position
         (the probe found the callable needs them so).
     :type by_keyword: bool
+    :param probe: whether ``--probe`` is in effect: an argument with no default whose annotation is
+        a class is then built with no arguments (:func:`_default_instance`).
+    :type probe: bool
     :raises InterfaceError: an array ``--start`` for FMI 2, or an unusable value for ``*args``.
     """
     variables = data.setdefault(section, {})
@@ -451,11 +499,15 @@ def _arguments(fn, section, data, comments, skip_self=False, allow_time=True, co
     starts = starts or {}
     try:
         params = list(inspect.signature(fn).parameters.values())
-    except (TypeError, ValueError):  # e.g. some C extensions
+    except (TypeError, ValueError):  # e.g. some C extensions: --start values go by position, as to *args
         comments.setdefault(NO_SIGNATURE, []).append(getattr(fn, "__qualname__", repr(fn)))
-        comments[(section, None)] = f"cannot inspect the signature of {getattr(fn, '__qualname__', fn)}; " \
-                                    "add the variables by hand (to = \"pos:N\" for positional arguments)"
-        params = []
+        comments.setdefault((section, None), (   # the probe's split between constructor and step says more
+            f"cannot inspect the signature of {getattr(fn, '__qualname__', fn)}: --start values are passed by "
+            "position, in the order given; add any others by hand (to = \"pos:N\")" if starts else
+            f"cannot inspect the signature of {getattr(fn, '__qualname__', fn)}; add the variables by hand "
+            "(to = \"pos:N\" for positional arguments), or give them with --start in order"))
+        params = list(NO_SIGNATURE_PARAMETERS.values())
+        skip_self = False
     if skip_self and params:
         params = params[1:]
     params = [_unwrap_descriptor(p) for p in params]
@@ -483,29 +535,36 @@ def _arguments(fn, section, data, comments, skip_self=False, allow_time=True, co
                 else f"taken as a date-time from its name {p.name!r} (not annotated): check it, or replace this "
                      "with an input; the epoch plus the simulation time")
             continue
-        if isinstance(starts.get(p.name), dict) and "call" in starts[p.name]:
-            data["model"].setdefault(constants_key, {})[p.name] = dict(starts[p.name])
+        if _given_constant(starts.get(p.name)):   # --const: a fixed value, not a variable
+            data["model"].setdefault(constants_key, {})[p.name] = _const_entry(starts[p.name])
             continue
         if p.name in starts and _split_items(p, starts[p.name], variables, section, comments, arrays):
             continue
         if p.name not in starts and _split_fields(fn, p, variables, section, comments, starts, arrays):
             continue
+        if p.name not in starts and p.default is p.empty and p.kind is not p.POSITIONAL_ONLY \
+                and _default_instance(fn, p, data, comments, constants_key, probe):
+            continue
         for name in starts:
             if name.startswith(f"{p.name}."):
                 _start_error(comments, name, f"cannot tell the class of {p.name} (no default and no dataclass, "
                                              "pydantic, attrs or namedtuple annotation) to build it from fields; "
-                                             f"give the whole argument instead, e.g. --start={p.name}=call:module:Class(...)")
+                                             f"give the whole argument instead, e.g. --const {p.name}=call:module:Class(...)")
         if p.name in starts and not arrays and isinstance(starts[p.name], (list, tuple, bytes)):
             raise InterfaceError(f"--start {p.name}: arrays and bytes need --fmi 3 (FMI 2 has only scalar variables)")
         has_default = p.default is not p.empty or p.name in starts
         default = starts.get(p.name, None if p.default is p.empty else p.default)
         before = len(variables)
+        if not has_default and arrays and probe:   # tried by the probe if 1.0 fails (gsw's array_like takes numbers)
+            shape = _made_up_array(fn, p)
+            if shape:
+                comments[_shape_key(section, p.name)] = shape
         if not has_default or isinstance(default, SCALARS):
             info = _type_info(default, p.annotation)
             if p.name in starts:
                 comments.setdefault((section, p.name), "start from --start")
             elif not has_default:
-                comments[(section, p.name)] = "no default in the code: check the start value"
+                comments[(section, p.name)] = MADE_UP
             elif type(default) is int and static.unwrap_optional(p.annotation) is not int:
                 comments[(section, p.name)] = "Integer because the default is an int; write a float start for Real"
             variables[p.name] = info
@@ -518,8 +577,9 @@ def _arguments(fn, section, data, comments, skip_self=False, allow_time=True, co
             variables[p.name] = {"type": "Binary", "start": default.hex()}
         elif arrays and _array_info(default):
             variables[p.name] = _array_info(default, with_start=True)
-        elif p.name in starts and _constant(default):   # --start with a value that isn't an FMI one
-            data["model"].setdefault(constants_key, {})[p.name] = _constant(default)
+        elif p.name in starts:   # --start with a value that can't be an FMU variable
+            raise InterfaceError(f"--start {p.name}: {default!r} can't be an FMU variable (a number, string, bool "
+                                 f"or array); give a fixed value with --const {p.name}=...")
         else:
             comments[("model", f"{constants_key}.{p.name}")] = _constant(default)
         if len(variables) > before and "dimensions" in variables[p.name]:
@@ -541,15 +601,15 @@ def _arguments(fn, section, data, comments, skip_self=False, allow_time=True, co
         and all(p.kind in (p.VAR_POSITIONAL, p.VAR_KEYWORD) for p in params)
     # by position: for a constructor, for computed constants, and when there's no **kwargs to take them
     by_position = only_varargs and not by_keyword and (section == "parameters" or not any(p.kind is p.VAR_KEYWORD for p in params)
-                                    or any(isinstance(starts[n], dict) and "call" in starts[n] for n in extra))
+                                    or any(_given_constant(starts[n]) for n in extra))
     for name in extra:
-        computed = isinstance(starts[name], dict) and "call" in starts[name]   # call:...: a constant
+        computed = _given_constant(starts[name])   # --const: a constant
         if by_position:
             # A callable that only declares (*args, **kwargs), e.g. StateSpace(A, B, C, D):
             # the --start values go by position, in the order given. Constants are named "0", "1", ...
             if computed:
-                data["model"].setdefault(constants_key, {})[str(position)] = dict(starts[name])
-                comments[("model", f"{constants_key}.{position}")] = f"--start {name}, passed by position to *args"
+                data["model"].setdefault(constants_key, {})[str(position)] = _const_entry(starts[name])
+                comments[("model", f"{constants_key}.{position}")] = f"--const {name}, passed by position to *args"
                 comments.setdefault(POSITIONAL_STARTS, {})[name] = position
             else:
                 variables[name] = _extra_info(name, starts[name], arrays)
@@ -558,10 +618,8 @@ def _arguments(fn, section, data, comments, skip_self=False, allow_time=True, co
             position += 1
         elif any(p.kind is p.VAR_KEYWORD for p in params):  # **kwargs: --start values become keyword arguments
             if computed:
-                data["model"].setdefault(constants_key, {})[name] = dict(starts[name])
-            elif isinstance(starts[name], dict):   # a dict (MOMENT's model_kwargs={...}): a fixed keyword
-                data["model"].setdefault(constants_key, {})[name] = {"python": repr(starts[name])}
-                comments[("model", f"{constants_key}.{name}")] = "--start, passed through **kwargs"
+                data["model"].setdefault(constants_key, {})[name] = _const_entry(starts[name])
+                comments[("model", f"{constants_key}.{name}")] = "--const, passed through **kwargs"
             else:
                 variables[name] = _extra_info(name, starts[name], arrays)
                 comments[(section, name)] = "start from --start (passed through **kwargs)"
@@ -603,7 +661,8 @@ def _extra_info(name, value, arrays):
         return _type_info(value)
     if arrays and _array_info(value):
         return _array_info(value, with_start=True)
-    raise InterfaceError(f"--start {name}: {value!r} is not an FMI value")
+    raise InterfaceError(f"--start {name}: {value!r} can't be an FMU variable (a number, string, bool or array); "
+                         f"give a fixed value with --const {name}=...")
 
 
 #: Annotation text -> how an array argument of that type is passed (``convert``, or ``numpy``).
@@ -777,10 +836,93 @@ def _split_fields(fn, p, variables, section, comments, starts, arrays):
     return True
 
 
+#: Annotations that aren't objects to build: FMI values, containers, arrays.
+NOT_BUILT = (bool, int, float, complex, str, bytes, bytearray, list, tuple, dict, set, frozenset, type(None))
+
+
+def _default_instance(fn, p, data, comments, constants_key, probe):
+    """A constant ``{ call = "module:Class()" }`` for an argument with no default whose annotation is a class.
+
+    For model inputs that are objects the library builds (ase's ``atoms: Atoms``): with ``--probe``,
+    the class is built once with no arguments, and the constant is kept if that works, with a comment
+    saying it's a default instance to replace with ``--const``. Without ``--probe`` nothing is called,
+    so it's written commented out, as a suggestion.
+
+    :param fn: the function (for its type hints).
+    :param p: the parameter (no default, no ``--start``).
+    :type p: inspect.Parameter
+    :param data: the config being inferred; updated in place.
+    :type data: dict
+    :param comments: ``(section, key) -> text`` for :func:`render_toml`; updated in place.
+    :type comments: dict
+    :param constants_key: ``"constants"`` or ``"call_constants"``.
+    :type constants_key: str
+    :param probe: whether ``--probe`` is in effect.
+    :type probe: bool
+    :return: whether the argument was handled.
+    :rtype: bool
+    """
+    try:
+        cls = typing.get_type_hints(fn).get(p.name)
+    except Exception:
+        cls = p.annotation if isinstance(p.annotation, type) else None
+    cls = static.unwrap_optional(cls)
+    if not isinstance(cls, type) or issubclass(cls, NOT_BUILT) or cls.__module__ in ("builtins", "typing") \
+            or "<" in cls.__qualname__ or cls.__name__ in ("ndarray", "Tensor", "Array"):   # arrays: a --start
+        return False
+    ref = f"{cls.__module__}:{cls.__qualname__}()"
+    if not probe:   # nothing is called: a suggestion, commented out
+        comments[("model", f"{constants_key}.{p.name}")] = {"call": ref}
+        comments[("constant", f"{constants_key}.{p.name}")] = (
+            f"no default in the code: uncomment to use {cls.__name__}() (its annotation, with no arguments), "
+            f"or give one with --const {p.name}=call:...; init --probe checks that it builds")
+        return True
+    try:
+        cls()
+    except Exception:
+        return False
+    data["model"].setdefault(constants_key, {})[p.name] = {"call": ref}
+    comments[("constant", f"{constants_key}.{p.name}")] = (
+        f"no default in the code: {cls.__name__}() (its annotation, with no arguments); "
+        f"give your own with --const {p.name}=call:...")
+    return True
+
+
+#: The comment of an argument with no default (and no --start): its start is made up.
+MADE_UP = "no default in the code: check the start value"
+def _shape_key(section, name):
+    """The comments key (not rendered) of the shape of a made-up argument its annotation or docstring
+    says is an array, for the probe to try when the call fails with 1.0."""
+    return ("init", f"made up shape {section}.{name}")
+
+
+def _made_up_array(fn, p):
+    """The shape of an argument with no default that is an array by its annotation or numpydoc docstring.
+
+    The docstring's shape, else a 1-D array of :data:`fmugen.interface.MADE_UP_SIZE` elements.
+
+    :param fn: the function the argument is of.
+    :param p: the parameter.
+    :type p: inspect.Parameter
+    :return: the shape, or None when it isn't an array.
+    :rtype: list[int] or None
+    """
+    from fmugen.interface import MADE_UP_SIZE, docstring_arrays
+    try:
+        documented = docstring_arrays(fn)
+    except Exception:   # an odd docstring: no shape from it
+        documented = {}
+    if p.name not in documented and not static._is_array_hint(static.unwrap_optional(p.annotation)
+                                                            if p.annotation is not p.empty else None):
+        return None
+    return documented.get(p.name) or [MADE_UP_SIZE]
+
+
 def _type_info(value, annotation=inspect.Parameter.empty):
     """The ``start`` of a scalar variable from its default and annotation.
 
-    Without a default, the annotation's zero (float by default); an int default for a float
+    Without a default, the annotation's one (float by default; ``False`` and ``""`` for bool and str):
+    one, not zero, as models divide by it or check it's positive; an int default for a float
     annotation becomes a float.
 
     :param value: the default, or None.
@@ -789,7 +931,7 @@ def _type_info(value, annotation=inspect.Parameter.empty):
     """
     annotation = static.unwrap_optional(annotation)
     if value is None:
-        hint = {float: 0.0, int: 0, bool: False, str: ""}.get(annotation, 0.0)
+        hint = {float: 1.0, int: 1, bool: False, str: ""}.get(annotation, 1.0)
         return {"start": hint}
     if isinstance(value, int) and not isinstance(value, bool) and annotation is float:
         return {"start": float(value)}
@@ -1080,6 +1222,8 @@ def _same(a, b):
     :rtype: bool
     """
     try:
+        if type(a) is type(b) and type(a).__module__.split(".")[0] == "pandas" and hasattr(a, "equals"):
+            return bool(a.equals(b))   # tables: == compares element-wise
         if hasattr(a, "tolist"):
             a = a.tolist()
         if hasattr(b, "tolist"):

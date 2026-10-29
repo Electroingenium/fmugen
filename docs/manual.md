@@ -93,7 +93,7 @@ Imports the model, reads its signatures and **its source code**, and writes a co
 
 ```
 fmugen init MODEL [-o OUTPUT] [--call METHOD] [--fmi {2,3}]
-                  [--start NAME=VALUE ...] [--setup CALL ...] [--kind function] [--create CLASSMETHOD]
+                  [--start NAME=VALUE ...] [--const NAME=VALUE ...] [--setup CALL ...] [--kind function] [--create CLASSMETHOD]
                   [--probe] [--convert NAME=module:function ...] [--force]
 ```
 
@@ -101,9 +101,10 @@ fmugen init MODEL [-o OUTPUT] [--call METHOD] [--fmi {2,3}]
 |---|---|---|
 | `MODEL` | required | A [model target](#model-targets): `model.py`, `model.py:Name` or `package.module:Name`. |
 | `-o`, `--output PATH` | `fmugen.toml` next to the model (current directory for an installed module) | Where to write the config; missing folders are created. `-o -` prints it instead. A model file must be inside the config's folder. |
-| `--call METHOD` | `step`, `do_step`, `update`, `__call__`, or the only public method | Classes: the method run on each step. |
+| `--call METHOD` | `step`, `do_step`, `update`, `__call__`, the method the `--start` names fit, or the only public method; when still unclear, `init` asks in a terminal (candidates numbered, best first; Enter takes the first), and otherwise picks the first and warns with the candidates | Classes: the method run on each step. |
 | `--fmi {2,3}` | none (FMI 2) | Writes `fmi_version` into the config. With `3`, list/tuple/numpy values are inferred as arrays, `bytes` as Binary and numpy `float32` as Float32. |
-| `--start NAME=VALUE` | none | Start value (and, with `--probe`, the value it is called with) for an argument; repeatable. `VALUE` is a Python literal (`1e5`, `"Water"`, `[1.0, 0.0]`); a bare word is taken as a string. `true`/`false` are booleans. A tuple or dict value is split into one variable per item. `call:module:function(args)` makes a [computed constant](config.md#modelconstants-and-modelcall_constants) instead of a variable (`call:module:attr` without parentheses passes the object itself, e.g. a function). Use it for arguments without a default, or whose default breaks the model. |
+| `--start NAME=VALUE` | none | Start value of an argument that becomes an FMU variable (and, with `--probe`, the value it is called with); repeatable. `VALUE` is a Python literal (`1e5`, `"Water"`, `[1.0, 0.0]`); a bare word is taken as a string. `true`/`false` are booleans. A tuple or dict value is split into one variable per item. Use it for arguments without a default, or whose default breaks the model. A value that can't be an FMU variable (a `call:` value, a dict for `**kwargs`, None) is refused: give it with `--const`. |
+| `--const NAME=VALUE` | none | Fixed value of an argument, not an FMU variable: written to [`[model.constants]`](config.md#modelconstants-and-modelcall_constants) (or `call_constants` for the step method), for what only the model's user knows: a file, a model name, a mode (`--const model=yolo11n.pt`, `--const task=sentiment-analysis`). `VALUE` is read as for `--start`; `call:module:function(args)` is computed when the FMU initializes (`call:module:attr` without parentheses passes the object itself, e.g. a function), for objects: `--const "net=call:pandapower.networks:example_simple()"`. A file it names next to the config is copied into the FMU, as for `--start`. Repeatable; a name can't be given to both. `--start` and `--const` values keep the order they're given in: for a callable without a signature it's the order of its positional arguments (`--const model=… --const data=… --start q=…` for pinocchio's `rnea(model, data, q, …)`). |
 | `--setup CALL` | none | A [setup call](config.md#model), written to `[model] setup`; with `--probe` it is also run before the probe. Repeatable. E.g. `"psychrolib:SetUnitSystem(psychrolib.SI)"`, `reset`. |
 | `--kind function` | none | Treat a class whose constructor does the work as a function called on every step (writes `[model] kind`). |
 | `--create CLASSMETHOD` | none | Classes built by a factory: the classmethod that creates the object, e.g. `from_pretrained`. Its arguments become parameters (writes `[model] create`). |
@@ -118,7 +119,7 @@ What `init` infers from the code, what only `--probe` finds, where `--start` val
 **Examples:**
 
 ```bash
-fmugen init examples/psychrometry/psychrometry.py -o -
+fmugen init simple_pid:PID -o -
 ```
 
 ```bash
@@ -135,6 +136,10 @@ fmugen init psychrolib:GetHumRatioFromRelHum --setup "psychrolib:SetUnitSystem(p
 
 ```bash
 fmugen init filterpy.kalman:KalmanFilter --call predict --fmi 3 --start dim_x=2 --start dim_z=1 -o -
+```
+
+```bash
+fmugen init ultralytics:YOLO --call predict --fmi 3 --probe --const model=yolo11n.pt --start source=bus.jpg -o -
 ```
 
 ### `fmugen build`
@@ -173,7 +178,7 @@ fmugen build MODEL -o OUTPUT [--fmi {2,3}] [--format {fmu,folder}]
 On success it prints the FMU path, the FMI version, and the number of variables per causality (and clocks):
 
 ```
-Built C:\…\out\rc_building.fmu (FMI 2.0; 12 parameters, 3 calculatedParameters, 3 inputs, 4 locals, 5 outputs)
+Built C:\…\out\pid.fmu (FMI 2.0; 9 parameters, 1 inputs, 1 outputs)
 ```
 
 It may also print `note:` lines, e.g. when `[events]` is ignored for FMI 2.
@@ -182,32 +187,36 @@ It may also print `note:` lines, e.g. when `[events]` is ignored for FMI 2.
 
 **Examples:**
 
+With `pid/fmugen.toml` written by `fmugen init simple_pid:PID -o pid/fmugen.toml` (the `pid` folder must exist):
+
 ```bash
-fmugen build examples/psychrometry -o out/psychrometry.fmu
+fmugen build pid -o out/pid.fmu
 ```
 
 ```bash
-fmugen build examples/simple_pid -o out/simple_pid.fmu
+fmugen build pid -o out/pid_fmi3.fmu --fmi 3
 ```
 
 ```bash
-fmugen build examples/rc_building -o out/rc_building_fmi3.fmu --fmi 3
+fmugen build pid -o out/pid_folder --format folder
 ```
 
+Straight from an installed model, with the config inferred in memory:
+
 ```bash
-fmugen build examples/psychrometry -o out/psychrometry_folder --format folder
+fmugen build fluids.core:Reynolds -o out/reynolds.fmu
 ```
 
 For another machine with Python (offline install from the FMU):
 
 ```bash
-fmugen build examples/simple_pid -o out/simple_pid_vendored.fmu --vendor
+fmugen build pid -o out/pid_vendored.fmu --vendor
 ```
 
 For another machine without Python, with no source code in the FMU:
 
 ```bash
-fmugen build examples/simple_pid -o out/simple_pid_compiled.fmu --compile pyinstaller
+fmugen build pid -o out/pid_compiled.fmu --compile pyinstaller
 ```
 
 ### Model targets
@@ -274,6 +283,7 @@ Every section and key, with defaults, value forms, validation rules and a comple
 | Package a plain function | `fmugen init model.py` → `build` |
 | Use a class with a step method | `--call METHOD` (or `[model] call`) |
 | Give arguments without defaults sensible values | `init --start NAME=VALUE` / `start = …` |
+| Pass a file, a model name or an object that isn't an FMU variable | `init --const NAME=VALUE` (`call:…` for an object) / `[model.constants]` |
 | Call a library setup function first | `[model] setup = ["module:function(args)"]` |
 | Reset a gym-style environment before stepping | `setup = ["reset"]` |
 | Feed a result back into the next step | `[states] x_prev = { next = "return:x" }` |
@@ -301,10 +311,10 @@ Every section and key, with defaults, value forms, validation rules and a comple
 | `probe call failed (…)` in the config written by `init --probe` | The model raised an error at the start values (division by zero, `log(0)`, out of range…). | Rerun `init` with realistic `--start` values. |
 | `… must be called first` / `has not been defined` (raised by the model) | The library needs setup. | `[model] setup` / `init --setup`. |
 | `--start NAME: arrays and bytes need --fmi 3` | An array or Binary value in an FMI 2 build. | Use `--fmi 3`. |
-| `--start names that are not arguments of the model` | A typo, or the argument isn't in the inspected signature. | Check the names; for C extensions, write the config by hand. |
+| `--start names that are not arguments of the model` | A typo, or the argument isn't in the inspected signature. | Check the names. (For C extensions without a signature, `--start` values are passed by position instead.) |
 | `the config defines no FMU variables` | Nothing could be inferred (e.g. `**kwargs` only, or an uninspectable signature). | Add `[inputs]` and `[outputs]`, or use `--start`, `--kind function`. |
 | `requires FMI 3 (…)` | FMI 3-only feature in an FMI 2 build. | `fmi_version = 3` or `build --fmi 3`. |
-| `cannot inspect the signature of …` (comment in the generated config) | A C extension without signature information. | Hand-written variables with `to = "pos:N"`. |
+| `cannot inspect the signature of …` (comment in the generated config) | A C extension without signature information. | Give the arguments with `--start`, in order (they are passed by position), or write variables by hand with `to = "pos:N"`. |
 | `unknown key(s) [...]` | A typo in a key. | The message lists the allowed keys. |
 | `duplicate variable or clock names` | The same name in two sections, or a variable named like a clock. | Rename one; bind it with `to`/`from`. |
 | `save_state = false` or `save_state = [...]` written by `init`, with a comment | The object holds something that can't be pickled: an ONNX session, a file, a socket, a generator. | Fine for most uses. With a list, check that the attributes named as not saved don't change during a simulation (a session or device handle doesn't; a generator does): if they do, set `save_state = false`. |

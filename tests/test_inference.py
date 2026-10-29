@@ -4,7 +4,6 @@ import textwrap
 import tomllib
 
 import pytest
-from conftest import EXAMPLES
 
 from fmugen.builder import init, isolated_imports
 from fmugen.config import Config, InterfaceError, load_config, parse_call
@@ -18,33 +17,16 @@ def infer(target, **kwargs):
         return infer_config(target, **kwargs)
 
 
-def test_function_returning_a_dict():
-    data, _ = infer(EXAMPLES / "psychrometry" / "psychrometry.py")
-    assert data["model"]["entry"] == "psychrometry.py:compute_balances_simplified"
-    assert len(data["inputs"]) == 18
-    assert list(data["outputs"]) == ["mass_balance", "energy_balance", "mdot_air_in", "mdot_air_out", "Q_in", "Q_out"]
-
-
 def test_installed_class_with_time_argument():
     data, comments = infer("simple_pid:PID")
     assert data["time"] == {"dt": "step_size"}
-    assert data["inputs"] == {"input_": {"start": 0.0}}
+    assert data["inputs"] == {"input_": {"start": 1.0}}
     # components and tunings are 3-tuples: arrays, one scalar per element in FMI 2
     assert data["outputs"] == {"y": {"from": "return"}, "components": {"dimensions": [3]},
                                "tunings": {"dimensions": [3]}}
-    assert data["parameters"]["Kp"] == {"start": 1.0}
+    assert data["parameters"]["Kp"] == {"start": 1.0, "variability": "tunable"}   # input_ 1.0: Kp changes y
     assert "tunable" in comments[("parameters", "Kp")]
     assert comments[("model", "constants.output_limits")] == {"python": "(None, None)"}
-
-
-def test_class_with_attributes_state_and_sources():
-    data, _ = infer(EXAMPLES / "rc_building" / "rc_simulator" / "building_physics.py:Zone",
-                    call="solve_energy", config_dir=EXAMPLES / "rc_building")
-    assert data["model"]["entry"] == "rc_simulator/building_physics.py:Zone"
-    assert data["model"]["sources"] == ["rc_simulator"]
-    assert data["states"]["t_m_prev"]["next"] == "attr:t_m_next"
-    assert "t_air" in data["outputs"] and "heating_demand" in data["outputs"]
-    assert data["parameters"]["max_heating_energy_per_floor_area"] == {"start": float("inf")}
 
 
 def test_rendered_config_round_trips(tmp_path):
@@ -71,13 +53,6 @@ def test_rendered_config_round_trips(tmp_path):
 
     with pytest.raises(FileExistsError):
         init(tmp_path / "tank.py")
-
-
-def test_config_of_a_model_file_must_be_next_to_it_or_above(tmp_path):
-    model = EXAMPLES / "psychrometry" / "psychrometry.py"
-    with pytest.raises(InterfaceError, match="must be in the folder of psychrometry.py or a folder above"):
-        init(model, tmp_path / "fmugen.toml")
-    assert not (tmp_path / "fmugen.toml").exists()
 
 
 def test_ambiguous_module_needs_a_name(tmp_path):
@@ -179,7 +154,7 @@ def test_start_setup_kind_and_errors(tmp_path):
     data, _ = infer(f"{tmp_path / 'gh.py'}:Filter", starts={"x": 0.0, "g": 0.5, "z": 1.0},
                     setup=["gh:start"])
     assert data["model"]["setup"] == ["gh:start"]
-    assert data["parameters"]["g"] == {"start": 0.5} and data["inputs"]["z"] == {"start": 1.0}
+    assert data["parameters"]["g"] == {"start": 0.5, "variability": "tunable"} and data["inputs"]["z"] == {"start": 1.0}
     assert "g" not in data["inputs"] and data["outputs"] == {"y": {"from": "return"}}
 
     # a class whose constructor does the work, called like a function; inputs aren't echoed as outputs
@@ -203,9 +178,9 @@ def test_optional_annotation_keeps_the_type(tmp_path, annotation):
             return 1.0
     """))
     data, _ = infer(tmp_path / "opt.py", probe=False)
-    assert data["inputs"]["n"]["start"] == 0 and type(data["inputs"]["n"]["start"]) is int
+    assert data["inputs"]["n"]["start"] == 1 and type(data["inputs"]["n"]["start"]) is int
     assert data["inputs"]["flag"]["start"] is False
-    assert data["inputs"]["x"]["start"] == 0.0
+    assert data["inputs"]["x"]["start"] == 1.0
 
 
 def test_optional_from_typing_objects():
@@ -405,7 +380,6 @@ def test_pydantic_and_attrs_arguments(tmp_path, library):
     assert data["outputs"] == {"y": {"from": "return"}}
 
 
-
 def test_int_results_are_real_with_a_note(tmp_path):
     (tmp_path / "m.py").write_text(textwrap.dedent("""
         def f(x: float = 1.0):
@@ -503,7 +477,7 @@ def test_names_build_would_reject_are_renamed(tmp_path):
     assert data["inputs"]["decay_units"] == {"start": "y", "to": "arg:units"}
     # a descriptor default stands for its `default`; it isn't split into fields
     data, _ = infer(f"{tmp_path / 'names.py'}:Cosmology", call="age", starts={"H0": 70.0, "z": 1.0})
-    assert data["parameters"] == {"H0": {"start": 70.0}, "Neff": {"start": 3.04}}
+    assert data["parameters"] == {"H0": {"start": 70.0, "variability": "tunable"}, "Neff": {"start": 3.04}}
     for target, kwargs in ((f"{tmp_path / 'names.py'}:source", {"starts": {"time": 10.0}, "fmi_version": 3}),
                            (f"{tmp_path / 'names.py'}:Inventory", {"call": "decay",
                                                                    "starts": {"decay_time": 1.0, "units": "y"}})):
@@ -581,8 +555,11 @@ def test_a_keyword_named_like_the_kwargs_parameter(tmp_path):
         def load(path="x", **model_kwargs):
             return {"y": float(len(model_kwargs.get("model_kwargs", {})))}
     '''))
-    data, _ = infer(f"{tmp_path / 'kw.py'}:load", starts={"model_kwargs": {"task_name": "r"}})
+    # a dict can't be an FMU variable: it's a --const, passed through **kwargs
+    data, _ = infer(f"{tmp_path / 'kw.py'}:load", starts={"model_kwargs": {"python": "{'task_name': 'r'}"}})
     assert data["model"]["constants"] == {"model_kwargs": {"python": "{'task_name': 'r'}"}}
+    with pytest.raises(InterfaceError, match="give a fixed value with --const model_kwargs"):
+        infer(f"{tmp_path / 'kw.py'}:load", starts={"model_kwargs": {"task_name": "r"}})
 
 
 def test_fmi3_integer_starts_beyond_int32_get_64_bit_types(tmp_path):

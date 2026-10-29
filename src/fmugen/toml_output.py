@@ -46,8 +46,9 @@ def render_toml(data, comments=None):
             lines.append(_with_comment(f"{_key(key)} = {_value(value)}", comments.get(("model", key))))
     if "save_state" not in data["model"] and ("model", "#save_state") in comments:
         lines.append(f"# {comments[('model', '#save_state')]}")
-    if ("model", "#requirements") in comments:
-        lines.append(f"# {comments[('model', '#requirements')]}")
+    for note in ("#requirements", "#compile"):
+        if ("model", note) in comments:
+            lines.append(f"# {comments[('model', note)]}")
     for table in ("constants", "call_constants"):
         real = data["model"].get(table, {})
         examples = [
@@ -62,10 +63,13 @@ def render_toml(data, comments=None):
         if real or examples:
             lines.append(f"[model.{table}]" if real else f"# [model.{table}]")
         for name, value in real.items():
-            lines.append(_with_comment(f"{_key(name)} = {_value(value)}", "computed when the FMU initializes"
-                                       if isinstance(value, dict) and "call" in value else None))
+            note = comments.get(("constant", f"{table}.{name}"))   # why init wrote it (a default instance)
+            lines.append(_with_comment(f"{_key(name)} = {_value(value)}", note or (
+                "computed when the FMU initializes" if isinstance(value, dict) and "call" in value else None)))
         for name, example in examples:
-            lines.append(f"# {_key(name)} = {_value(example)}" if example else f"# {_key(name)} = ...")
+            line = f"# {_key(name)} = {_value(example)}" if example else f"# {_key(name)} = ..."
+            note = comments.get(("constant", f"{table}.{name}"))   # an argument with no default (a suggestion)
+            lines.append(f"{line}  # {note}" if note else line)
 
     for section in SECTION_ORDER:
         table = data.get(section)

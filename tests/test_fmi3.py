@@ -4,14 +4,12 @@ import textwrap
 from ctypes import c_double, c_int, c_uint64
 
 import pytest
-from conftest import EXAMPLES
 from fmpy import read_model_description, simulate_fmu
 from fmpy.fmi3 import FMU3Slave, fmi3ValueReference
 from fmpy.validation import validate_fmu
 
 from fmugen.builder import build
 from fmugen.config import InterfaceError
-from fmugen.templates.fmugen_runtime import Status
 from fmugen.templates.fmugen_runtime import Status
 
 OK, WARNING, ERROR = Status.ok, Status.warning, Status.error
@@ -97,56 +95,6 @@ def test_structural_parameter_resizes_arrays(tmp_path, make_fmu, adapter):
     assert fmu.engine.get_values([fmu.vr["window"]]) == (OK, [1.0, 0.0, 0.0, 0.0])
 
 
-def test_periodic_clock_runs_code_only_when_ticked(make_fmu, adapter):
-    fmu = adapter(make_fmu(EXAMPLES / "sampled_pid"), fmi=3, event_mode_used=True)
-    fmu.initialize()                                           # -> event mode
-    assert fmu.fmi3GetIntervalDecimal([fmu.vr["sample"]]) == (OK, [0.1], [2])
-    assert fmu.fmi3GetIntervalDecimal([fmu.vr["sample"]]) == (OK, [0.1], [1])   # unchanged since
-    assert fmu.fmi3GetIntervalFraction([fmu.vr["sample"]]) == (OK, [1], [10], [1])
-
-    assert fmu.fmi3SetClock([fmu.vr["sample"]], [True]) == OK
-    assert fmu.fmi3UpdateDiscreteStates()[0] == OK
-    assert fmu.get("output") == pytest.approx(2.0 + 0.5 * 0.1)   # dt = interval on the first tick
-    assert fmu.fmi3EnterStepMode() == OK
-    assert fmu.fmi3GetClock([fmu.vr["sample"]]) == (OK, [False])   # deactivated in step mode
-
-    for t in (0.0, 0.05):                                     # no tick: the PID doesn't run
-        assert fmu.fmi3DoStep(t, 0.05, False)[0] == OK
-    assert fmu.get("output") == pytest.approx(2.05)
-    assert fmu.fmi3EnterEventMode() == OK
-    assert fmu.fmi3SetClock([fmu.vr["sample"]], [True]) == OK
-    assert fmu.fmi3UpdateDiscreteStates()[0] == OK
-    assert fmu.get("output") == pytest.approx(2.0 + 0.5 * 0.2)   # dt = time since the last tick
-
-    status, saved = fmu.fmi3SerializeFmuState()
-    assert status == OK
-    assert fmu.fmi3EnterStepMode() == OK
-    assert fmu.fmi3DoStep(0.1, 0.1, False)[0] == OK
-    assert fmu.fmi3DeserializeFmuState(saved) == OK            # rollback restores the clock state too
-    assert fmu.engine.clock_active["sample"] is True and fmu.engine.mode == "event"
-
-
-def test_triggered_clock_with_array_input(make_fmu, adapter):
-    fmu = adapter(make_fmu(EXAMPLES / "kalman"), fmi=3, event_mode_used=True)
-    fmu.initialize()
-    assert fmu.fmi3GetIntervalDecimal([fmu.vr["measurement"]]) == (OK, [0.0], [0])   # triggered: not known
-    assert fmu.fmi3EnterStepMode() == OK
-    t = 0.0
-    for k in range(30):                                        # object moving at 1 m/s
-        assert fmu.fmi3DoStep(t, 0.1, False)[0] == OK
-        t += 0.1
-        if k % 3 == 2:                                         # a measurement every 0.3 s
-            assert fmu.fmi3EnterEventMode() == OK
-            assert fmu.set("z", [t]) == OK
-            assert fmu.fmi3SetClock([fmu.vr["measurement"]], [True]) == OK
-            assert fmu.fmi3UpdateDiscreteStates()[0] == OK, fmu.logs
-            assert fmu.fmi3EnterStepMode() == OK
-    position, velocity = fmu.engine.get_values([fmu.vr["x"]])[1]
-    assert position == pytest.approx(t, abs=0.1)
-    assert velocity == pytest.approx(1.0, abs=0.15)
-    assert fmu.fmi3DoStep(t, 0.2, False)[0] == ERROR           # fixed step size
-
-
 def test_output_clock_and_terminate(tmp_path, make_fmu, adapter):
     write(tmp_path, '''
         class Tank:
@@ -229,85 +177,6 @@ def test_fmi3_only_features_are_rejected_for_fmi2(tmp_path):
 
 # ---------------- through UniFMU ----------------
 
-@pytest.fixture(scope="module")
-def fmus(tmp_path_factory):
-    out = tmp_path_factory.mktemp("fmus3")
-    return {name: build(EXAMPLES / name, out / f"{name}.fmu", fmi_version=3)[0]
-            for name in ("sampled_pid", "kalman", "simple_pid")}
-
-
-@pytest.fixture
-def slave(fmus, tmp_path):
-    instances = []
-
-    def open_(name, event_mode_used=True):
-        unzipdir = tmp_path / name
-        shutil.unpack_archive(fmus[name], unzipdir, "zip")
-        md = read_model_description(str(unzipdir))
-        fmu = FMU3Slave(guid=md.guid, unzipDirectory=str(unzipdir), modelIdentifier="unifmu", instanceName=name)
-        fmu.instantiate(eventModeUsed=event_mode_used)
-        instances.append(fmu)
-        return fmu, {v.name: v.valueReference for v in md.modelVariables}
-    yield open_
-    for fmu in instances:
-        fmu.freeInstance()
-
-
-@pytest.mark.fmu
-def test_clocks_intervals_and_state_through_unifmu(slave):
-    fmu, vr = slave("sampled_pid")
-    clock = (fmi3ValueReference * 1)(vr["sample"])
-    fmu.enterInitializationMode(startTime=0.0)
-    fmu.setFloat64([vr["Kp"]], [4.0])
-    fmu.exitInitializationMode()                               # -> event mode
-
-    intervals, qualifiers = (c_double * 1)(), (c_int * 1)()
-    fmu.getIntervalDecimal(clock, intervals, qualifiers)
-    assert (intervals[0], qualifiers[0]) == (0.1, 2)
-    counters, resolutions = (c_uint64 * 1)(), (c_uint64 * 1)()
-    fmu.getIntervalFraction(clock, counters, resolutions, qualifiers)
-    assert (counters[0], resolutions[0]) == (1, 10)
-    shifts = (c_double * 1)()
-    fmu.getShiftDecimal(clock, shifts)
-    assert shifts[0] == 0.0
-    fmu.getShiftFraction(clock, counters, resolutions)
-    assert (counters[0], resolutions[0]) == (0, 1)
-
-    fmu.setClock([vr["sample"]], [True])
-    fmu.setFloat64([vr["measurement"]], [0.5])
-    fmu.updateDiscreteStates()
-    assert fmu.getFloat64([vr["output"]])[0] == pytest.approx(4.0 * 0.5 + 0.5 * 0.5 * 0.1)
-    fmu.enterStepMode()
-    state = fmu.getFMUState()
-    fmu.doStep(0.0, 0.05)
-    fmu.setFMUState(state)
-    fmu.doStep(0.0, 0.05)
-    assert len(fmu.serializeFMUState(state)) > 0
-    fmu.terminate()
-
-
-@pytest.mark.fmu
-def test_kalman_and_configuration_mode_through_unifmu(slave):
-    fmu, vr = slave("kalman")
-    fmu.enterConfigurationMode()
-    fmu.setUInt64([vr["dim_x"]], [2])
-    fmu.exitConfigurationMode()
-    fmu.enterInitializationMode(startTime=0.0)
-    fmu.exitInitializationMode()
-    fmu.enterStepMode()
-    for k in range(10):
-        fmu.doStep(k * 0.1, 0.1)
-    fmu.enterEventMode()
-    fmu.setFloat64([vr["z"]], [1.0])
-    fmu.setClock([vr["measurement"]], [True])
-    fmu.updateDiscreteStates()
-    fmu.enterStepMode()
-    x = fmu.getFloat64([vr["x"]], nValues=2)
-    assert 0.0 < x[0] <= 1.0
-    assert len(fmu.getFloat64([vr["P"]], nValues=4)) == 4
-    fmu.terminate()
-    fmu.reset()
-
 
 ALL_TYPES = {
     "Float32": 1.5, "Float64": 2.25, "Int8": -8, "UInt8": 200, "Int16": -1600, "UInt16": 60000,
@@ -389,53 +258,11 @@ interval = 2.0
         fmu.freeInstance()
 
 
-@pytest.mark.fmu
-@pytest.mark.parametrize("name", ["psychrometry", "simple_pid", "rc_building"])
-def test_fmi2_examples_build_as_fmi3_with_the_same_results(tmp_path, name):
-    from fmpy import simulate_fmu
-    kwargs = {"stop_time": 7200 if name == "rc_building" else 1.0, "output_interval": 3600 if name == "rc_building" else 0.1}
-    results = {}
-    for version in (2, 3):
-        out = build(EXAMPLES / name, tmp_path / f"{name}{version}.fmu", fmi_version=version)[0]
-        assert validate_fmu(str(out)) == []
-        results[version] = simulate_fmu(str(out), **kwargs)
-    assert results[2].dtype.names == results[3].dtype.names
-    for column in results[2].dtype.names:
-        assert list(results[2][column]) == pytest.approx(list(results[3][column]), nan_ok=True)
-
-
-@pytest.mark.fmu
-def test_plain_cosimulation_without_event_mode(fmus):
-    from fmpy import simulate_fmu
-    result = simulate_fmu(str(fmus["simple_pid"]), stop_time=1.0, output=["output"])
-    assert result["output"][-1] == pytest.approx(2.0 + 0.5 * 1.0)
-
-
 def test_fraction_fits_in_uint64():
     from fmugen.templates.fmugen_runtime import UINT64_MAX, fraction
     assert fraction(0.1) == (1, 10)
     counter, resolution = fraction(1e-20)
     assert 0 < resolution <= UINT64_MAX and counter / resolution == pytest.approx(1e-20, rel=1e-6)
-
-
-def test_a_failed_step_reports_the_start_of_the_step_as_last_successful_time(make_fmu, adapter):
-    fmu = adapter(make_fmu(EXAMPLES / "rc_building", fmi_version=3), fmi=3)
-    fmu.initialize()
-    status, _, _, _, last = fmu.fmi3DoStep(0.0, 60.0, False)    # only 3600 s steps
-    assert status == Status.error and last == 0.0
-    status, _, _, _, last = fmu.fmi3DoStep(0.0, 3600.0, False)
-    assert status == Status.ok and last == 3600.0
-
-
-def test_instantiating_with_logging_off_turns_logging_off(make_fmu):
-    from fmugen.builder import isolated_imports
-    from fmugen.templates import model_fmi3
-    fmu_dir = make_fmu(EXAMPLES / "simple_pid", fmi_version=3)
-    with isolated_imports():
-        for logging_on in (False, True):
-            model = model_fmi3.Model("test", "", "", False, logging_on, False, False, [], lambda *a: None,
-                                     resources_dir=fmu_dir / "resources")
-            assert model.engine.logging_on is logging_on
 
 
 def test_array_output_empty_until_the_first_step(tmp_path, make_fmu, adapter):

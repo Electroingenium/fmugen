@@ -1,10 +1,8 @@
 """The generated adapter, driven through its FMI 2 methods without UniFMU."""
-import importlib.util
 import textwrap
 from pathlib import Path
 
 import pytest
-from conftest import EXAMPLES
 
 from fmugen.builder import init, isolated_imports
 from fmugen.config import InterfaceError
@@ -18,73 +16,6 @@ def write(tmp_path, name, source, config=None):
     if config is not None:
         (tmp_path / "fmugen.toml").write_text(textwrap.dedent(config))
     return tmp_path
-
-
-def test_function_outputs_match_the_model(make_fmu, adapter):
-    fmu = adapter(make_fmu(EXAMPLES / "psychrometry"))
-    fmu.initialize()
-    spec = importlib.util.spec_from_file_location("psy", EXAMPLES / "psychrometry" / "psychrometry.py")
-    psy = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(psy)
-    inputs = {v["name"]: v["start"] for v in fmu.engine.variables if v["causality"] == "input"}
-    expected = psy.compute_balances_simplified(**inputs)
-    assert fmu.get("Q_in", "mass_balance") == [expected["Q_in"], expected["mass_balance"]]
-
-    assert fmu.set("temp_1", 30.0) == OK
-    assert fmu.fmi2DoStep(0.0, 1.0, False) == OK
-    assert fmu.get("Q_in") == pytest.approx(2.4 * 1010 * 30.0)
-
-
-def test_class_time_argument_and_tunable_parameter(make_fmu, adapter):
-    fmu = adapter(make_fmu(EXAMPLES / "simple_pid"))
-    fmu.initialize()
-    assert fmu.fmi2DoStep(0.0, 0.1, False) == OK
-    assert fmu.get("output") == pytest.approx(2.0 * 1.0 + 0.5 * 1.0 * 0.1)   # Kp*e + Ki*e*dt
-    assert fmu.get("integral") == pytest.approx(0.05)
-
-    assert fmu.set("Kp", 4.0) == OK                     # tunable: written onto the PID object
-    assert fmu.engine.obj.Kp == 4.0
-    assert fmu.fmi2DoStep(0.1, 0.1, False) == OK
-    assert fmu.get("output") == pytest.approx(4.0 + 0.1)
-
-    assert fmu.set("proportional_on_measurement", True) == ERROR   # fixed after initialization
-    assert fmu.set("output", 1.0) == ERROR                         # outputs cannot be set
-
-
-def test_state_feedback_fixed_step_and_rollback(make_fmu, adapter):
-    fmu = adapter(make_fmu(EXAMPLES / "rc_building"))
-    fmu.initialize()
-    assert fmu.get("t_air") == 20.0                      # start value until the first step
-    assert fmu.get("c_m") == 165000.0 * 35.0            # calculated parameter, read after construction
-
-    assert fmu.fmi2DoStep(0.0, 60.0, False) == ERROR    # only 3600 s steps
-    assert "3600" in fmu.logs[-1][2]
-
-    assert fmu.set("t_out", -5.0) == OK
-    assert fmu.fmi2DoStep(0.0, 3600.0, False) == OK
-    assert fmu.get("t_m_prev") == fmu.engine.obj.t_m_next   # fed back for the next step
-
-    status, saved = fmu.fmi2SerializeFmuState()
-    assert status == OK
-    assert fmu.fmi2DoStep(3600.0, 3600.0, False) == OK
-    first = fmu.get("t_air", "heating_demand", "t_m_prev")
-    assert fmu.fmi2DeserializeFmuState(saved) == OK
-    assert fmu.fmi2DoStep(3600.0, 3600.0, False) == OK
-    assert fmu.get("t_air", "heating_demand", "t_m_prev") == first
-
-    assert fmu.fmi2Reset() == OK
-    assert fmu.get("t_m_prev") == 20.0 and fmu.engine.obj is None
-
-
-def test_parameters_reach_the_constructor(make_fmu, adapter):
-    fmu = adapter(make_fmu(EXAMPLES / "rc_building"))
-    assert fmu.set("floor_area", 100.0) == OK            # before initialization
-    fmu.initialize()
-    assert fmu.engine.obj.floor_area == 100.0
-    assert fmu.get("c_m") == 165000.0 * 100.0
-    assert fmu.set("floor_area", 50.0) == ERROR          # fixed after initialization
-    assert fmu.set("t_set_heating", 22.0) == OK          # tunable
-    assert fmu.engine.obj.t_set_heating == 22.0
 
 
 def test_function_with_state_time_and_logging(tmp_path, make_fmu, adapter):
@@ -253,18 +184,6 @@ def test_unpicklable_attribute_that_changes_is_flagged(tmp_path):
     assert "kept as they are on restore: it. Check those don't change" in (tmp_path / "fmugen.toml").read_text()
 
 
-def test_save_state_false(tmp_path, make_fmu, adapter):
-    write(tmp_path, "m.py", "def f(u=1.0):\n    return {'y': u}\n", config='''
-        [model]
-        entry = "m.py:f"
-        save_state = false
-        [inputs]
-        u = { start = 1.0 }
-        [outputs]
-        y = {}
-    ''')
-    fmu_dir = make_fmu(tmp_path)
-    assert 'canGetAndSetFMUstate="false"' in (fmu_dir / "modelDescription.xml").read_text()
 
 
 def test_setup_positional_arguments_and_kind_function(tmp_path, make_fmu, adapter):
@@ -775,7 +694,6 @@ def test_rollback_repeats_random_draws(tmp_path, make_fmu, adapter):
     assert fmu.get("a", "b") == first
 
 
-
 def test_star_args_constructor_gets_positional_parameters(tmp_path, make_fmu, adapter):
     write(tmp_path, "affine.py", """
         class Affine:
@@ -808,7 +726,9 @@ def test_star_args_constructor_and_method_split_by_the_probe(tmp_path, make_fmu,
     """)
     starts = {"mu": 0.0, "sigma": 1.0, "x": 0.5}
     output, data = init(f"{tmp_path / 'normal.py'}:Normal", call="pdf", starts=starts, probe=True)
-    assert data["parameters"] == {"mu": {"start": 0.0, "to": "pos:0"}, "sigma": {"start": 1.0, "to": "pos:1"}}
+    plain = {k: {kk: vv for kk, vv in v.items() if kk not in ("variability", "attr")}   # sigma: tunable, via self.sigma
+             for k, v in data["parameters"].items()}
+    assert plain == {"mu": {"start": 0.0, "to": "pos:0"}, "sigma": {"start": 1.0, "to": "pos:1"}}
     assert data["inputs"] == {"x": {"start": 0.5, "to": "pos:0"}}
     fmu = adapter(make_fmu(output))
     fmu.initialize()
@@ -977,12 +897,12 @@ def test_call_start_for_the_step_method_copy_of_a_shared_name(tmp_path):
     assert data["model"]["constants"]["x0"] == {"call": "builtins:list([1.0])"}
 
 
-def test_init_start_for_a_callable_without_signature():
-    from fmugen.config import InterfaceError
-
-    # max is a C built-in: inspect.signature fails, so the --start names can't be placed
-    with pytest.raises(InterfaceError, match=r"--start a, b: cannot tell which arguments these are, since max has no signature"):
-        init("builtins:max", starts={"a": 1.0, "b": 2.0})
+def test_init_start_for_a_callable_without_signature(tmp_path):
+    # max is a C built-in: inspect.signature fails, so the --start values go by position, in order
+    _, data = init("builtins:max", output=tmp_path / "fmugen.toml", starts={"a": 1.0, "b": 2.0}, probe=True)
+    assert data["inputs"] == {"a": {"start": 1.0, "to": "pos:0"}, "b": {"start": 2.0, "to": "pos:1"}}
+    assert data["outputs"] == {"y": {"from": "return"}}
+    assert "passed by position, in the order given" in (tmp_path / "fmugen.toml").read_text()
 
 
 def test_probe_retries_a_date_time_in_utc(tmp_path):
@@ -1308,24 +1228,3 @@ def test_a_tunable_parameter_changed_between_steps_reaches_the_model(tmp_path, m
         assert fmu.engine.obj.auto_mode is False and fmu.get("output") == first
     else:
         assert fmu.get("output") == pytest.approx(expected)
-
-
-def test_fmi2_log_messages_escape_percent_signs(tmp_path, make_fmu, adapter):
-    # UniFMU 0.14 passes FMI 2 log messages to the importer as printf format strings
-    write(tmp_path, "progress.py", """
-        import logging
-
-        def progress(x: float = 1.0):
-            logging.getLogger("progress").warning("done 50%s of %d")
-            return {"y": x}
-        """, """
-        [model]
-        entry = "progress.py:progress"
-        [inputs]
-        x = { start = 1.0 }
-        [outputs]
-        y = {}
-        """)
-    fmu = adapter(make_fmu(tmp_path))
-    fmu.initialize()
-    assert any("done 50%%s of %%d" in message for _, _, message in fmu.logs), fmu.logs

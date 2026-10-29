@@ -8,7 +8,6 @@ from fmugen.templates import model_fmi2, model_fmi3
 from fmugen.templates.fmugen_runtime import Status
 
 ROOT = Path(__file__).resolve().parents[1]
-EXAMPLES = ROOT / "examples"
 
 
 class Adapter:

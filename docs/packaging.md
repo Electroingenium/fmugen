@@ -116,7 +116,7 @@ If the install fails (usually no wheels for this platform or Python version), th
 By default, wheels are made for this machine and Python (`pip wheel`; packages published only as source are built here). For other targets, list them. Only published wheels can be used for those:
 
 ```bash
-fmugen build examples/simple_pid -o out/pid.fmu --vendor --platform win_amd64 --platform manylinux2014_x86_64 --platform macosx_11_0_arm64 --python-version 3.11 --python-version 3.12 --python-version 3.13
+fmugen build pid -o out/pid.fmu --vendor --platform win_amd64 --platform manylinux2014_x86_64 --platform macosx_11_0_arm64 --python-version 3.11 --python-version 3.12 --python-version 3.13
 ```
 
 Vendoring uses the environment's `pip`, or `uvx pip` when the environment has none (uv venvs).
@@ -212,15 +212,21 @@ simulate_fmu("out/model.fmu", stop_time=10, debug_logging=True, logger=logger)
 ## Simulating
 
 ```bash
-fmpy simulate out/psychrometry.fmu --stop-time 10 --start-values temp_1 30 --output-file out/results.csv
+fmpy simulate out/pid.fmu --stop-time 10 --start-values Kp 4 --output-file out/results.csv
 ```
 
 FMPy simulates FMI 2 and FMI 3 FMUs the same way. In Python, `fmpy.simulate_fmu(..., event_mode_used=True)` also handles output clocks (`eventHandlingNeeded`) and `[events] terminate`. FMPy never ticks *input* clocks, though. FMUs whose code runs on input clocks need an importer that ticks them, or a script using `fmpy.fmi3.FMU3Slave` (see `tests/test_fmi3.py`).
 
-Time-varying inputs come from a CSV whose first column is time. Here they come from the RC building example's weather file (build the FMU first, as in [examples/rc_building](../examples/rc_building/README.md)):
+Time-varying inputs come from a CSV whose first column is time and whose other columns are named like the FMU's inputs, e.g. a `measurements.csv` for the PID FMU:
+
+```
+time,input_
+0,0.0
+5,0.5
+```
 
 ```bash
-fmpy simulate out/rc_building.fmu --input-file examples/rc_building/weather.csv --output-interval 3600 --output-file out/rc_building.csv
+fmpy simulate out/pid.fmu --input-file measurements.csv --stop-time 10 --output-file out/pid.csv
 ```
 
 Without `--output-file`, FMPy plots the result instead, which requires matplotlib (`pip install matplotlib`).
@@ -251,7 +257,6 @@ In the GUI, open the `.fmu`, set start values, press play, and tick outputs to p
 | `src/fmugen/builder.py` | Build/init orchestration, packaging, UniFMU version check |
 | `src/fmugen/distribute.py` | `--vendor` and `--compile` |
 | `src/fmugen/templates/fmugen_launch.py` | The launcher of vendored FMUs: offline install into a cached environment |
-| `examples/` | Example models with their `fmugen.toml` |
 | `tests/` | `uv run pytest` |
 
 ---
