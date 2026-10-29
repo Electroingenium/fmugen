@@ -298,7 +298,8 @@ def _reset_first(obj, method_name, data, comments):
 #: An error message asking for a call first: "call compile() first", "Use fit() to train model. Then",
 #: "not fitted yet. Call 'fit'", "not initialized yet. Call 'initialize'".
 SET_UP_ASKED = re.compile(r"\bfirst\b|\bbefore\b|\bthen\b|not (?:yet )?(?:been )?(?:fit|fitted|initiali[sz]ed|compiled|set ?up)\b"
-                          r"|\bhas not been\b|\bmust (?:first )?(?:call|run)\b", re.I)
+                          r"|\bhas not been\b|\bmust (?:first )?(?:call|run)\b"
+                          r"|\bnot having (?:been )?(?:fit|fitted|trained)\b|\bnot (?:yet )?(?:been )?trained\b", re.I)
 
 
 #: Method names (or prefixes, ending in _) that train the model on the user's data: a set-up the user
@@ -393,12 +394,12 @@ MADE_UP_TRAINING = (64, 4)   # more samples than a batch (pyod trains in batches
 def _fit_made_up(build, name, method_name, data, comments):
     """Train a new object on made-up data with ``name`` (``fit``), only to probe the step after it.
 
-    The data are deterministic random numbers: ``X`` of :data:`MADE_UP_TRAINING` samples and features,
-    as float64 then float32; ``y`` as a vector, a column, then class labels 0/1; last ``fit(X)`` alone
-    (pyod's detectors). The first that trains and lets the step work (with
-    the made-up inputs' retries, which size ``X`` from the fitted model's feature count) is kept: the
-    object is returned for the probe, and ``[model] setup`` gets the call only as a commented-out line,
-    for the user's training data. The FMU isn't trained on made-up data.
+    The data are deterministic random numbers (:func:`_made_up_training`): arrays ``X, y`` first, then a
+    one-column table, a dated table (prophet's ``ds``, ``y``) and a darts ``TimeSeries``, when those
+    libraries are loaded. The first that trains and lets the step work (with the made-up inputs' retries,
+    which size ``X`` from the fitted model's feature count) is kept: the object is returned for the probe,
+    and ``[model] setup`` gets the call only as a commented-out line, for the user's training data. The
+    FMU isn't trained on made-up data.
 
     :param build: the class, ``--create`` classmethod or factory.
     :param name: the training method.
@@ -411,44 +412,69 @@ def _fit_made_up(build, name, method_name, data, comments):
     :type comments: dict
     :return: the trained object, or None.
     """
-    try:
-        import numpy
-    except ImportError:
-        return None
-    samples, features = MADE_UP_TRAINING
-    rng = numpy.random.default_rng(0)
-    X64, values = rng.random((samples, features)), rng.random(samples)
-    tries = []
-    for X in (X64, X64.astype("float32")):
-        for y in (values.astype(X.dtype), values.astype(X.dtype).reshape(-1, 1), (values > 0.5).astype(int)):
-            tries.append((X, y))
-    for X, y in tries + [(X64, None)]:   # fit(X, y=None) of catboost needs y all the same
+    for args, what in _made_up_training():
         try:
             fresh = _build_set_up(build, data)
-            fit = getattr(fresh, name)
-            fit(X) if y is None else fit(X, y)
-            saved = {s: {n: dict(i) for n, i in data.get(s, {}).items()} for s in ("inputs",)}
+            getattr(fresh, name)(*args)
+            saved = {n: dict(i) for n, i in data.get("inputs", {}).items()}
             saved_comments = dict(comments)
             try:
                 _probe_call(_step_method(fresh, method_name, data), data, comments, constants_key="call_constants")
             except Exception:
-                for s, table in saved.items():
-                    data[s] = table
+                if saved or "inputs" in data:
+                    data["inputs"] = saved
+                    if not saved:
+                        data.pop("inputs")
                 comments.clear()
                 comments.update(saved_comments)
                 continue
             fresh = _build_set_up(build, data)   # trained again, for the probe's own step, not stepped
-            fit = getattr(fresh, name)
-            fit(X) if y is None else fit(X, y)
+            getattr(fresh, name)(*args)
         except Exception:
             continue
-        shape = "X" if y is None else "X, y"
         comments[("model", "#setup")] = (
-            f'setup = ["{name}(...)"]  # {method_name}() needs {name}() first: give it your training data '
-            f"({shape}) and uncomment this; the probe trained on made-up data ({samples} samples, {features} "
-            f"features) only to find the inputs and outputs")
+            f'setup = ["{name}(...)"]  # {method_name}() needs {name}() first: give it your training data and '
+            f"uncomment this; the probe trained on made-up data ({what}) only to find the inputs and outputs")
         return fresh
     return None
+
+
+def _made_up_training():
+    """The made-up training data :func:`_fit_made_up` tries, in order: ``(arguments, description)``.
+
+    :data:`MADE_UP_TRAINING` samples of deterministic random numbers: ``X`` with its features, as float64
+    then float32, with ``y`` as a vector, a column, then class labels 0/1; ``X`` alone (pyod's detectors);
+    with pandas loaded, a table of one column ``y`` and a table with dates ``ds`` and values ``y`` (prophet);
+    with darts loaded, a ``TimeSeries`` of the values.
+
+    :rtype: list[tuple]
+    """
+    try:
+        import numpy
+    except ImportError:
+        return []
+    samples, features = MADE_UP_TRAINING
+    rng = numpy.random.default_rng(0)
+    X64, values = rng.random((samples, features)), rng.random(samples)
+    arrays = f"{samples} samples, {features} features"
+    tries = []
+    for X in (X64, X64.astype("float32")):
+        for y in (values.astype(X.dtype), values.astype(X.dtype).reshape(-1, 1), (values > 0.5).astype(int)):
+            tries.append(((X, y), arrays))
+    tries.append(((X64,), arrays))   # last: fit(X, y=None) of catboost needs y all the same
+    pandas = sys.modules.get("pandas")
+    if pandas is not None:
+        dates = pandas.date_range("2020-01-01", periods=samples, freq="D")
+        tries.append(((pandas.DataFrame({"ds": dates, "y": values}),), f"a table of {samples} days, ds and y"))
+    darts = sys.modules.get("darts")
+    if darts is not None and hasattr(darts, "TimeSeries"):
+        try:
+            series = darts.TimeSeries.from_values(values.astype("float32"))
+        except Exception:
+            series = None
+        if series is not None:
+            tries.append(((series,), f"a TimeSeries of {samples} values"))
+    return tries
 
 
 def _build_set_up(build, data):

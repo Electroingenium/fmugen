@@ -406,3 +406,29 @@ def test_a_made_up_input_takes_the_shape_the_error_names(tmp_path):
     """)
     data, _ = run(f"{path}:Arm", tmp_path, probe=True, call="fkine", fmi_version=3)
     assert data["inputs"]["q"]["dimensions"] == [5]
+
+
+def test_a_forecaster_trained_on_a_dated_table_is_probed_on_a_made_up_one(tmp_path):
+    # like prophet: fit(df) with columns ds and y, then predict(); the config leaves fit() to the user
+    pytest = __import__("pytest")
+    pytest.importorskip("pandas")
+    path = write(tmp_path, "fc.py", """
+        import pandas
+
+        class Forecaster:
+            def __init__(self):
+                self.history = None
+
+            def fit(self, df):
+                if not isinstance(df, pandas.DataFrame) or list(df.columns) != ["ds", "y"]:
+                    raise ValueError("Dataframe must have columns 'ds' and 'y' with the dates and values")
+                self.history = df
+
+            def predict(self):
+                if self.history is None:
+                    raise Exception("Model has not been fit.")
+                return {"yhat": float(self.history["y"].mean())}
+    """)
+    data, text = run(f"{path}:Forecaster", tmp_path, probe=True, call="predict")
+    assert "setup" not in data["model"] and '# setup = ["fit(...)"]' in text and "ds and y" in text
+    assert data["outputs"]["yhat"] == {"from": "return:yhat"}
