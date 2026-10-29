@@ -877,8 +877,9 @@ def test_a_set_up_the_error_names_is_found(tmp_path):
     assert data["model"]["setup"] == ["connect()"] and data["outputs"]
 
 
-def test_training_is_named_not_made_up(tmp_path):
-    # like scikit-learn: predict before fit; fitting on made-up data is the user's part
+def test_training_on_made_up_data_is_only_for_the_probe(tmp_path):
+    # like scikit-learn: predict before fit; the probe fits made-up data to find the outputs, the config
+    # leaves fit() to the user's data
     path = write(tmp_path, "reg.py", """
         class Regressor:
             def __init__(self):
@@ -894,7 +895,8 @@ def test_training_is_named_not_made_up(tmp_path):
                 return self.coef_ * X
     """)
     data, text = probe(f"{path}:Regressor", tmp_path, call="predict")
-    assert "setup" not in data["model"] and 'predict() seems to need fit() first (it sets coef_' in text
+    assert "setup" not in data["model"] and '# setup = ["fit(...)"]  # predict() needs fit() first' in text
+    assert data["outputs"] and "probe call failed" not in text
 
 
 def test_a_method_the_error_names_otherwise_is_no_set_up(tmp_path):

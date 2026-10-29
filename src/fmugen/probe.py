@@ -313,8 +313,9 @@ def _setup_first(build, obj, method_name, error, data, comments):
     Candidates, in turn: public methods the error message names ("call setup() first"); then
     methods that assign an attribute the step reads (``self._solver``) which is None or missing on
     the object (:func:`_unset_attributes`). Each is called with no arguments, or with its required
-    ones made up as 1.0; then the step. A training method (:data:`TRAINING`) is the user's part: it's
-    only named.
+    ones made up as 1.0; then the step. A training method (:data:`TRAINING`) is the user's part: the probe
+    trains a new object on made-up data (:func:`_fit_made_up`) only to find the step's inputs and outputs,
+    and the set-up is written commented out (``# setup = ["fit(...)"]``), for the user's training data.
 
     :param build: the class, ``--create`` classmethod or factory (a new object is built for the probe).
     :param obj: the model object the step failed on.
@@ -340,12 +341,19 @@ def _setup_first(build, obj, method_name, error, data, comments):
     named = [m for m in public if asks and re.search(rf"\b{re.escape(m)}\b(?!' object)", message)]
     unset = _unset_attributes(obj, method_name)
     assigning = [m for m in public if unset & _assigned(cls, m)]
-    candidates = list(dict.fromkeys(named + assigning))
+    # the model's training, when the step fails before it on an attribute the object doesn't have yet or
+    # the message asks for a set-up (tabnet's predict(): no network; fit() sets it through a helper)
+    unready = asks or f"'{cls.__name__}' object has no attribute" in message
+    training = [m for m in ("fit", "train", "learn") if unready and m in public]
+    candidates = list(dict.fromkeys(named + assigning + training))
     if "reset" in candidates and "reset" in data["model"].get("setup", []):
         candidates.remove("reset")
     unhelpful = set()   # set up without an error, and the step still failed: not what it needs
     for name in candidates:
         if name in TRAINING or name.startswith(tuple(p for p in TRAINING if p.endswith("_"))):
+            fitted = _fit_made_up(build, name, method_name, data, comments)
+            if fitted is not None:
+                return fitted
             continue
         try:
             params = [p for p in inspect.signature(getattr(obj, name)).parameters.values()
@@ -376,6 +384,71 @@ def _setup_first(build, obj, method_name, error, data, comments):
     name = candidates[0]
     why = f" (it sets {', '.join(sorted(unset & _assigned(cls, name)))}, which {method_name}() uses)"         if unset & _assigned(cls, name) else ""
     return f"{method_name}() seems to need {name}() first{why}: add --setup \"{name}(...)\""
+
+
+#: The made-up training data :func:`_fit_made_up` tries: samples, features.
+MADE_UP_TRAINING = (64, 4)   # more samples than a batch (pyod trains in batches of 32)
+
+
+def _fit_made_up(build, name, method_name, data, comments):
+    """Train a new object on made-up data with ``name`` (``fit``), only to probe the step after it.
+
+    The data are deterministic random numbers: ``X`` of :data:`MADE_UP_TRAINING` samples and features,
+    as float64 then float32; ``y`` as a vector, a column, then class labels 0/1; last ``fit(X)`` alone
+    (pyod's detectors). The first that trains and lets the step work (with
+    the made-up inputs' retries, which size ``X`` from the fitted model's feature count) is kept: the
+    object is returned for the probe, and ``[model] setup`` gets the call only as a commented-out line,
+    for the user's training data. The FMU isn't trained on made-up data.
+
+    :param build: the class, ``--create`` classmethod or factory.
+    :param name: the training method.
+    :type name: str
+    :param method_name: the step method.
+    :type method_name: str
+    :param data: the config being inferred; updated in place.
+    :type data: dict
+    :param comments: ``(section, key) -> text`` for :func:`render_toml`; updated in place.
+    :type comments: dict
+    :return: the trained object, or None.
+    """
+    try:
+        import numpy
+    except ImportError:
+        return None
+    samples, features = MADE_UP_TRAINING
+    rng = numpy.random.default_rng(0)
+    X64, values = rng.random((samples, features)), rng.random(samples)
+    tries = []
+    for X in (X64, X64.astype("float32")):
+        for y in (values.astype(X.dtype), values.astype(X.dtype).reshape(-1, 1), (values > 0.5).astype(int)):
+            tries.append((X, y))
+    for X, y in tries + [(X64, None)]:   # fit(X, y=None) of catboost needs y all the same
+        try:
+            fresh = _build_set_up(build, data)
+            fit = getattr(fresh, name)
+            fit(X) if y is None else fit(X, y)
+            saved = {s: {n: dict(i) for n, i in data.get(s, {}).items()} for s in ("inputs",)}
+            saved_comments = dict(comments)
+            try:
+                _probe_call(_step_method(fresh, method_name, data), data, comments, constants_key="call_constants")
+            except Exception:
+                for s, table in saved.items():
+                    data[s] = table
+                comments.clear()
+                comments.update(saved_comments)
+                continue
+            fresh = _build_set_up(build, data)   # trained again, for the probe's own step, not stepped
+            fit = getattr(fresh, name)
+            fit(X) if y is None else fit(X, y)
+        except Exception:
+            continue
+        shape = "X" if y is None else "X, y"
+        comments[("model", "#setup")] = (
+            f'setup = ["{name}(...)"]  # {method_name}() needs {name}() first: give it your training data '
+            f"({shape}) and uncomment this; the probe trained on made-up data ({samples} samples, {features} "
+            f"features) only to find the inputs and outputs")
+        return fresh
+    return None
 
 
 def _build_set_up(build, data):
