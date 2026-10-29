@@ -41,6 +41,26 @@ Rules that hold everywhere in the file:
 - **One variable per line:** `name = { key = value, ... }`. The name on the left is the variable name the FMU shows to the importer.
 - **Lines starting with `#` are comments.** `init` writes many commented-out lines for you to *uncomment* (delete the `# `) when they apply.
 
+### What `init` reads besides the signatures
+
+Before asking you for options, `init` looks at what the package already says about how it's used:
+
+- **Usage examples.** It reads the `>>>` examples in the model's docstrings, the Python code blocks of its README (from the installed package's metadata, or a `README.md` next to a model file), and the scripts in an `examples` folder. The first example that builds the class (or calls the function) gives the options you didn't pass:
+  - the step method (`--call`), taken as the method called in a loop, else the last whose result is used;
+  - the classmethod that builds the object (`--create`);
+  - the calls between building it and the step (`--setup`), when their arguments are literals or imports;
+  - the values of the arguments that have no default in the code (`--start`), and values computed by an import (`np.linspace(0, 1, 4)` becomes `{ call = "numpy:linspace(0, 1, 4)" }`, a `--const`). Computed values are only taken with `--probe`, and only the ones that compute.
+
+  Nothing in an example is run. Each value is commented `start from the example in README.md: check it`. With `--probe`, when the example's values fail the probe, `init` drops them and infers as if there were no example. Options you give always win.
+- **Start values for arguments with no default**, rather than a made-up `1.0`:
+  - a default the docstring gives (`tol : float, default 1e-6`, `Defaults to 0.5`);
+  - a typical value for a docstring unit where `1.0` is far from any real value (`293.15` for `[K]`, `101325` for `[Pa]`);
+  - a value the code's own checks accept, when they refuse `1.0` (`if n < 3: raise ValueError(...)` gives `10`).
+- **With `--probe`, other choices when the first fails:**
+  - When the constructor fails with the made-up values, it tries the classmethods that build an object with no arguments from you (`default()`, `create()`, `from_...()`).
+  - When the step method was only guessed and its call fails or gives no outputs, it probes the next two candidates and keeps the first that works and gives outputs.
+  - A class that is an iterator (with `__next__`) and has no run-like method steps with `__next__`.
+
 Use `-o -` to print the config without writing it, and `--force` to overwrite an existing one. Once you have edited a config by hand, rerunning `init` with `--force` throws your edits away, so keep a copy, or use `-o -` and copy the parts you need.
 
 ---
@@ -332,6 +352,8 @@ Inline comments mark guesses and things to check. A comment never changes the bu
 |---|---|---|
 | `# start from --start` | You passed this start value. | Nothing. |
 | `# no default in the code: check the start value` | `1.0` is made up. | Put a realistic value. |
+| `# no default in the code: its docstring's default, …` / `a typical value in K, …` / `… passes the code's checks on it, 1.0 doesn't` | Taken from the docstring or the code's checks, not made up. | Check it fits your case. |
+| `# start from the example in …: check it` | Taken from the package's usage example. | Check it fits your case. |
 | `# no default in the code: made up, as arrays of ones, shape (…) (the probe failed with 1.0)` | The probe failed with `1.0` and worked with this. | Put a realistic value (and size, for an array). |
 | `# Integer because the default is an int; write a float start for Real` | The code's default is `0`, not `0.0`. | Write `0.0` if the quantity is real. |
 | `# kept as an attribute: add variability = "tunable" if the step reads it` | The constructor stores this value on the object. | Add `variability = "tunable"` if changing it mid-simulation should have an effect. |
@@ -457,7 +479,7 @@ The results are built in a way the code doesn't show (loops, helper functions, C
 
 ### `init` picked the wrong step method.
 
-When it wasn't sure, it said so: in a terminal it asks you to choose from the candidates; otherwise it prints `fmugen: warning: it's not clear which method of … runs a step`, with the candidates, best first. Rerun with `--call METHOD`, or edit `[model] call`.
+When it wasn't sure, it said so: in a terminal it asks you to choose from the candidates; otherwise it prints `fmugen: warning: it's not clear which method of … runs a step`, with the candidates, best first. With `--probe`, when that guess fails or gives no outputs, it tries the next candidates and comments `… picked by probing`. Rerun with `--call METHOD`, or edit `[model] call`.
 
 ### The class's constructor does all the work; there's no step method.
 
@@ -465,7 +487,7 @@ Rerun with `--kind function`: the class is built with the inputs on every step a
 
 ### The class is built with `from_pretrained` (or another classmethod).
 
-When the constructor can't take your `--start`/`--const` names and exactly one public classmethod can (`PPO.load(path=...)`), `init` uses it and says so in a comment. Otherwise rerun with `--create from_pretrained`.
+When the constructor can't take your `--start`/`--const` names and exactly one public classmethod can (`PPO.load(path=...)`), `init` uses it and says so in a comment. So it does when a usage example builds it that way, or, with `--probe`, when the constructor fails and a classmethod taking no required arguments (`default()`, `from_...()`) works. Otherwise rerun with `--create from_pretrained`.
 
 ### The step fails until `reset()` is called.
 

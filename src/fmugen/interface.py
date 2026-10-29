@@ -11,6 +11,7 @@ user to review. `fmugen build model.py` runs the same inference in memory.
 """
 import ast
 import contextlib
+import copy
 import enum
 import importlib
 import importlib.util
@@ -29,7 +30,7 @@ from fmugen.toml_output import render_toml
 from fmugen.arguments import (
     SCALARS, POSITIONAL_STARTS, START_ERRORS, NO_SIGNATURE, PROBED,
     _number_like, _array_info, _dotted_names, _arguments, _apply_converts,
-    _assign_starts, assumptions, guessed_outputs, unfit_outputs, class_called, _only_varargs,
+    _assign_starts, assumptions, guessed_outputs, unfit_outputs, class_called, _only_varargs, _time_source,
 )
 from fmugen.probe import (
     ConstantError, _run_setup, _probe_call, _probe_class,
@@ -257,12 +258,15 @@ def _with_timeout(timeout, fn, *args):
         watchdog.cancel()
 
 
-def _infer_config(target, call, config_dir, fmi_version, starts, setup, kind, create, probe, converts):
+def _infer_config(target, call, config_dir, fmi_version, starts, setup, kind, create, probe, converts, examples=True):
     """The inference itself, inside ``config_dir`` (see :func:`infer_config`).
 
     Imports the model, picks the entry, infers a function or class model, adds data files,
     globals and requirements, renames clashing names, adapts the types to the FMI version, and
     finally checks that every ``--start`` and ``--convert`` name was used.
+
+    First with what the package's own examples show (:func:`_with_usage`), for the options not given;
+    when that fails (or its probe does), without them.
 
     :param target: the model target (absolute file path when it's a file).
     :type target: str
@@ -284,6 +288,8 @@ def _infer_config(target, call, config_dir, fmi_version, starts, setup, kind, cr
     :type probe: bool
     :param converts: see :func:`infer_config`.
     :type converts: dict or None
+    :param examples: whether to read the package's examples.
+    :type examples: bool
     :return: ``(config dict, comments)``.
     :rtype: tuple[dict, dict]
     :raises InterfaceError: see :func:`infer_config`.
@@ -302,6 +308,20 @@ def _infer_config(target, call, config_dir, fmi_version, starts, setup, kind, cr
     except (Exception, SystemExit) as e:
         raise import_failure(target, e) from e
     entry = _pick_entry(module, name)
+    if examples and kind != "function" and not (call and not inspect.isclass(entry)):
+        found = _with_usage(entry, module, path, call, create, setup, starts, probe)
+        if found is not None:
+            usage, taken, options = found
+            try:
+                data, comments = _infer_config(target, options["call"], config_dir, fmi_version, options["starts"],
+                                               options["setup"], kind, options["create"], probe, converts,
+                                               examples=False)
+            except InterfaceError:
+                pass
+            else:
+                if not (probe and _probe_failed(comments)):
+                    _note_usage(usage, taken, options, call, create, setup, data, comments)
+                    return data, comments
 
     # the name it was given: an alias (PyCO2SYS:sys) or a lambda (rdkit's Descriptors.MolWt) has
     # another __name__, which may name a different object or none
@@ -390,6 +410,85 @@ def _infer_config(target, call, config_dir, fmi_version, starts, setup, kind, cr
     if unused:
         raise InterfaceError(f"--start names that are not arguments of the model: {sorted(unused)}")
     return data, comments
+
+
+def _probe_failed(comments):
+    """Whether the probe failed to build the object or to call the step (its comment on the outputs says so)."""
+    note = comments.get(("outputs", None))
+    return isinstance(note, str) and note.startswith(("probe call failed", "probe construction failed"))
+
+
+def _with_usage(entry, module, path, call, create, setup, starts, probe):
+    """The options a use of the model in its package's examples adds to those given (:func:`examples.find_usage`).
+
+    Only what wasn't given: the step method and classmethod, the set-up calls (when the step is the
+    example's), the arguments' values. Values computed by a call (``numpy.array(...)``) only with
+    ``--probe``, and only those that compute here.
+
+    :return: ``(usage, {name: value taken}, {"call", "create", "setup", "starts"})``, or None when the
+        examples add nothing.
+    :rtype: tuple or None
+    """
+    from fmugen import examples
+    from fmugen.templates.fmugen_runtime import resolve_constant
+    try:
+        usage = examples.find_usage(entry, module, Path(path).resolve() if path else None)
+    except Exception:
+        return None
+    if usage is None:
+        return None
+    is_class = inspect.isclass(entry)
+    starts = dict(starts or {})
+    if usage.call in STEP_LIKE and any(callable(getattr(entry, m, None)) for m in STEP_LIKE[:STEP_LIKE.index(usage.call)]):
+        usage.call, usage.step, usage.setup = None, {}, []   # pastas' solve() in its README: simulate() runs it
+    if usage.call and _named(usage.call, SETUP_IF_STEP + ("optimize", "calibrate"))             and any(callable(getattr(entry, m, None)) for m in STEP_LIKE):
+        usage.call, usage.step, usage.setup = None, {}, []   # training (GPy's optimize()): predict() runs it
+    new_call = call or (usage.call if is_class else None)
+    new_create = create or (usage.create if is_class else None)
+    taken = {}
+
+    def take(args):
+        for name, value in args.items():
+            if name in starts or name in taken or any(k.startswith(f"{name}.") for k in starts) or _time_source(name):
+                continue   # a time argument: the simulation's, not the example's
+            if isinstance(value, dict):
+                if not probe:
+                    continue
+                try:
+                    resolve_constant(value)
+                except Exception:
+                    continue
+            taken[name] = value
+
+    if not is_class or (new_create or None) == usage.create:
+        take(usage.init)
+    same_step = is_class and usage.call is not None and new_call == usage.call
+    if same_step:
+        take(usage.step)
+    new_setup = list(setup) if setup else (list(usage.setup) if same_step and usage.setup else None)
+    if not taken and new_call == call and new_create == create and new_setup == (list(setup) if setup else None):
+        return None
+    options = {"call": new_call, "create": new_create, "setup": new_setup, "starts": {**starts, **taken}}
+    return usage, taken, options
+
+
+def _note_usage(usage, taken, options, call, create, setup, data, comments):
+    """Comment what came from the package's examples (:func:`_with_usage`), to check."""
+    where = usage.source
+    if options["call"] and not call:
+        comments[("model", "call")] = f"{options['call']}() as in {where}"
+    if options["create"] and not create:
+        comments[("model", "create")] = f"{data['model'].get('entry', '')}.{options['create']}(...) builds it, as in {where}"
+    if options["setup"] and not setup:
+        dropped = f"; left out: {', '.join(f'{n}()' for n in usage.dropped)} (arguments that aren't literals)"             if usage.dropped else ""
+        comments[("model", "setup")] = f"as in {where}: check it{dropped}"
+    for name in taken:
+        for section in ("parameters", "inputs"):
+            if name in data.get(section, {}):
+                comments[(section, name)] = f"start from the example in {where}: check it"
+        for table in ("constants", "call_constants"):
+            if name in data["model"].get(table, {}):
+                comments[("constant", f"{table}.{name}")] = f"from the example in {where}: check it"
 
 
 #: FMI 3 types found by inference -> FMI 2 type (None: the default Real).
@@ -850,8 +949,105 @@ def _suggest_object_step(data, comments):
 
 # ---------------- classes ----------------
 
+#: How many of the ranked step methods the probe tries, when none was picked surely.
+PROBED_CANDIDATES = 3
+#: Classmethods that build an object without arguments from the user, tried when the constructor fails
+#: in the probe (with ``from_`` ones taking no required argument).
+FACTORY_NAMES = ("default", "defaults", "create", "example", "sample", "demo", "standard", "new")
+
+
 def _infer_class(cls, call, data, comments, arrays=False, starts=None, create=None, factory=None, probe=False,
                  converts=None):
+    """Infer a class model (:func:`_infer_class_once`); with ``--probe``, try other choices when the first fails.
+
+    When the step method was only guessed (:func:`_rank_methods`) and the probe's call fails or gives no
+    outputs, the next candidates are probed, and the first that works and gives outputs is kept. When
+    building the object fails, the classmethods that build one with no arguments from the user
+    (:data:`FACTORY_NAMES`) are tried as ``create``.
+
+    :raises InterfaceError: see :func:`_infer_class_once`.
+    """
+    if not probe or factory or cls is None:
+        _infer_class_once(cls, call, data, comments, arrays, starts, create, factory, probe, converts)
+        return
+    base = copy.deepcopy((data, comments))
+
+    def attempt(method, maker):
+        d, c = copy.deepcopy(base)
+        _infer_class_once(cls, method, d, c, arrays, starts, maker, None, True, converts)
+        return d, c
+
+    best = attempt(call, create)
+    if not create and _construction_failed(best[1]):
+        for maker in _factories(cls):
+            try:
+                tried = attempt(call, maker)
+            except InterfaceError:
+                continue
+            if not _construction_failed(tried[1]):
+                tried[1][("model", "create")] = (f"{cls.__name__}.{maker}() builds it: {cls.__name__}(...) failed in "
+                                                 "the probe with the made-up values")
+                best, create = tried, maker
+                break
+    picked = best[0]["model"].get("call", "__call__")
+    why = best[1].get(("model", "call"))
+    if not call and isinstance(why, str) and why.startswith(f"{picked}() guessed") and not _works(best):
+        constructor = getattr(cls, create) if create else cls.__init__
+        left = _leftover_starts(constructor, starts)
+        ranked = _rank_methods(cls, starts, constructor, _methods_taking(cls, left) if left else [])
+        failed = [picked]
+        for method in [m for m in ranked if m != picked][:PROBED_CANDIDATES - 1]:
+            try:
+                tried = attempt(method, create)
+            except InterfaceError:
+                continue
+            if _works(tried):
+                tried[1][("model", "call")] = (
+                    f"{method}() picked by probing: {', '.join(f'{m}()' for m in failed)} failed or gave no outputs "
+                    f"(candidates, best first: {', '.join(ranked[:8])}); pass --call METHOD to choose another")
+                if ("model", "create") in best[1] and create:
+                    tried[1][("model", "create")] = best[1][("model", "create")]
+                best = tried
+                break
+            failed.append(method)
+    data.clear()
+    data.update(best[0])
+    comments.clear()
+    comments.update(best[1])
+
+
+def _works(result):
+    """Whether a probe's config has outputs and its step worked."""
+    data, comments = result
+    return bool(data.get("outputs")) and not _probe_failed(comments)
+
+
+def _construction_failed(comments):
+    """Whether the probe failed to build the object."""
+    note = comments.get(("outputs", None))
+    return isinstance(note, str) and note.startswith("probe construction failed")
+
+
+def _factories(cls):
+    """Classmethods of ``cls`` that may build it with no arguments from the user: :data:`FACTORY_NAMES` ones and
+    ``from_...`` ones, that have no required argument."""
+    found = []
+    for name in dir(cls):
+        if not isinstance(inspect.getattr_static(cls, name, None), classmethod):
+            continue
+        if name not in FACTORY_NAMES and not name.startswith("from_"):
+            continue
+        try:
+            params = inspect.signature(getattr(cls, name)).parameters.values()
+        except (TypeError, ValueError):
+            continue
+        if all(p.default is not p.empty or p.kind in (p.VAR_POSITIONAL, p.VAR_KEYWORD) for p in params):
+            found.append(name)
+    return sorted(found, key=lambda n: (n not in FACTORY_NAMES, n))[:4]
+
+
+def _infer_class_once(cls, call, data, comments, arrays=False, starts=None, create=None, factory=None, probe=False,
+                      converts=None):
     """Infer a class model: constructor arguments are parameters, step method arguments inputs.
 
     Outputs come from what the step method returns and the attributes it sets (and, with
@@ -1015,6 +1211,9 @@ def _pick_method(cls, starts=None, constructor=None):
                 return name, None
         elif callable(getattr(cls, name, None)):
             return name, None
+    if any("__next__" in vars(k) for k in cls.__mro__[:-1]) and not has_step:
+        return "__next__", (f"__next__(): {cls.__name__} is an iterator, each next() a step "
+                            "(pass --call METHOD to choose another)")
     public = [n for n, v in vars(cls).items() if not n.startswith("_") and inspect.isfunction(v)]
     left = _leftover_starts(constructor, starts)
     fitting = _methods_taking(cls, left) if left else []
@@ -1207,6 +1406,63 @@ def docstring_units(*objects):
     return found
 
 
+#: A Google-style entry: ``name (type): text``.
+_GOOGLE_ENTRY = re.compile(r"^\s+(\w+)\s*(?:\(([^)]*)\))?\s*:\s*(.*)$")
+#: A Sphinx field: ``:param name: text`` (or ``:param type name:``).
+_SPHINX_PARAM = re.compile(r"^:param\s+(?:[\w.\[\], ]+\s+)?(\w+)\s*:\s*(.*)$")
+
+
+def docstring_parameters(*objects):
+    """The text describing each argument in numpydoc, Google or Sphinx docstrings: its type line and description.
+
+    :param objects: functions, methods or classes whose docstrings are read (later ones don't override).
+    :return: ``{argument: text}``.
+    :rtype: dict
+    """
+    found = {}
+    for obj in objects:
+        doc = inspect.getdoc(obj) if obj is not None else None
+        if not doc:
+            continue
+        entries, name = {}, None
+        headers = list(_SECTION.finditer(doc))
+        for i, header in enumerate(headers):   # numpydoc
+            if header.group(1).strip() not in ("Parameters", "Other Parameters"):
+                continue
+            body = doc[header.end():headers[i + 1].start() if i + 1 < len(headers) else len(doc)]
+            for line in body.splitlines():
+                entry = _ENTRY.match(line) if line and not line[0].isspace() else None
+                if entry:
+                    name = entry.group(1)
+                    entries.setdefault(name, []).append(entry.group(2) or "")
+                elif name:
+                    entries[name].append(line.strip())
+        section, name = False, None
+        for line in doc.splitlines():   # Google and Sphinx
+            stripped = line.strip()
+            sphinx = _SPHINX_PARAM.match(stripped)
+            if sphinx:
+                name = sphinx.group(1)
+                entries.setdefault(name, []).append(sphinx.group(2))
+                continue
+            if stripped in ("Args:", "Arguments:", "Parameters:", "Keyword Args:", "Keyword Arguments:"):
+                section, name = True, None
+                continue
+            if section and line and not line[0].isspace():
+                section = False
+            google = _GOOGLE_ENTRY.match(line) if section else None
+            if google and len(line) - len(line.lstrip()) <= 4:
+                name = google.group(1)
+                entries.setdefault(name, []).append(f"{google.group(2) or ''} {google.group(3)}")
+            elif name and stripped and not stripped.startswith(":") and (section or not _ENTRY.match(line)):
+                entries[name].append(stripped)
+            elif not stripped and not section:
+                name = None
+        for name, text in entries.items():
+            found.setdefault(name, " ".join(text))
+    return found
+
+
 #: Words of a numpydoc type line that mean an array.
 _ARRAY_WORDS = re.compile(r"\b(array_like|array-like|ndarray|array|arrays|matrix|tensor|sequence of|list of|"
                           r"iterable of|vector)\b", re.I)
@@ -1298,7 +1554,7 @@ def _results_only(cls):
     :type cls: type
     :rtype: bool
     """
-    if any("__call__" in vars(k) for k in cls.__mro__[:-1]):
+    if any("__call__" in vars(k) or "__next__" in vars(k) for k in cls.__mro__[:-1]):
         return False
     for name in dir(cls):
         if name.startswith("_"):

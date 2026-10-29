@@ -9,6 +9,8 @@ import json
 import keyword
 import math
 import re
+import sys
+import textwrap
 import typing
 
 from fmugen import static
@@ -158,6 +160,12 @@ def unfit_outputs(comments):
 ASSUMPTIONS = (
     ("(its annotation, with no arguments)", "objects built with no arguments from their annotation: give real "
                                            "ones with --const if the model needs them"),
+    ("its docstring's default", "no default in the code: the start value is the docstring's, check it"),
+    ("its docstring's unit", "no default in the code: the start value is a typical one in its docstring's unit, "
+                             "check it"),
+    ("passes the code's checks", "no default in the code: the start value is one the code's checks accept, "
+                                 "check it"),
+    ("start from the example in", "start values taken from the package's examples: check them"),
     ("no default in the code", "no default in the code: the start value is made up, check it"),
     ("no default: check the start value", "no default in the code: the start value is made up, check it"),
     ("Integer because the default is an int", "typed Integer because the default is an int; "
@@ -564,7 +572,14 @@ def _arguments(fn, section, data, comments, skip_self=False, allow_time=True, co
             if p.name in starts:
                 comments.setdefault((section, p.name), "start from --start")
             elif not has_default:
-                comments[(section, p.name)] = MADE_UP
+                informed = _informed_start(fn, p) if not isinstance(info["start"], (bool, str)) else None
+                if informed:
+                    value, why = informed
+                    info = {"start": int(value) if isinstance(info["start"], int) and float(value).is_integer()
+                            else float(value)}
+                    comments[(section, p.name)] = f"no default in the code: {why}; check the start value"
+                else:
+                    comments[(section, p.name)] = MADE_UP
             elif type(default) is int and static.unwrap_optional(p.annotation) is not int:
                 comments[(section, p.name)] = "Integer because the default is an int; write a float start for Real"
             variables[p.name] = info
@@ -916,6 +931,109 @@ def _made_up_array(fn, p):
                                                             if p.annotation is not p.empty else None):
         return None
     return documented.get(p.name) or [MADE_UP_SIZE]
+
+
+#: A documented default: ``default 1e-6``, ``defaults to 0.5``, ``(default: 3)``, ``default=300``.
+_DOCUMENTED_DEFAULT = re.compile(r"\bdefaults?(?:\s+value)?(?:\s+is|\s+to|\s+of)?\s*[:=]?\s*`*([-+]?(?:\d+\.?\d*|\.\d+)"
+                                 r"(?:[eE][-+]?\d+)?)(?![\w.])", re.I)
+#: A typical value for a quantity in a unit a docstring gives, where 1.0 is far from any real one.
+TYPICAL_BY_UNIT = {"K": 293.15, "degC": 20.0, "°C": 20.0, "Pa": 101325.0, "kPa": 101.325, "MPa": 0.101325,
+                   "bar": 1.01325, "mbar": 1013.25, "hPa": 1013.25, "psi": 14.696}
+#: Values tried, in order, against the checks the code makes on an argument (``if x < 10: raise``).
+CHECKED_VALUES = (1.0, 0.5, 2.0, 10.0, 0.1, 100.0, 1000.0, 0.0, -1.0, 1e4, 1e5, 1e6)
+
+
+def _informed_start(fn, p):
+    """A start for an argument with no default from what the code says of it, rather than 1.0.
+
+    In order: a default its docstring gives (``tol : float, default 1e-6``); a typical value of its
+    docstring unit when that unit is one where 1.0 is far from real values (293.15 for ``[K]``); a
+    value the checks in the code accept, when they refuse 1.0 (``if n_harmonics < 3: raise``).
+
+    :param fn: the function the argument is of.
+    :param p: the parameter.
+    :type p: inspect.Parameter
+    :return: ``(value, why)``, or None.
+    :rtype: tuple or None
+    """
+    from fmugen.interface import docstring_parameters, docstring_units
+    owner = _owner_class(fn)
+    try:
+        text = docstring_parameters(fn, owner).get(p.name, "")
+    except Exception:
+        text = ""
+    match = _DOCUMENTED_DEFAULT.search(text)
+    if match:
+        return float(match.group(1)), f"its docstring's default, {match.group(1)}"
+    try:
+        unit = docstring_units(fn, owner)[0].get(p.name)
+    except Exception:
+        unit = None
+    if unit in TYPICAL_BY_UNIT:
+        return TYPICAL_BY_UNIT[unit], f"a typical value in {unit}, its docstring's unit"
+    checks = _value_checks(fn, p.name)
+    if checks and not _passes(checks, p.name, 1.0):
+        value = next((v for v in CHECKED_VALUES[1:] if _passes(checks, p.name, v)), None)
+        if value is not None:
+            return value, f"{value:g} passes the code's checks on it, 1.0 doesn't"
+    return None
+
+
+def _owner_class(fn):
+    """The class of a constructor or method (numpydoc puts a constructor's parameters on the class), or None."""
+    qualname = getattr(fn, "__qualname__", "") or ""
+    owner = sys.modules.get(getattr(fn, "__module__", None) or "")
+    for part in qualname.split(".")[:-1]:
+        owner = getattr(owner, part, None)
+    return owner if inspect.isclass(owner) else None
+
+
+def _value_checks(fn, name):
+    """The checks the code of ``fn`` makes on argument ``name``: ``(test, raises)`` of ``if test: raise``
+    (raises True) and ``assert test`` (False), whose test only compares ``name`` with numbers.
+
+    :rtype: list[tuple]
+    """
+    try:
+        tree = ast.parse(textwrap.dedent(inspect.getsource(fn)))
+    except (OSError, TypeError, SyntaxError, IndentationError):
+        return []
+
+    def number(s):
+        if isinstance(s, ast.UnaryOp) and isinstance(s.op, (ast.USub, ast.UAdd)):
+            s = s.operand
+        return isinstance(s, ast.Constant) and isinstance(s.value, (int, float)) and not isinstance(s.value, bool)
+
+    def simple(test):
+        if isinstance(test, ast.BoolOp):
+            return all(simple(v) for v in test.values)
+        if isinstance(test, ast.UnaryOp) and isinstance(test.op, ast.Not):
+            return simple(test.operand)
+        if not isinstance(test, ast.Compare):
+            return False
+        sides = [test.left, *test.comparators]
+        return any(isinstance(s, ast.Name) and s.id == name for s in sides) \
+            and all((isinstance(s, ast.Name) and s.id == name) or number(s) for s in sides)
+
+    checks = []
+    for node in ast.walk(tree):
+        if isinstance(node, ast.If) and simple(node.test) and any(isinstance(b, ast.Raise) for b in node.body):
+            checks.append((node.test, True))
+        elif isinstance(node, ast.Assert) and simple(node.test):
+            checks.append((node.test, False))
+    return checks
+
+
+def _passes(checks, name, value):
+    """Whether ``value`` for ``name`` passes the checks of :func:`_value_checks`."""
+    for test, raises in checks:
+        try:
+            result = bool(eval(compile(ast.Expression(test), "<check>", "eval"), {"__builtins__": {}}, {name: value}))
+        except Exception:
+            return False
+        if result == raises:
+            return False
+    return True
 
 
 def _type_info(value, annotation=inspect.Parameter.empty):

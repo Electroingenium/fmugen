@@ -81,6 +81,34 @@ Also on 2026-10-29, `update` is taken as the step before any ranking only when t
 
 Also on 2026-10-29, when the probe step fails, `init --probe` looks for a set-up it needs: a public method the error message asks to call first ("call compile() first", "not fitted yet. Call 'fit'"), else one that assigns an attribute the step reads (`self._solver`) that is None or missing on the object. It's run in `[model] setup`, with no arguments or its required ones made up as `1.0`, and kept when the step then works; a training method (`fit`, `train`, `learn`, `fit_…`, …) is the user's part, so it's never made up, only named. Otherwise the probe's failure comment names it: `solve() seems to need setup() first (it sets _solver, which solve() uses): add --setup "setup(...)"`. The 184 recorded commands give the same configs and the same results without `--call` (48). With no values, no config changed; 9 failing probes now name the set-up: osqp's `setup`, timesfm's `compile` (both what the recorded commands run), and the training of catboost, prophet, statsforecast, pyod, skorch, river (`learn_many`) and lifelines (`fit_interval_censoring`; recorded: `fit` as the step). None named a wrong method once the message had to ask for the call (before, torch modules got `forward()` from `forward() missing 1 required argument`, and `float()` from `'float' object`).
 
+Also on 2026-10-29, `init` reads more than the signatures:
+- **The package's usage examples:** `>>>` docstring examples, the README's code blocks (from the package metadata) and `examples/` scripts. The first that builds the class gives the options not passed: the step, the classmethod, the set-up calls, and the values of arguments with no default, including values computed by an import, as a `{ call = ... }` constant, only with `--probe` and only when they compute. Some example steps are not taken:
+  - a method's own docstring calling it;
+  - a run-like name when an earlier one exists (pastas' README calls `solve`, `simulate` runs it);
+  - training when the class has a run-like method (GPy's `optimize`).
+
+  When the example's values fail the probe, they're dropped.
+- **Better starts for arguments with no default:**
+  - a documented default (`default 1e-6`);
+  - a typical value for a docstring unit (`[K]`: 293.15);
+  - a value the code's `if x < 3: raise` checks accept.
+- **With `--probe`:**
+  - after a failing constructor, classmethods taking no required argument (`default()`, `from_...()`);
+  - after a guessed step that fails or gives no outputs, the next two candidates;
+  - an iterator with no run-like method steps with `__next__`.
+
+The 184 recorded commands give the same configs. Without `--call`, 50 give the recorded outputs (48): pydmd and simpy, which failed before.
+
+With no values, none got worse but two:
+- skimage's `rgb2hsv` takes its docstring's `astronaut()` image, so its outputs differ only in size (512×512×3);
+- sympy's `lambdify` gives no outputs instead of failing.
+
+These now give the recorded outputs, from failing:
+- Bio's `gc_fraction`, filterpy's `Q_discrete_white_noise`, fluids' `head_from_P`, ht's `Nu_conv_internal`, py_vollib's `black_scholes`, slycot's `sb02md`, astropy's `FlatLambdaCDM` (with the recorded options), and simpy (with none);
+- pythermalcomfort's `pmv_ppd_iso`, from other outputs.
+
+14 more work, with other outputs than recorded, from failing: mendeleev, openturns, pedon, pydmd, pymoo, pymsis, pyproj, pyromat, tabnet, pywt, radioactivedecay, simdkalman, statsforecast and thermo. The fit set-ups are unchanged.
+
 Also on 2026-10-28: how far `init --probe` gets with no values at all, on the 151 recorded commands that run on the local PC: every `--start` and every `--const` dropped, except those naming a file, weights or a pretrained model (`<data>/speech.npy`, `yolo11n.pt`, `amazon/chronos-bolt-tiny`, `hf_hub_download(...)`), and every other option dropped too (or only `--call` kept). Arguments with no default then get made-up values. Since this date, when the probe fails with the made-up `0.0`, it retries: arguments the numpydoc docstring or type hint calls arrays as arrays of ones in their documented shape, then every made-up value as `1.0`, then as arrays of ones of a few shapes. With these retries, 69 of the 151 give a config with outputs (56 before), 52 with the same outputs as the recorded command (counting outputs whose array sizes differ, since sizes follow the input values: tirex's forecast is as long as its `prediction_length`; 34 before, counted without sizes): ahrs ×2, antropy, blackscholes, GPy, iapws, pedon, psychrolib, scikit-image, pyod and SAC now give the same outputs with no values; none got worse. Training a model (`--setup fit(...)`) is the user's part, so it was kept for the 8 models that need it: with it, and with the probe sizing `predict`'s made-up `X` from the fitted model's feature count (`n_features_in_`, tabnet's `input_dim`), catboost, tabnet, prophet and pyod also work: 73 of the 151 give outputs, 56 the recorded ones. With `--call` where the recorded command has one and nothing else (no values, data files kept), 62 give outputs and 52 the recorded ones (66 and 56 with the fit set-ups). The other outputs differ because the model took another path with made-up values (iapws has no liquid phase at the made-up state; PyCO2SYS computes only what its inputs allow) or returned its results in another form (a tuple instead of one value). skorch (its network) and NBEATS (its window lengths) still need values, and lightgbm and xgboost fail with their recorded commands on the local PC. The recorded commands themselves give the same configs as before.
 
 Of the 131 models tested first, none fails. The last 4 needed fmugen features, added after the main run and checked on these 4 models only (built, simulated, compiled and compared with a direct run; the other models weren't rerun with them):
