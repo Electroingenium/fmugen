@@ -1089,8 +1089,10 @@ NOT_STEP = ("close", "stop", "shutdown", "terminate", "release", "dispose", "dis
 def _rank_methods(cls, starts, constructor, fitting=()):
     """Public methods of ``cls`` that may run a step, most likely first, for when nothing picks one surely.
 
-    Ranked by: whether the ``--start`` names left for the step cover its required arguments (or its
-    signature can't be read; only when names were given), whether it fits them (:func:`_methods_taking`), whether its name is a
+    Ranked by (only when the constructor doesn't take some names): whether it takes any of those names
+    and they cover its required arguments, else whether it takes some of them (or its signature can't be
+    read), else none (a partial set of names still points at the step: ``solve(a, b)`` given only ``a``
+    before ``summary()``); whether they cover its required arguments; whether it fits them (:func:`_methods_taking`), whether its name is a
     :data:`NOT_STEP` one (or a :data:`SETUP_IF_STEP` one, when a :data:`STEP_LIKE` method is there too),
     its place in :data:`STEP_LIKE` (a name starting with one of them, ``solve_energy``, right after it;
     fit and train after them, when none is there), whether it's a
@@ -1105,7 +1107,8 @@ def _rank_methods(cls, starts, constructor, fitting=()):
     :param fitting: the methods the leftover names fit.
     :rtype: list[str]
     """
-    left = {n.partition(".")[0] for n in (_leftover_starts(constructor, starts) or starts or {})}
+    leftover = {n.partition(".")[0] for n in _leftover_starts(constructor, starts)}
+    left = leftover or {n.partition(".")[0] for n in starts or {}}
     names = [m for m in dir(cls) if not m.startswith("_") and callable(getattr(cls, m, None))
              and not isinstance(inspect.getattr_static(cls, m, None), (property, type, classmethod))]
     has_step = any(m in STEP_LIKE for m in names)
@@ -1117,13 +1120,15 @@ def _rank_methods(cls, starts, constructor, fitting=()):
             required = {p.name for p in params if p.default is p.empty}
             taken = len(left & {p.name for p in params})
             covered = required <= left
+            mine = len(leftover & {p.name for p in params})
+            tier = 0 if mine and covered else 1 if mine else 2
         except (TypeError, ValueError):   # a C method: may take anything
-            taken, covered = 0, True
+            taken, covered, tier = 0, True, 1
         not_step = _named(m, NOT_STEP) or has_step and _named(m, SETUP_IF_STEP)
         first = m.split("_")[0]
         place = (STEP_LIKE.index(m) if m in STEP_LIKE else STEP_LIKE.index(first) + 0.5 if first in STEP_LIKE
                  else len(STEP_LIKE) if m in ("fit", "train") else len(STEP_LIKE) + 1)
-        keys[m] = (bool(left) and not covered, m not in fitting, not_step, place,
+        keys[m] = (tier if leftover else 0, bool(left) and not covered, m not in fitting, not_step, place,
                    any(_variant_of(m, n) for n in names), -taken, m not in vars(cls), m)
     return sorted(keys, key=keys.get)
 

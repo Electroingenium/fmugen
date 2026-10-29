@@ -733,6 +733,17 @@ def test_ranking_run_like_prefixes_and_clean_up_names():
     assert _rank_methods(Sim, {}, Sim.__init__) == ["report", "close"]
 
 
+def test_ranking_a_partial_set_of_start_names_points_at_the_step():
+    from fmugen.interface import _rank_methods
+
+    class Model:              # --start a only: solve takes it, though b is left to be made up
+        def summary(self): ...
+        def plot(self): ...
+        def solve(self, a, b): ...
+
+    assert _rank_methods(Model, {"a": 1.0}, Model.__init__)[0] == "solve"
+
+
 def test_a_documented_array_without_default_is_made_up_as_ones(tmp_path):
     # like ahrs' Madgwick.updateIMU(q, gyr, acc): numpydoc says q is an array of shape (4,)
     path = write(tmp_path, "filt.py", '''
