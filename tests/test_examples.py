@@ -285,3 +285,33 @@ def test_sizes_are_made_up_as_integers_then_as_lists(tmp_path):
     data, text = run(f"{path}:Net", tmp_path, probe=True)
     assert data["parameters"]["hidden_size"]["start"] == 1 and data["outputs"]
     assert "dimensions" in data["parameters"]["n_modes"]   # a sequence: arrays of ones, else lists
+
+
+def test_an_environment_steps_with_an_action_from_its_space_after_reset(tmp_path):
+    # like gymnasium's CartPole: step() before reset() fails, and the action must be in its Discrete space
+    path = write(tmp_path, "env.py", """
+        class Discrete:
+            def __init__(self, n, start=0):
+                self.n, self.start = n, start
+
+            def contains(self, x):
+                return isinstance(x, int) and self.start <= x < self.start + self.n
+
+
+        class Env:
+            def __init__(self):
+                self.action_space = Discrete(2)
+                self.state = None
+
+            def reset(self, seed=None):
+                self.state = 0.0
+                return self.state
+
+            def step(self, action):
+                assert self.action_space.contains(action), f"{action!r} invalid"
+                self.state += 1.0 if action else -1.0
+                return {"x": self.state}
+    """)
+    data, text = run(f"{path}:Env", tmp_path, probe=True)
+    assert data["model"]["setup"] == ["reset"] and data["inputs"]["action"]["start"] == 0
+    assert "from the model's action or observation space" in text

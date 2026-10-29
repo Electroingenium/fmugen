@@ -284,7 +284,8 @@ def _reset_first(obj, method_name, data, comments):
         return False
     try:
         reset()
-        _call_with_probe_inputs(_step_method(obj, method_name, data), data, "call_constants")
+        # with the made-up inputs' retries: CartPole's step() takes an action from its action space, not 1.0
+        _probe_call(_step_method(obj, method_name, data), data, comments, constants_key="call_constants")
         reset()   # back to the state the FMU starts from, for the probe's own step
     except Exception:
         return False
@@ -1239,7 +1240,19 @@ def _retry_made_up(call, data, comments, section, obj=None):
         made[name].update({k: v for k, v in saved[name].items() if k not in ("start", "type", "numpy")},
                           dimensions=[size], start=[1 if counts else 1.0] * size, **({"type": "Int64"} if counts else {}))
 
+    def valued(name, value):   # a value from the object's own space
+        made[name].clear()
+        if isinstance(value, list):
+            made[name].update({k: v for k, v in saved[name].items() if k not in ("start", "type")},
+                              dimensions=[len(value)], start=value, numpy=True)
+        else:
+            made[name].update(saved[name], start=value)
+
     tries = [("as 0.0", {n: 0 for n in made})]
+    spaced = {n: _space_value(obj, n) for n in made}
+    if any(v is not None for v in spaced.values()):   # gymnasium's step(action): a value of action_space
+        tries.insert(0, ("from the model's action or observation space",
+                         {n: ("value", v) if v is not None else None for n, v in spaced.items()}))
     documented = {n: comments[_shape_key(section, n)] for n in made if _shape_key(section, n) in comments}
     if documented and importlib.util.find_spec("numpy") is not None:
         tries.insert(0, ("the arrays as arrays of ones in their documented shape, the others as made up",
@@ -1271,6 +1284,8 @@ def _retry_made_up(call, data, comments, section, obj=None):
                 listed(name, shape[1])
             elif isinstance(shape, tuple) and shape[0] == "tensor":
                 array(name, shape[1], tensor=True)
+            elif isinstance(shape, tuple) and shape[0] == "value":
+                valued(name, shape[1])
             else:
                 scalar(name) if shape is None else scalar(name, 0) if shape == 0 else array(name, shape)
         try:
@@ -1285,6 +1300,30 @@ def _retry_made_up(call, data, comments, section, obj=None):
         info.clear()
         info.update(saved[name])
     return _FAILED
+
+
+def _space_value(obj, name):
+    """A value of the gymnasium-style space an input takes: ``observation_space`` for an argument named like an
+    observation (stable-baselines3's ``predict(observation)``), else ``action_space`` (an environment's
+    ``step(action)``). The start of a ``Discrete`` space; the middle of a ``Box`` (0 where unbounded), as a list.
+
+    :param obj: the model object, or None.
+    :param name: the argument.
+    :type name: str
+    :return: an int, a list of floats, or None when there's no such space.
+    """
+    space = getattr(obj, "observation_space" if "obs" in name.lower() else "action_space", None)         if obj is not None else None
+    if space is None:
+        return None
+    try:
+        if hasattr(space, "n") and not hasattr(space, "low"):   # Discrete
+            return int(getattr(space, "start", 0))
+        import numpy
+        low, high = numpy.asarray(space.low, float), numpy.asarray(space.high, float)
+        middle = numpy.where(numpy.isfinite(low) & numpy.isfinite(high), (low + high) / 2, 0.0)
+        return [float(x) for x in middle.ravel()]
+    except Exception:
+        return None
 
 
 def _torch_module(obj):
