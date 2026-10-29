@@ -166,6 +166,8 @@ ASSUMPTIONS = (
     ("passes the code's checks", "no default in the code: the start value is one the code's checks accept, "
                                  "check it"),
     ("start from the example in", "start values taken from the package's examples: check them"),
+    ("default None, made up as 1.0", "default None in the code, made up as 1.0 as the probe failed without "
+                                     "it: check it, or remove it if your model passes another of them"),
     ("no default in the code", "no default in the code: the start value is made up, check it"),
     ("no default: check the start value", "no default in the code: the start value is made up, check it"),
     ("Integer because the default is an int", "typed Integer because the default is an int; "

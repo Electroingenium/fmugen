@@ -315,3 +315,18 @@ def test_an_environment_steps_with_an_action_from_its_space_after_reset(tmp_path
     data, text = run(f"{path}:Env", tmp_path, probe=True)
     assert data["model"]["setup"] == ["reset"] and data["inputs"]["action"]["start"] == 0
     assert "from the model's action or observation space" in text
+
+
+def test_one_of_several_optional_arguments_is_made_up_when_the_call_needs_it(tmp_path):
+    # like fluids' Reynolds(V, D, rho=None, mu=None, nu=None): rho and mu, or nu
+    path = write(tmp_path, "flow.py", """
+        def reynolds(V, D, rho=None, mu=None, nu=None):
+            if rho is not None and mu is not None:
+                return V * D * rho / mu
+            if nu is not None:
+                return V * D / nu
+            raise ValueError("Either density and viscosity, or kinematic viscosity is needed")
+    """)
+    data, text = run(f"{path}:reynolds", tmp_path, probe=True)
+    assert data["inputs"]["nu"] == {"start": 1.0} and "rho" not in data["inputs"] and data["outputs"]
+    assert "the probe failed without nu" in text

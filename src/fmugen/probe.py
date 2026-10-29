@@ -5,6 +5,7 @@ import datetime
 import enum
 import importlib
 import inspect
+import itertools
 import math
 import pickle
 import re
@@ -1002,6 +1003,8 @@ def _probe_once(fn, data, comments, constants_key="constants"):
             if result is _FAILED:
                 result = _retry_made_up(call, data, comments, "inputs", getattr(fn, "__self__", None))
             if result is _FAILED:
+                result = _retry_options(call, fn, data, comments)
+            if result is _FAILED:
                 raise
             return result
         for converter in ARRAY_RETRIES:
@@ -1022,6 +1025,58 @@ def _probe_once(fn, data, comments, constants_key="constants"):
                 comments[("inputs", name)] = f"passed as {shown}: the probe failed with lists"
             return result
         raise
+
+
+#: How many sets of optional arguments :func:`_retry_options` tries, at most.
+MAX_OPTION_SETS = 40
+
+
+def _retry_options(call, fn, data, comments):
+    """Call again giving some numeric arguments whose default is None, made up as 1.0: one alone, then two.
+
+    For models that need some of several optional arguments (fluids' ``Reynolds(V, D, rho=None, mu=None,
+    nu=None)``: "Either density and viscosity, or kinematic viscosity is needed"; pyet's pressure or
+    elevation). The smallest set that works becomes inputs, with a comment.
+
+    :param call: makes the probe call.
+    :type call: callable
+    :param fn: the function or step method.
+    :param data: the config being inferred; updated in place.
+    :type data: dict
+    :param comments: ``(section, key) -> text`` for :func:`render_toml`; updated in place.
+    :type comments: dict
+    :return: the result, or :data:`_FAILED`.
+    """
+    try:
+        params = inspect.signature(fn).parameters.values()
+    except (TypeError, ValueError):
+        return _FAILED
+    taken = {*data.get("inputs", {}), *data.get("time", {})}
+    options = [p.name for p in params if p.default is None and p.name not in taken
+               and p.kind in (p.POSITIONAL_OR_KEYWORD, p.KEYWORD_ONLY)
+               and static.unwrap_optional(p.annotation) in (p.empty, float, int)]
+    if not options:
+        return _FAILED
+    sets = [[n] for n in options] + [list(pair) for pair in itertools.combinations(options, 2)]
+    inputs = data.setdefault("inputs", {})
+    for chosen in sets[:MAX_OPTION_SETS]:
+        for name in chosen:
+            inputs[name] = {"start": 1.0}
+        try:
+            result = call()
+        except Exception:
+            for name in chosen:
+                inputs.pop(name)
+            continue
+        for name in chosen:
+            for table in ("constants", "call_constants"):
+                comments.pop(("model", f"{table}.{name}"), None)
+            comments[("inputs", name)] = (f"default None, made up as 1.0: the probe failed without "
+                                          f"{' and '.join(chosen)}; check it")
+        return result
+    if not inputs:
+        data.pop("inputs")
+    return _FAILED
 
 
 #: Sentinel: :func:`_retry_as_arrays` found no call that works.
