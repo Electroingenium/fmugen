@@ -471,6 +471,8 @@ When the constructor can't take your `--start`/`--const` names and exactly one p
 
 With `--probe`, `init` tries `reset()` (when it takes no arguments) before the first step and, if the step then works, adds `setup = ["reset"]` with a comment (gymnasium environments). Otherwise rerun with `--setup reset`.
 
+When the step still fails, `init --probe` looks for another set-up the step needs: a method the error message asks to call first ("call connect() first"), or one that assigns an attribute the step reads that is `None` or missing. It tries that method in `[model] setup`, making up its arguments as `1.0`, and keeps it with a comment when the step then works (check the made-up arguments). Training methods (`fit`, `train`, `learn`, `fit_...`) are never made up. The failure comment names them instead, for example `solve() seems to need setup() first (it sets ..., which solve() uses): add --setup "setup(...)"`.
+
 ### Why is my variable Integer?
 
 Its start value is an `int` (`0`, `1`). Write `0.0`, or add `type = "Real"`.
