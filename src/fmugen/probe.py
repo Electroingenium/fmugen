@@ -1689,6 +1689,10 @@ def _retry_made_up(call, data, comments, section, obj=None, error=None):
     if _torch_module(obj):   # a torch module's forward() takes tensors (norse, snntorch)
         tries += [(f"as torch tensors of ones, shape {tuple(s)}", {n: ("tensor", s) for n in made})
                   for s in list(MADE_UP_SHAPES) + _object_shapes(obj)]
+    if "torch" in sys.modules:
+        # a float32 batch as wide as made-up training data (skorch's predict(X) on a torch network trained on it)
+        tries += [(f"as torch tensors of ones, shape {(1, MADE_UP_TRAINING[1])}",
+                   {n: ("tensor", [1, MADE_UP_TRAINING[1]]) for n in made})]
     tries += [("as lists of two ones", {n: ("list", 2) for n in made})]
     if len(made) > 1:
         tries += [(f"{n} as a list of two ones, the others as made up", {m: ("list", 2) if m == n else None for m in made})

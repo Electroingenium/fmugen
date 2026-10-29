@@ -331,6 +331,15 @@ def _shaped_starts(data, comments, starts, shaped):
         if n not in shaped and n not in starts and any(str(comments.get((k, f"{table}.{n}"), "")).startswith(
             "no default") for k in ("model", "constant"))]
     tries = []
+    if (match := NONE_ATTRIBUTE.search(error)) and importlib.util.find_spec("ase") is not None:
+        # an ASE calculator's calculate(atoms=None): mace's "'NoneType' object has no attribute 'symbols'"
+        for key in list(comments):   # the None defaults: commented out, as ("model", "call_constants.atoms")
+            table, _, name = str(key[1]).partition(".") if key[0] == "model" else ("", "", "")
+            if table in ("constants", "call_constants") and name and name not in starts \
+                    and name not in data["model"].get(table, {}) \
+                    and (name == "atoms" or match.group(1) in ATOMS_ATTRIBUTES and "atom" in name):
+                tries.append(({name: {"call": MADE_UP_ATOMS}}, "made up as a water molecule (ase): the probe failed "
+                                                               "without it; give your own"))
     for name in dict.fromkeys(made):
         current = starts.get(name)
         if (match := MISSING_KEY.search(error)) and (current is None or isinstance(current, dict)
@@ -349,6 +358,12 @@ def _shaped_starts(data, comments, starts, shaped):
         if current is None and SERIES_ASKED.search(error):   # pastas' Model(oseries): a dated pandas Series
             tries.append(({name: {"call": MADE_UP_SERIES}}, "made up as a dated pandas Series of 24 days: the probe "
                                                             "failed with a number; set your own"))
+        elif current is None and (NETWORK_NAME.search(name) or NETWORK_ASKED.search(error)) \
+                and "torch" in sys.modules:
+            # skorch's NeuralNetRegressor(module), torchdyn's NeuralODE(vector_field): a small network, 4 features
+            for layer in ("torch.nn:Linear(4, 1)", "torch.nn:Linear(4, 4)"):
+                tries.append(({name: {"call": layer}}, f"made up as {layer.replace(':', '.')}: the probe failed with "
+                                                       "a number; give your own network"))
         elif current is None and (found := _package_class(data["model"].get("entry", ""), name)):
             # nengo's Simulator(network): the package's Network(), built with no arguments
             tries.append(({name: {"call": f"{found}()"}}, f"made up as {found.replace(':', '.')}(): the probe failed "
@@ -368,6 +383,17 @@ def _shaped_starts(data, comments, starts, shaped):
     return tries[:3]
 
 
+#: Names of arguments that are a torch network.
+NETWORK_NAME = re.compile(r"^(module|net|network|vector_field|model_fn)$")
+#: An error asking for a network or a callable: torchdyn's "unsupported callable".
+NETWORK_ASKED = re.compile(r"\bcallable\b|nn\.Module|\bModule\b|has no attribute 'forward'|has no attribute 'parameters'")
+#: "'NoneType' object has no attribute 'pbc'": an argument left None is needed.
+NONE_ATTRIBUTE = re.compile(r"'NoneType' object has no attribute '(\w+)'")
+#: Attributes of an ASE ``Atoms``, which calculators read from their ``atoms``.
+ATOMS_ATTRIBUTES = {"symbols", "pbc", "positions", "cell", "numbers", "get_positions", "get_atomic_numbers",
+                    "get_chemical_symbols", "get_cell", "get_pbc"}
+#: A made-up ASE ``Atoms``: a water molecule in a 10 Å box.
+MADE_UP_ATOMS = "ase.build:molecule('H2O', vacuum=5.0)"
 #: An error about a time series: pastas' "The dtype of the values of the series 'None' is not float".
 SERIES_ASKED = re.compile(r"\bseries\b|DatetimeIndex|PeriodIndex", re.I)
 #: A made-up dated series (:data:`SERIES_ASKED`): 24 daily values going up and down.
