@@ -364,3 +364,31 @@ def test_a_function_returning_the_model_steps_with_the_method_the_starts_fit(tmp
     data, text = run(f"{path}:load", tmp_path, probe=True, starts={"filename": "model.pkl", "X": 3.0})
     assert data["model"]["call"] == "predict" and data["inputs"]["X"]["start"] == 3.0
     assert "returns the model: X are arguments of its predict()" in text
+
+
+def test_an_input_the_error_asks_to_be_text_is_made_up_as_text(tmp_path):
+    # like sentence-transformers' encode(sentences): "Unsupported input type: float. Expected one of: str, ..."
+    path = write(tmp_path, "embed.py", """
+        class Encoder:
+            def encode(self, sentences):
+                if not isinstance(sentences, str):
+                    raise ValueError(f"Unsupported input type: {type(sentences).__name__}. Expected one of: str")
+                return {"length": float(len(sentences))}
+    """)
+    data, text = run(f"{path}:Encoder", tmp_path, probe=True, call="encode")
+    assert isinstance(data["inputs"]["sentences"]["start"], str) and data["outputs"]
+    assert "made up as text" in text
+
+
+def test_a_callable_without_signature_gets_the_positional_numbers_its_error_asks_for(tmp_path):
+    # like sgp4's C method sgp4(jd, fr): "sgp4() takes exactly 2 arguments (0 given)"
+    path = write(tmp_path, "orbit.py", """
+        class Satellite:
+            def propagate(self, *args):
+                if len(args) != 2:
+                    raise TypeError(f"propagate() takes exactly 2 arguments ({len(args)} given)")
+                return {"r": args[0] + args[1]}
+    """)
+    data, text = run(f"{path}:Satellite", tmp_path, probe=True, call="propagate")
+    assert data["inputs"] == {"x0": {"start": 1.0, "to": "pos:0"}, "x1": {"start": 1.0, "to": "pos:1"}}
+    assert "takes 2 numbers" in text

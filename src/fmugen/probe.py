@@ -1005,6 +1005,10 @@ def _probe_once(fn, data, comments, constants_key="constants"):
             if result is _FAILED:
                 result = _retry_options(call, fn, data, comments)
             if result is _FAILED:
+                result = _retry_as_text(call, data, comments, error)
+            if result is _FAILED:
+                result = _retry_positional(call, fn, data, comments, error)
+            if result is _FAILED:
                 raise
             return result
         for converter in ARRAY_RETRIES:
@@ -1025,6 +1029,105 @@ def _probe_once(fn, data, comments, constants_key="constants"):
                 comments[("inputs", name)] = f"passed as {shown}: the probe failed with lists"
             return result
         raise
+
+
+#: An error asking for text: sentence-transformers' "Expected one of: str, dict, ...", transformers' "text input
+#: must be of type `str`".
+TEXT_ASKED = re.compile(r"\bstr\b|\bstring\b|\btext\b", re.I)
+#: The text a made-up input that must be text is tried with.
+MADE_UP_TEXT = "The quick brown fox jumps over the lazy dog."
+
+
+def _retry_as_text(call, data, comments, error):
+    """Call again with the made-up inputs as text, when the error asks for a string: every one, then each alone.
+
+    :param call: makes the probe call.
+    :type call: callable
+    :param data: the config being inferred; updated in place.
+    :type data: dict
+    :param comments: ``(section, key) -> text`` for :func:`render_toml`; updated in place.
+    :type comments: dict
+    :param error: the probe call's error.
+    :type error: Exception
+    :return: the result, or :data:`_FAILED`.
+    """
+    if not TEXT_ASKED.search(str(error)):
+        return _FAILED
+    made = {n: info for n, info in data.get("inputs", {}).items()
+            if comments.get(("inputs", n)) == MADE_UP and "dimensions" not in info and not info.get("convert")}
+    if not made:
+        return _FAILED
+    saved = {n: dict(info) for n, info in made.items()}
+    for chosen in [list(made)] + ([[n] for n in made] if len(made) > 1 else []):
+        for n in chosen:
+            made[n].clear()
+            made[n].update({k: v for k, v in saved[n].items() if k not in ("start", "type")}, start=MADE_UP_TEXT)
+        try:
+            result = call()
+        except Exception:
+            for n in chosen:
+                made[n].clear()
+                made[n].update(saved[n])
+            continue
+        for n in chosen:
+            comments[("inputs", n)] = "no default in the code: made up as text, since the probe asked for a string; check it"
+        return result
+    return _FAILED
+
+
+#: How many positional arguments an error says a callable without a signature takes: "takes exactly 2
+#: arguments (0 given)" (sgp4's C method), "expected 3 arguments".
+ARGUMENT_COUNT = re.compile(r"takes (?:exactly )?(\d+) (?:positional )?arguments? \(0 given\)|expected (\d+) arguments?")
+#: A C++ prototype in a SWIG error ("Possible C/C++ prototypes are: OT::Normal::computePDF(OT::Scalar const) const").
+PROTOTYPE = re.compile(r"[\w:]+\(([^()]*)\)")
+#: A C++ parameter that is a number.
+NUMBER_PARAMETER = re.compile(r"^(?:const )?(?:\w+::)*(?:Scalar|double|float|int|long|UnsignedInteger|Real|Size|Natural|"
+                              r"Integer)(?: const)?(?: ?&)?(?: \w+)?$")
+
+
+def _retry_positional(call, fn, data, comments, error):
+    """Call a callable without a readable signature again with as many made-up positional numbers as the error
+    says it takes: the count of "takes exactly 2 arguments (0 given)", else the fewest numbers of a SWIG
+    prototype that takes only numbers (openturns' ``computePDF(OT::Scalar const)``). They become inputs
+    ``x0``, ``x1``, ... passed by position.
+
+    :param call: makes the probe call.
+    :type call: callable
+    :param fn: the function or step method.
+    :param data: the config being inferred; updated in place.
+    :type data: dict
+    :param comments: ``(section, key) -> text`` for :func:`render_toml`; updated in place.
+    :type comments: dict
+    :param error: the probe call's error.
+    :type error: Exception
+    :return: the result, or :data:`_FAILED`.
+    """
+    from fmugen.arguments import _only_varargs
+    if data.get("inputs") or not _only_varargs(fn, skip_self=False):
+        return _FAILED
+    text = str(error)
+    counts = []
+    match = ARGUMENT_COUNT.search(text)
+    if match:
+        counts.append(int(match.group(1) or match.group(2)))
+    for prototype in PROTOTYPE.findall(text):
+        parts = [p.strip() for p in prototype.split(",") if p.strip()]
+        if parts and all(NUMBER_PARAMETER.match(p) for p in parts):
+            counts.append(len(parts))
+    for count in sorted(set(c for c in counts if 0 < c <= 8)):
+        inputs = data.setdefault("inputs", {})
+        for i in range(count):
+            inputs[f"x{i}"] = {"start": 1.0, "to": f"pos:{i}"}
+        try:
+            result = call()
+        except Exception:
+            data.pop("inputs")
+            continue
+        for i in range(count):
+            comments[("inputs", f"x{i}")] = (f"no default in the code: made up, by position: the probe's error says it "
+                                             f"takes {count} numbers; name it and check it")
+        return result
+    return _FAILED
 
 
 #: How many sets of optional arguments :func:`_retry_options` tries, at most.
