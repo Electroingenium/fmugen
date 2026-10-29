@@ -1001,7 +1001,7 @@ def _probe_once(fn, data, comments, constants_key="constants"):
             if result is _FAILED:
                 result = _retry_as_pint(call, data, comments)
             if result is _FAILED:
-                result = _retry_made_up(call, data, comments, "inputs", getattr(fn, "__self__", None))
+                result = _retry_made_up(call, data, comments, "inputs", getattr(fn, "__self__", None), error)
             if result is _FAILED:
                 result = _retry_options(call, fn, data, comments)
             if result is _FAILED:
@@ -1347,7 +1347,21 @@ def _rebuild_made_up_as_zero(build, method_name, data, comments):
     return obj
 
 
-def _retry_made_up(call, data, comments, section, obj=None):
+#: A shape an error message names: "cannot reshape array of size 1 into shape (7)", "expected shape (1, 4)".
+ERROR_SHAPE = re.compile(r"shape \(?\s*(\d+(?:\s*,\s*\d+)*)\s*,?\s*\)?")
+
+
+def _error_shapes(error):
+    """The shapes an error message names (:data:`ERROR_SHAPE`), with no dimension of 1 alone, at most 3."""
+    shapes = []
+    for match in ERROR_SHAPE.finditer(str(error or "")):
+        shape = [int(x) for x in re.split(r"\s*,\s*", match.group(1))]
+        if shape not in shapes and shape != [1] and 0 < math.prod(shape) <= 10_000:
+            shapes.append(shape)
+    return shapes[:3]
+
+
+def _retry_made_up(call, data, comments, section, obj=None, error=None):
     """Call again with the made-up values of ``section`` (no default, no ``--start``) as 0.0, then as arrays of ones.
 
     The made-up start is 1.0 (not 0.0, which models refuse when they check it's positive or divide
@@ -1425,6 +1439,7 @@ def _retry_made_up(call, data, comments, section, obj=None):
             if isinstance(features, int) and not isinstance(features, bool):
                 break
         shapes = ([[1, features], [features]] if isinstance(features, int) and features > 0 else []) + list(MADE_UP_SHAPES)
+        shapes = _error_shapes(error) + [s for s in shapes if s not in _error_shapes(error)]   # roboticstoolbox's (7)
         tries += [(f"as arrays of ones, shape {tuple(s)}", {n: s for n in made}) for s in shapes]
         if len(made) > 1:
             tries += [(f"{n} as an array of ones, shape {tuple(s)}, the others as made up",

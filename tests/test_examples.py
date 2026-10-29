@@ -392,3 +392,17 @@ def test_a_callable_without_signature_gets_the_positional_numbers_its_error_asks
     data, text = run(f"{path}:Satellite", tmp_path, probe=True, call="propagate")
     assert data["inputs"] == {"x0": {"start": 1.0, "to": "pos:0"}, "x1": {"start": 1.0, "to": "pos:1"}}
     assert "takes 2 numbers" in text
+
+
+def test_a_made_up_input_takes_the_shape_the_error_names(tmp_path):
+    # like roboticstoolbox's Panda.fkine(q): "cannot reshape array of size 1 into shape (7)"
+    path = write(tmp_path, "arm.py", """
+        import numpy
+
+        class Arm:
+            def fkine(self, q):
+                q = numpy.asarray(q, dtype=float).reshape(5)
+                return {"reach": float(q.sum())}
+    """)
+    data, _ = run(f"{path}:Arm", tmp_path, probe=True, call="fkine", fmi_version=3)
+    assert data["inputs"]["q"]["dimensions"] == [5]
