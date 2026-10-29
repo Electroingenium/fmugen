@@ -361,21 +361,29 @@ def _setup_first(build, obj, method_name, error, data, comments):
                       if p.default is p.empty and p.kind in (p.POSITIONAL_ONLY, p.POSITIONAL_OR_KEYWORD)]
         except (TypeError, ValueError):
             continue
-        step = f"{name}({', '.join('1.0' for _ in params)})"
+        made = [_made_up_argument(getattr(obj, name), p) for p in params]
+        step = f"{name}({', '.join(made)})"
         setup = [*data["model"].get("setup", []), step]
         trial = dict(data, model=dict(data["model"], setup=setup))
         try:
             fresh = _build_set_up(build, trial)
         except Exception:
             continue
+        saved = {n: dict(i) for n, i in data.get("inputs", {}).items()}
+        saved_comments = dict(comments)
         try:
-            _call_with_probe_inputs(_step_method(fresh, method_name, data), data, "call_constants")
+            # with the made-up inputs' retries: timesfm's forecast() takes a list of arrays, not 1.0
+            _probe_call(_step_method(fresh, method_name, data), data, comments, constants_key="call_constants")
             fresh = _build_set_up(build, trial)   # not stepped: the object the FMU starts from
         except Exception:
+            if "inputs" in data:
+                data["inputs"] = saved
+            comments.clear()
+            comments.update(saved_comments)
             unhelpful.add(name)
             continue
         data["model"]["setup"] = setup
-        made_up = ", its arguments made up as 1.0: check them" if params else ""
+        made_up = f", its arguments made up ({', '.join(made)}): check them" if params else ""
         comments[("model", "setup")] = (f"{name}() before the first step: {method_name}() failed without it in the "
                                         f"probe{made_up}")
         return fresh
@@ -475,6 +483,33 @@ def _made_up_training():
         if series is not None:
             tries.append(((series,), f"a TimeSeries of {samples} values"))
     return tries
+
+
+def _made_up_argument(fn, p):
+    """A set-up argument with no default, as call text: an instance built with no arguments of the class it's
+    annotated with (timesfm's ``compile(forecast_config: ForecastConfig)``), else ``1.0``.
+
+    :param fn: the set-up method.
+    :param p: the parameter.
+    :type p: inspect.Parameter
+    :rtype: str
+    """
+    try:
+        hint = typing.get_type_hints(fn).get(p.name, p.annotation)
+    except Exception:
+        hint = p.annotation
+    from fmugen import static
+    from fmugen.arguments import NOT_BUILT
+    hint = static.unwrap_optional(hint)
+    if isinstance(hint, type) and hint is not p.empty and not issubclass(hint, NOT_BUILT) \
+            and hint.__module__ not in ("builtins", "typing", "inspect") \
+            and "<" not in hint.__qualname__:
+        try:
+            hint()
+        except Exception:
+            return "1.0"
+        return f"{hint.__module__}.{hint.__qualname__}()"
+    return "1.0"
 
 
 def _build_set_up(build, data):
@@ -1233,12 +1268,14 @@ def _retry_positional(call, fn, data, comments, error):
 MAX_OPTION_SETS = 40
 
 
-def _retry_options(call, fn, data, comments):
-    """Call again giving some numeric arguments whose default is None, made up as 1.0: one alone, then two.
+def _retry_options(call, fn, data, comments, section="inputs"):
+    """Call again giving some numeric arguments whose default is None, made up as 1.0 (1 for a count or size,
+    :data:`fmugen.arguments.COUNT_NAME`): one alone, then two.
 
     For models that need some of several optional arguments (fluids' ``Reynolds(V, D, rho=None, mu=None,
     nu=None)``: "Either density and viscosity, or kinematic viscosity is needed"; pyet's pressure or
-    elevation). The smallest set that works becomes inputs, with a comment.
+    elevation; reservoirpy's ``Reservoir(units=None)`` when building it). The smallest set that works
+    becomes variables of ``section``, with a comment.
 
     :param call: makes the probe call.
     :type call: callable
@@ -1247,23 +1284,26 @@ def _retry_options(call, fn, data, comments):
     :type data: dict
     :param comments: ``(section, key) -> text`` for :func:`render_toml`; updated in place.
     :type comments: dict
+    :param section: ``"inputs"`` (the step's arguments) or ``"parameters"`` (the constructor's).
+    :type section: str
     :return: the result, or :data:`_FAILED`.
     """
+    from fmugen.arguments import COUNT_NAME
     try:
         params = inspect.signature(fn).parameters.values()
     except (TypeError, ValueError):
         return _FAILED
-    taken = {*data.get("inputs", {}), *data.get("time", {})}
+    taken = {*data.get("inputs", {}), *data.get("parameters", {}), *data.get("time", {})}
     options = [p.name for p in params if p.default is None and p.name not in taken
                and p.kind in (p.POSITIONAL_OR_KEYWORD, p.KEYWORD_ONLY)
                and static.unwrap_optional(p.annotation) in (p.empty, float, int)]
     if not options:
         return _FAILED
     sets = [[n] for n in options] + [list(pair) for pair in itertools.combinations(options, 2)]
-    inputs = data.setdefault("inputs", {})
+    inputs = data.setdefault(section, {})
     for chosen in sets[:MAX_OPTION_SETS]:
         for name in chosen:
-            inputs[name] = {"start": 1.0}
+            inputs[name] = {"start": 1 if COUNT_NAME.search(name) else 1.0}
         try:
             result = call()
         except Exception:
@@ -1273,11 +1313,11 @@ def _retry_options(call, fn, data, comments):
         for name in chosen:
             for table in ("constants", "call_constants"):
                 comments.pop(("model", f"{table}.{name}"), None)
-            comments[("inputs", name)] = (f"default None, made up as 1.0: the probe failed without "
-                                          f"{' and '.join(chosen)}; check it")
+            comments[(section, name)] = (f"default None, made up as {inputs[name]['start']}: the probe failed "
+                                         f"without {' and '.join(chosen)}; check it")
         return result
     if not inputs:
-        data.pop("inputs")
+        data.pop(section)
     return _FAILED
 
 
@@ -1348,6 +1388,8 @@ def _construct(build, data, comments):
                  if "dimensions" in info and not info.get("numpy") and not info.get("convert")}
         if not plain:
             obj = _retry_made_up(make, data, comments, "parameters")
+            if obj is _FAILED:
+                obj = _retry_options(make, build, data, comments, "parameters")
             if obj is _FAILED:
                 raise
             return obj

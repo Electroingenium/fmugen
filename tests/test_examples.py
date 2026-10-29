@@ -463,3 +463,43 @@ def test_a_function_returning_a_function_is_called_on_every_step(tmp_path):
     data, text = run(f"{path}:make", tmp_path, probe=True)
     assert data["model"]["call"] == "__call__" and set(data["inputs"]) >= {"x", "y"}
     assert "returns a function" in text
+
+
+def test_a_set_up_argument_annotated_with_a_class_is_built_from_it(tmp_path):
+    # like timesfm's compile(forecast_config: ForecastConfig) before forecast()
+    path = write(tmp_path, "tfm.py", """
+        class ForecastConfig:
+            def __init__(self, horizon=4):
+                self.horizon = horizon
+
+        class Model:
+            def __init__(self):
+                self.config = None
+
+            def compile(self, forecast_config: ForecastConfig):
+                self.config = forecast_config
+
+            def forecast(self, x):
+                if self.config is None:
+                    raise RuntimeError("Model is not compiled. Please call compile() first.")
+                return {"y": x * self.config.horizon}
+    """)
+    data, _ = run(f"{path}:Model", tmp_path, probe=True, call="forecast")
+    assert data["model"]["setup"] == ["compile(tfm.ForecastConfig())"]
+
+
+def test_an_optional_constructor_argument_is_made_up_when_building_fails(tmp_path):
+    # like reservoirpy's Reservoir(units=None): "'units' parameter must not be None"
+    path = write(tmp_path, "res.py", """
+        class Reservoir:
+            def __init__(self, units=None, lr=1.0):
+                if units is None:
+                    raise ValueError("'units' parameter must not be None")
+                self.state = [0.0] * units
+
+            def step(self, x):
+                self.state = [s + x for s in self.state]
+                return {"y": sum(self.state)}
+    """)
+    data, text = run(f"{path}:Reservoir", tmp_path, probe=True, call="step")
+    assert data["parameters"]["units"] == {"start": 1} and "the probe failed without units" in text

@@ -166,7 +166,7 @@ ASSUMPTIONS = (
     ("passes the code's checks", "no default in the code: the start value is one the code's checks accept, "
                                  "check it"),
     ("start from the example in", "start values taken from the package's examples: check them"),
-    ("default None, made up as 1.0", "default None in the code, made up as 1.0 as the probe failed without "
+    ("default None, made up as", "default None in the code, made up as 1 as the probe failed without "
                                      "it: check it, or remove it if your model passes another of them"),
     ("'s first member", "no default in the code: the first member of its Enum, check it"),
     ("no default in the code", "no default in the code: the start value is made up, check it"),

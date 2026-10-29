@@ -855,7 +855,7 @@ def test_a_set_up_the_step_needs_is_found(tmp_path):
                 return self._solver.solve()
     """)
     data, text = probe(f"{path}:QP", tmp_path, call="solve")
-    assert data["model"]["setup"] == ["setup(1.0, 1.0)"] and "made up as 1.0: check them" in text
+    assert data["model"]["setup"] == ["setup(1.0, 1.0)"] and "made up (1.0, 1.0): check them" in text
     assert data["outputs"]
 
 

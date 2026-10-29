@@ -675,19 +675,27 @@ def set_path(obj, path, value):
     :param value: the new value.
     """
     *parents, last = path.split(".")
+    table = column = None
     for part in parents:
+        table, column = obj, part
         try:
             obj = getattr(obj, part)
         except AttributeError:   # a key or an index: "loads.p_set.l", "data.qpos.0"
             obj = get_path(obj, part)
     try:
         attribute = hasattr(obj, last)
+        if attribute and _labelled(obj) and not hasattr(type(obj), last) and last in obj:
+            attribute = False   # pandas reads labels as attributes (series.l): it's an item
     except Exception:   # a property that fails to read: set it as before
         attribute = True
     if attribute:
         setattr(obj, last, value)
     elif (isinstance(obj, Mapping) or _labelled(obj)) and last in obj:
-        obj[last] = value
+        if _labelled(table) and hasattr(table, "loc") and column in getattr(table, "columns", ()):
+            # a column of a table is a copy under pandas' copy-on-write: set the table's cell
+            table.loc[last, column] = value
+        else:
+            obj[last] = value
     elif last.lstrip("-").isdigit() and last.count("-") <= 1 and _indexable(obj):
         obj[int(last)] = value
     else:
