@@ -503,3 +503,66 @@ def test_an_optional_constructor_argument_is_made_up_when_building_fails(tmp_pat
     """)
     data, text = run(f"{path}:Reservoir", tmp_path, probe=True, call="step")
     assert data["parameters"]["units"] == {"start": 1} and "the probe failed without units" in text
+
+
+OPTION = """
+    class Option:
+        def __init__(self, S, K):
+            self.S, self.K = S, K
+
+        def price(self):
+            return {"price": max(self.S - self.K, 0.0)}
+
+        def delta(self):
+            return {"delta": 1.0}
+
+        def gamma(self):
+            return {"gamma": 0.0}
+"""
+
+
+def test_a_readme_showing_several_queries_leads_with_the_step(tmp_path):
+    # like blackscholes' README: price(), then delta(), gamma(); a bash block's fence opens no Python block
+    path = write(tmp_path, "opt.py", OPTION)
+    write(tmp_path, "README.md", """
+        Install it:
+        ```bash
+        pip install opt
+        ```
+        Some prose: not code.
+        ```python
+        from opt import Option
+        call = Option(S=55.0, K=50.0)
+        call.price()
+        call.delta()
+        call.gamma()
+        ```
+    """)
+    data, _ = run(f"{path}:Option", tmp_path, probe=True)
+    assert data["model"]["call"] == "price" and "setup" not in data["model"]
+
+
+def test_a_method_iterated_in_a_loop_header_is_the_step(tmp_path):
+    # like nashpy's README: for eq in game.support_enumeration(): print(eq)
+    path = write(tmp_path, "game.py", """
+        class Game:
+            def __init__(self, a):
+                self.a = a
+
+            def payoffs(self):
+                return {"p": self.a}
+
+            def equilibria(self):
+                yield {"e": self.a}
+    """)
+    write(tmp_path, "README.md", """
+        ```python
+        from game import Game
+        game = Game(a=2.0)
+        print(game.payoffs())
+        for eq in game.equilibria():
+            print(eq)
+        ```
+    """)
+    data, _ = run(f"{path}:Game", tmp_path, probe=True)
+    assert data["model"]["call"] == "equilibria"

@@ -25,7 +25,10 @@ MAX_FILES = 40
 #: Example files larger than this (bytes) are skipped.
 MAX_SIZE = 200_000
 
-_FENCED = re.compile(r"^```[ \t]*(?:python|py|python3|pycon)?[ \t]*\n(.*?)^```", re.M | re.S)
+#: A Markdown fence line: ```` ``` ```` or ```` ~~~ ````, with the block's language.
+_FENCE = re.compile(r"^[ \t]*(```+|~~~+)[ \t]*([\w+-]*)")
+#: The languages of a fenced block read as Python (none: often Python in a Python package's README).
+PYTHON_FENCES = ("", "python", "py", "python3", "pycon", "ipython")
 _RST = re.compile(r"^\.\. (?:code-block|code|sourcecode)::[ \t]*(?:python|py|python3|pycon)?[ \t]*\n"
                   r"(?:[ \t]+:\w[\w-]*:.*\n)*\n?((?:[ \t]+.*\n|[ \t]*\n)+)", re.M)
 
@@ -174,9 +177,27 @@ def _doctest_code(text):
         return ""
 
 
+def _fenced_blocks(text):
+    """The Python blocks of a Markdown document, its fences paired in order: a ```` ```bash ```` block's closing
+    fence doesn't open one (nashpy's README)."""
+    blocks, lines, fence, language = [], [], None, ""
+    for line in text.splitlines():
+        match = _FENCE.match(line)
+        if fence is None:
+            if match:
+                fence, language, lines = match.group(1), match.group(2).lower(), []
+        elif match and match.group(1).startswith(fence[:3]) and not match.group(2):
+            if language in PYTHON_FENCES:
+                blocks.append(textwrap.dedent("\n".join(lines)))
+            fence = None
+        else:
+            lines.append(line)
+    return blocks
+
+
 def _code_blocks(text):
     """The Python code blocks of a Markdown or reStructuredText document (and its ``>>>`` examples)."""
-    blocks = [m.group(1) for m in _FENCED.finditer(text)] + [textwrap.dedent(m.group(1)) for m in _RST.finditer(text)]
+    blocks = _fenced_blocks(text) + [textwrap.dedent(m.group(1)) for m in _RST.finditer(text)]
     for block in blocks:
         yield _doctest_code(block) if ">>>" in block else block
     if ">>>" in text and not blocks:
@@ -195,7 +216,12 @@ def _statements(body, loop=0):
     """The statements of ``body`` in order, with how many loops each is in, through if/with/try/for blocks and
     the ``main()`` style functions an example script defines."""
     for node in body:
-        if isinstance(node, (ast.For, ast.While, ast.AsyncFor)):
+        if isinstance(node, (ast.For, ast.AsyncFor)):
+            # what it iterates is used, in a loop: nashpy's "for eq in game.support_enumeration():"
+            header = ast.Assign(targets=[ast.Name("_")], value=node.iter, lineno=node.lineno, col_offset=0)
+            yield header, loop + 1
+            yield from _statements(node.body, loop + 1)
+        elif isinstance(node, ast.While):
             yield from _statements(node.body, loop + 1)
         elif isinstance(node, (ast.If, ast.With, ast.AsyncWith)):
             yield from _statements(node.body, loop)
@@ -433,8 +459,14 @@ def _read(code, source, entry, module):
             return usage
         from fmugen.interface import CALL_NAMES, STEP_LIKE
 
-        def rank(c):   # a run-like name, then a call in a loop, then one whose result is used, then the last
-            return (c[0] not in CALL_NAMES + STEP_LIKE, not c[2], not c[3], -calls.index(c))
+        # a run-like name, then a call in a loop, then one whose result is used, then the first: a README showing
+        # several queries in turn leads with the main one (blackscholes' price(), then delta(), ... charm())
+        # (among run-like names, by their order there: simpy's run() before its process())
+        runlike = CALL_NAMES + STEP_LIKE
+
+        def rank(c):
+            return (c[0] not in runlike, runlike.index(c[0]) if c[0] in runlike else 0, not c[2], not c[3],
+                    calls.index(c))
 
         step = min(steps, key=rank)
         usage.call = step[0]
