@@ -356,12 +356,14 @@ def _infer_config(target, call, config_dir, fmi_version, starts, setup, kind, cr
         if create:
             raise InterfaceError("--create only applies to classes; a function with --call is already a factory")
         _infer_class(None, call, data, comments, factory=entry, **options)
-    elif probe and kind != "function" and not create and (left := _returns_callable(entry, data, starts)):
-        # the --start names it doesn't take are the arguments of the model it returns (silero's load_silero_vad)
+    elif probe and kind != "function" and not create and (left := _returns_callable(entry, data, starts)) is not None:
+        # the --start names it doesn't declare are the arguments of the model it returns (silero's load_silero_vad,
+        # transformers' pipeline(task, model, **kwargs)(inputs)); with none, it returns a function (sympy's lambdify)
         _infer_class(None, "__call__", data, comments, factory=entry, **options)
         data["model"]["call"] = "__call__"
-        comments[("model", "call")] = (f"{entry_name}() returns the model: {', '.join(left)} are arguments of "
-                                       "calling it, not of the function")
+        comments[("model", "call")] = (
+            f"{entry_name}() returns the model: {', '.join(left)} are arguments of calling it, not of the function"
+            if left else f"{entry_name}() returns a function: it's called on every step")
     elif probe and kind != "function" and not create and (found := _returned_method(entry, data, starts)):
         # the --start names it doesn't take are arguments of a method of what it returns (joblib's load: predict(X))
         method, left, how = found
@@ -1705,6 +1707,26 @@ def _method_from_starts(cls, starts, constructor):
     return None
 
 
+def _undeclared_starts(fn, starts):
+    """The ``--start`` / ``--const`` names ``fn`` doesn't declare, even when it takes ``**kwargs``: for a
+    factory, those may be arguments of the model it returns (transformers' ``pipeline(task, model, **kwargs)``
+    and its ``__call__(inputs)``).
+
+    :param fn: the factory function.
+    :param starts: the values.
+    :type starts: dict or None
+    :rtype: list[str]
+    """
+    if not starts:
+        return []
+    try:
+        params = inspect.signature(fn).parameters
+    except (TypeError, ValueError):
+        return []
+    named = {n for n, p in params.items() if p.kind not in (p.VAR_POSITIONAL, p.VAR_KEYWORD)}
+    return [n for n in starts if n.partition(".")[0] not in named]
+
+
 def _leftover_starts(fn, starts):
     """The ``--start`` / ``--const`` names ``fn`` doesn't declare (left for the step), or ``[]``.
 
@@ -1777,7 +1799,7 @@ def _returned_method(fn, data, starts):
     :return: ``(method, names left for it, why)``, or None.
     :rtype: tuple or None
     """
-    left = _leftover_starts(fn, starts)
+    left = _undeclared_starts(fn, starts)
     if not left:
         return None
     from fmugen.templates.fmugen_runtime import resolve_constant
@@ -1818,22 +1840,23 @@ def _returns_callable(fn, data, starts):
     :type data: dict
     :param starts: the ``--start`` / ``--const`` values.
     :type starts: dict
-    :return: the names left for ``__call__``, or ``[]``.
-    :rtype: list[str]
+    :return: the names left for ``__call__`` (``[]``: none, and it returns a function), or None.
+    :rtype: list[str] or None
     """
-    left = _leftover_starts(fn, starts)
-    if not left:
-        return []
+    left = _undeclared_starts(fn, starts)
     from fmugen.templates.fmugen_runtime import resolve_constant
     try:
         _run_setup(data)
         model = fn(**{n: resolve_constant(v) for n, v in starts.items() if n not in left})
     except Exception:
-        return []
+        return None
     if inspect.isclass(model) or not callable(model):
-        return []
-    call = model if isinstance(model, (types.FunctionType, types.MethodType)) else type(model).__call__
+        return None
+    function = isinstance(model, (types.FunctionType, types.MethodType))
+    if not left:   # nothing left for it: only a function it makes (lambdify), not any callable object it returns
+        return [] if function and model is not fn else None
+    call = model if function else type(model).__call__
     if not _fits(call, left) and _only_varargs(call) and callable(getattr(type(model), "forward", None)):
         call = type(model).forward   # a torch module: __call__(*args, **kwargs) runs forward(x, ...)
-    return left if _fits(call, left) else []
+    return left if _fits(call, left) else None
 

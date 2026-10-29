@@ -57,6 +57,8 @@ dev = [
     # published models some tests run (simple_pid:PID, filterpy.gh:GHFilter)
     "filterpy==1.4.5",
     "simple-pid==2.0.1",
+    # init --probe trains forecasters on a made-up dated table (prophet's fit(df))
+    "pandas>=2.2",
     # tests check every generated interface.json against src/fmugen/interface.schema.json
     "jsonschema>=4.26.0",
 ]

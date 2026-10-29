@@ -432,3 +432,34 @@ def test_a_forecaster_trained_on_a_dated_table_is_probed_on_a_made_up_one(tmp_pa
     data, text = run(f"{path}:Forecaster", tmp_path, probe=True, call="predict")
     assert "setup" not in data["model"] and '# setup = ["fit(...)"]' in text and "ds and y" in text
     assert data["outputs"]["yhat"] == {"from": "return:yhat"}
+
+
+def test_a_factory_taking_kwargs_returns_the_model_the_leftover_starts_call(tmp_path):
+    # like transformers' pipeline(task, model, **kwargs): inputs is an argument of calling what it returns
+    path = write(tmp_path, "pipe.py", """
+        class Classifier:
+            def __init__(self, task):
+                self.task = task
+
+            def __call__(self, inputs):
+                return {"label": float(len(inputs))}
+
+        def pipeline(task, **kwargs):
+            return Classifier(task)
+    """)
+    data, text = run(f"{path}:pipeline", tmp_path, probe=True, starts={"task": "sentiment", "inputs": "I like it"})
+    assert data["model"]["call"] == "__call__" and data["inputs"]["inputs"]["start"] == "I like it"
+    assert "returns the model: inputs are arguments of calling it" in text
+
+
+def test_a_function_returning_a_function_is_called_on_every_step(tmp_path):
+    # like sympy's lambdify(args, expr): it makes the function the model is
+    path = write(tmp_path, "make.py", """
+        def make(gain=2.0):
+            def model(x, y):
+                return {"z": gain * x + y}
+            return model
+    """)
+    data, text = run(f"{path}:make", tmp_path, probe=True)
+    assert data["model"]["call"] == "__call__" and set(data["inputs"]) >= {"x", "y"}
+    assert "returns a function" in text
