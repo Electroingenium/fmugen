@@ -771,7 +771,7 @@ def test_a_documented_array_without_default_is_made_up_as_ones(tmp_path):
     assert data["outputs"]
 
 
-def test_made_up_inputs_are_retried_as_one_then_as_arrays(tmp_path):
+def test_made_up_inputs_start_at_one_then_are_retried_as_arrays(tmp_path):
     # like blackscholes (S must be > 0) and scikit-learn's predict (X must be 2-D); nothing documented
     path = write(tmp_path, "pricing.py", """
         import numpy as np
@@ -788,8 +788,23 @@ def test_made_up_inputs_are_retried_as_one_then_as_arrays(tmp_path):
                 return float(self.S * X.sum())
     """)
     data, text = probe(f"{path}:Call", tmp_path)
-    assert data["parameters"]["S"]["start"] == 1.0 and "made up, as 1.0" in text
+    assert data["parameters"]["S"]["start"] == 1.0 and "made up, as" not in text.split("[inputs]")[0]
     assert data["inputs"]["X"]["dimensions"] == [1, 1] and "arrays of ones, shape (1, 1)" in text
+    assert data["outputs"]
+
+
+def test_made_up_parameters_are_retried_as_zero_when_the_step_fails(tmp_path):
+    # like quantecon's LinearStateSpace: A = 1.0 builds, but the step solves (1 - A) x = 1
+    path = write(tmp_path, "lss.py", """
+        class LSS:
+            def __init__(self, A):
+                self.A = A
+
+            def stationary(self):
+                return 1.0 / (1.0 - self.A)
+    """)
+    data, text = probe(f"{path}:LSS", tmp_path, call="stationary")
+    assert data["parameters"]["A"]["start"] == 0.0 and "made up, as 0.0 (the step failed with 1.0)" in text
     assert data["outputs"]
 
 
@@ -829,7 +844,7 @@ def test_a_documented_array_that_takes_a_number_stays_a_number(tmp_path):
             return 1000.0 + 0.8 * SA - 0.2 * CT
     ''')
     data, text = probe(f"{path}:rho", tmp_path)
-    assert data["inputs"]["SA"] == {"start": 0.0} and data["inputs"]["CT"] == {"start": 0.0}
+    assert data["inputs"]["SA"] == {"start": 1.0} and data["inputs"]["CT"] == {"start": 1.0}
 
 
 def test_a_fitted_model_gets_its_number_of_features(tmp_path):

@@ -20,11 +20,11 @@ def infer(target, **kwargs):
 def test_installed_class_with_time_argument():
     data, comments = infer("simple_pid:PID")
     assert data["time"] == {"dt": "step_size"}
-    assert data["inputs"] == {"input_": {"start": 0.0}}
+    assert data["inputs"] == {"input_": {"start": 1.0}}
     # components and tunings are 3-tuples: arrays, one scalar per element in FMI 2
     assert data["outputs"] == {"y": {"from": "return"}, "components": {"dimensions": [3]},
                                "tunings": {"dimensions": [3]}}
-    assert data["parameters"]["Kp"] == {"start": 1.0}
+    assert data["parameters"]["Kp"] == {"start": 1.0, "variability": "tunable"}   # input_ 1.0: Kp changes y
     assert "tunable" in comments[("parameters", "Kp")]
     assert comments[("model", "constants.output_limits")] == {"python": "(None, None)"}
 
@@ -178,9 +178,9 @@ def test_optional_annotation_keeps_the_type(tmp_path, annotation):
             return 1.0
     """))
     data, _ = infer(tmp_path / "opt.py", probe=False)
-    assert data["inputs"]["n"]["start"] == 0 and type(data["inputs"]["n"]["start"]) is int
+    assert data["inputs"]["n"]["start"] == 1 and type(data["inputs"]["n"]["start"]) is int
     assert data["inputs"]["flag"]["start"] is False
-    assert data["inputs"]["x"]["start"] == 0.0
+    assert data["inputs"]["x"]["start"] == 1.0
 
 
 def test_optional_from_typing_objects():

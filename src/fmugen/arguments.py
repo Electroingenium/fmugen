@@ -555,7 +555,7 @@ def _arguments(fn, section, data, comments, skip_self=False, allow_time=True, co
         has_default = p.default is not p.empty or p.name in starts
         default = starts.get(p.name, None if p.default is p.empty else p.default)
         before = len(variables)
-        if not has_default and arrays and probe:   # tried by the probe if 0.0 fails (gsw's array_like takes numbers)
+        if not has_default and arrays and probe:   # tried by the probe if 1.0 fails (gsw's array_like takes numbers)
             shape = _made_up_array(fn, p)
             if shape:
                 comments[_shape_key(section, p.name)] = shape
@@ -892,7 +892,7 @@ def _default_instance(fn, p, data, comments, constants_key, probe):
 MADE_UP = "no default in the code: check the start value"
 def _shape_key(section, name):
     """The comments key (not rendered) of the shape of a made-up argument its annotation or docstring
-    says is an array, for the probe to try when the call fails with 0.0."""
+    says is an array, for the probe to try when the call fails with 1.0."""
     return ("init", f"made up shape {section}.{name}")
 
 
@@ -921,7 +921,8 @@ def _made_up_array(fn, p):
 def _type_info(value, annotation=inspect.Parameter.empty):
     """The ``start`` of a scalar variable from its default and annotation.
 
-    Without a default, the annotation's zero (float by default); an int default for a float
+    Without a default, the annotation's one (float by default; ``False`` and ``""`` for bool and str):
+    one, not zero, as models divide by it or check it's positive; an int default for a float
     annotation becomes a float.
 
     :param value: the default, or None.
@@ -930,7 +931,7 @@ def _type_info(value, annotation=inspect.Parameter.empty):
     """
     annotation = static.unwrap_optional(annotation)
     if value is None:
-        hint = {float: 0.0, int: 0, bool: False, str: ""}.get(annotation, 0.0)
+        hint = {float: 1.0, int: 1, bool: False, str: ""}.get(annotation, 1.0)
         return {"start": hint}
     if isinstance(value, int) and not isinstance(value, bool) and annotation is float:
         return {"start": float(value)}

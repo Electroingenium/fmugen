@@ -156,7 +156,7 @@ differential_on_measurement = { start = true }  # kept as an attribute: add vari
 starting_output = { start = 0.0 }
 
 [inputs]
-input_ = { start = 0.0 }  # no default in the code: check the start value
+input_ = { start = 1.0 }  # no default in the code: check the start value
 
 [outputs]
 y = { from = "return" }
@@ -174,7 +174,7 @@ How this runs inside the FMU:
 Going through the warnings:
 
 - **`setpoint = { start = 0 }` is Integer.** A PID setpoint is a real number, so write `start = 0.0`.
-- **`input_` has no default**, so `0.0` is made up. It's fine here. When the probe fails with `0.0`, it tries again by itself: arguments the docstring or type hint calls arrays as arrays of ones in their documented shape (`q : array_like, shape (4,)`), then every made-up value as `1.0`, then as arrays of ones `(3,)`, `(1, 1)`, `(1, 3)`, `(3, 3)`; the comment says which worked. For models whose values must be specific (`Re` in a range, a matrix matching the constructor's sizes), give a realistic `--start`.
+- **`input_` has no default**, so `1.0` is made up (not `0.0`, which models often refuse or divide by). It's fine here. When the probe fails with `1.0`, it tries again by itself: arguments the docstring or type hint calls arrays as arrays of ones in their documented shape (`q : array_like, shape (4,)`), then every made-up value as arrays of ones `(3,)`, `(1, 1)`, `(1, 3)`, `(3, 3)`; the comment says which worked. For models whose values must be specific (`Re` in a range, a matrix matching the constructor's sizes), give a realistic `--start`.
 - **`y` is assumed Real.** Correct for a PID. Rename it to `output` if you like.
 - **Properties left commented out:** `tunings` and `output_limits` are tuples, not numbers, so leave them commented. `components` is a tuple too.
 - **`sample_time = 0.01`:** simple-pid then skips calls closer together than 0.01 s. In an FMU that is usually unwanted: uncomment `[model.constants]` and set `sample_time = { python = "None" }`, and delete `sample_time` from `[parameters]`. A name can't be both a variable and a constant.
@@ -331,8 +331,8 @@ Inline comments mark guesses and things to check. A comment never changes the bu
 | Comment | What it means | What to do |
 |---|---|---|
 | `# start from --start` | You passed this start value. | Nothing. |
-| `# no default in the code: check the start value` | `0.0` is made up. | Put a realistic value. Many models fail at 0. |
-| `# no default in the code: made up, as 1.0 (the probe failed with 0.0)` (or `as arrays of ones, shape (…)`) | The probe failed with `0.0` and worked with this. | Put a realistic value (and size, for an array). |
+| `# no default in the code: check the start value` | `1.0` is made up. | Put a realistic value. |
+| `# no default in the code: made up, as arrays of ones, shape (…) (the probe failed with 1.0)` | The probe failed with `1.0` and worked with this. | Put a realistic value (and size, for an array). |
 | `# Integer because the default is an int; write a float start for Real` | The code's default is `0`, not `0.0`. | Write `0.0` if the quantity is real. |
 | `# kept as an attribute: add variability = "tunable" if the step reads it` | The constructor stores this value on the object. | Add `variability = "tunable"` if changing it mid-simulation should have an effect. |
 | `# start from --start, passed by position to *args: check the order` | The constructor only takes `*args`; your `--start` order is the argument order. | Check it matches the model's documentation. |

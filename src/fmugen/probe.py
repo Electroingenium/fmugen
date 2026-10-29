@@ -134,7 +134,10 @@ def _probe_class(cls, method_name, data, comments, arrays, call_starts, create, 
     except ConstantError:
         raise
     except Exception as e:
-        if not _reset_first(obj, method_name, data, comments):
+        rebuilt = _rebuild_made_up_as_zero(build, method_name, data, comments)
+        if rebuilt is not None:   # the made-up parameters as 0.0 (quantecon's A = 1.0: a singular matrix)
+            obj = rebuilt
+        elif not _reset_first(obj, method_name, data, comments):
             comments[("outputs", None)] = f"probe call failed ({e!r}); outputs below are read from the code"
             return obj, set(), set(getattr(obj, "__dict__", {}))
         # reset() worked: the object is the one the step starts from, so its "before" is now
@@ -986,14 +989,55 @@ MADE_UP_SHAPES = ([3], [1, 1], [1, 3], [3, 3])
 FEATURE_COUNTS = ("n_features_in_", "input_dim", "n_features", "num_features", "input_size")
 
 
-def _retry_made_up(call, data, comments, section, obj=None):
-    """Call again with the made-up values of ``section`` (no default, no ``--start``) as 1.0, then as arrays of ones.
+def _rebuild_made_up_as_zero(build, method_name, data, comments):
+    """When the step fails, build the object again with its made-up parameters (no default, no
+    ``--start``) as 0.0, and keep that if the step works then: a made-up 1.0 builds, but the step
+    may fail on it (quantecon's ``LinearStateSpace(A=1.0, ...)``: ``I - A`` is singular).
 
-    The made-up start is 0.0, which models refuse when they check a range or divide by it
-    (blackscholes' "Asset price (S) needs to be larger than 0", pedon's division by zero), or
-    when they need an array (ahrs' quaternion, GPy's ``X``, scikit-learn's ``predict(X)``). Tried
+    :param build: the class, ``--create`` classmethod or factory.
+    :param method_name: the step method.
+    :type method_name: str
+    :param data: the config being inferred; updated in place.
+    :type data: dict
+    :param comments: ``(section, key) -> text`` for :func:`render_toml`; updated in place.
+    :type comments: dict
+    :return: a new object, built as the step starts from (the trial one was stepped), or None.
+    """
+    made = {name: info for name, info in data.get("parameters", {}).items()
+            if comments.get(("parameters", name)) == MADE_UP and isinstance(info.get("start"), (int, float))
+            and not isinstance(info.get("start"), bool) and info["start"] != 0}
+    if not made:
+        return None
+    saved = {name: info["start"] for name, info in made.items()}
+    for info in made.values():
+        info["start"] = type(info["start"])(0)
+
+    def make():
+        obj = _construct(build, data, comments)
+        _run_setup(data, obj)
+        return obj
+
+    try:
+        _probe_call(_step_method(make(), method_name, data), data, comments, constants_key="call_constants")
+        obj = make()
+    except Exception:
+        for name, info in made.items():
+            info["start"] = saved[name]
+        return None
+    for name in made:
+        comments[("parameters", name)] = "no default in the code: made up, as 0.0 (the step failed with 1.0); check it"
+    return obj
+
+
+def _retry_made_up(call, data, comments, section, obj=None):
+    """Call again with the made-up values of ``section`` (no default, no ``--start``) as 0.0, then as arrays of ones.
+
+    The made-up start is 1.0 (not 0.0, which models refuse when they check it's positive or divide
+    by it: blackscholes' "Asset price (S) needs to be larger than 0", pedon's division by zero); some
+    models need an array (ahrs' quaternion, GPy's ``X``, scikit-learn's ``predict(X)``). Tried
     in turn: those whose annotation or docstring says they are arrays as arrays of ones in that shape
-    (:func:`fmugen.arguments._shape_key`), the others 1.0; every one as 1.0; every one as an
+    (:func:`fmugen.arguments._shape_key`), the others 1.0; every one as 0.0 (quantecon's matrices,
+    singular when all ones); every one as an
     array of ones in each of :data:`MADE_UP_SHAPES`;
     each one alone as such an array, the others 1.0. The first that works is kept, with a comment.
 
@@ -1016,16 +1060,16 @@ def _retry_made_up(call, data, comments, section, obj=None):
         return _FAILED
     saved = {name: dict(info) for name, info in made.items()}
 
-    def scalar(name):
+    def scalar(name, value=1):
         made[name].clear()
-        made[name].update(saved[name], start=1.0 if isinstance(saved[name]["start"], float) else 1)
+        made[name].update(saved[name], start=float(value) if isinstance(saved[name]["start"], float) else value)
 
     def array(name, shape):
         made[name].clear()
         made[name].update({k: v for k, v in saved[name].items() if k not in ("start", "type")},
                           dimensions=list(shape), start=[1.0] * math.prod(shape), numpy=True)
 
-    tries = [("as 1.0", {n: None for n in made})]
+    tries = [("as 0.0", {n: 0 for n in made})]
     documented = {n: comments[_shape_key(section, n)] for n in made if _shape_key(section, n) in comments}
     if documented and importlib.util.find_spec("numpy") is not None:
         tries.insert(0, ("the arrays as arrays of ones in their documented shape, the others 1.0",
@@ -1046,13 +1090,13 @@ def _retry_made_up(call, data, comments, section, obj=None):
                        {m: s if m == n else None for m in made}) for n in made for s in shapes]
     for how, plan in tries:
         for name, shape in plan.items():
-            scalar(name) if shape is None else array(name, shape)
+            scalar(name) if shape is None else scalar(name, 0) if shape == 0 else array(name, shape)
         try:
             result = call()
         except Exception:
             continue
         for name in made:
-            comments[(section, name)] = (f"no default in the code: made up, {how} (the probe failed with 0.0); "
+            comments[(section, name)] = (f"no default in the code: made up, {how} (the probe failed with 1.0); "
                                          "check it")
         return result
     for name, info in made.items():
