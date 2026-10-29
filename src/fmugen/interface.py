@@ -988,7 +988,8 @@ def _infer_class(cls, call, data, comments, arrays=False, starts=None, create=No
 
 
 def _pick_method(cls, starts=None, constructor=None):
-    """The step method of a class: the first of :data:`CALL_NAMES` it has, else the only method the
+    """The step method of a class: the first of :data:`CALL_NAMES` it has (``update`` only when it has no
+    :data:`STEP_LIKE` method: osqp's ``update`` changes settings, ``solve`` runs it), else the only method the
     ``--start`` names fit (:func:`_methods_taking`), else its only public method, else the best of
     :func:`_rank_methods`: asked at a prompt in a terminal (:func:`_ask_method`), else picked with a warning
     listing the candidates.
@@ -1005,7 +1006,10 @@ def _pick_method(cls, starts=None, constructor=None):
     :rtype: tuple[str, str or None]
     :raises InterfaceError: the class has no public method.
     """
+    has_step = any(callable(getattr(cls, m, None)) for m in STEP_LIKE)
     for name in CALL_NAMES:
+        if name == "update" and has_step:
+            continue
         if name == "__call__":
             if any("__call__" in vars(k) for k in cls.__mro__[:-1]):
                 return name, None

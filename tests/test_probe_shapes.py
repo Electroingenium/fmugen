@@ -717,6 +717,22 @@ def test_ranking_set_up_names_and_variants():
     assert _rank_methods(Finder, {}, Finder.__init__)[:2] == ["decay", "timezone_at"]
 
 
+def test_update_is_the_step_only_without_a_run_like_method():
+    from fmugen.interface import _pick_method
+
+    class Solver:             # like osqp's OSQP and simdkalman's KalmanFilter: update sets it up, solve runs it
+        def setup(self, P): ...
+        def update(self, q): ...
+        def solve(self): ...
+
+    class Filter:             # like filterpy's GHFilter: update is the step
+        def update(self, z): ...
+        def batch_filter(self, data): ...
+
+    assert _pick_method(Solver)[0] == "solve"
+    assert _pick_method(Filter)[0] == "update"
+
+
 def test_ranking_run_like_prefixes_and_clean_up_names():
     from fmugen.interface import _rank_methods
 
