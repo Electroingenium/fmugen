@@ -808,6 +808,26 @@ def test_made_up_parameters_are_retried_as_zero_when_the_step_fails(tmp_path):
     assert data["outputs"]
 
 
+def test_made_up_parameters_are_not_retried_as_zero_when_building_fails_then(tmp_path):
+    # like pedon's Genuchten: 1.0 everywhere divides by theta_s - theta_r = 0 in the step, and n = 0.0
+    # fails the constructor; the parameters stay as made up, not changed by the constructor's retries
+    path = write(tmp_path, "soil.py", """
+        class Soil:
+            def __init__(self, theta_r, theta_s, n):
+                self.m = 1 - 1 / n
+                self.theta_r, self.theta_s = theta_r, theta_s
+
+            def theta(self, h):
+                return self.theta_r + (self.theta_s - self.theta_r) / (1 + h) ** self.m
+
+            def se(self, theta):
+                return (theta - self.theta_r) * (1.0 / (self.theta_s - self.theta_r))
+    """)
+    data, text = probe(f"{path}:Soil", tmp_path, call="se")
+    assert all(data["parameters"][n] == {"start": 1.0} for n in ("theta_r", "theta_s", "n"))
+    assert "made up" not in text.partition("[parameters]")[2].partition("[inputs]")[0]
+
+
 def test_docstring_array_shapes():
     from fmugen.interface import docstring_arrays
 

@@ -1012,8 +1012,9 @@ def _rebuild_made_up_as_zero(build, method_name, data, comments):
     for info in made.values():
         info["start"] = type(info["start"])(0)
 
-    def make():
-        obj = _construct(build, data, comments)
+    def make():   # not _construct: its retries would change the parameters again (pedon's n = 0.0 fails)
+        args, kwargs = _probe_args(data, ("parameters",), build, "constants")
+        obj = build(*args, **_probe_constants(data, "constants"), **kwargs)
         _run_setup(data, obj)
         return obj
 
