@@ -34,7 +34,7 @@ def _run_setup(data, obj=None):
 
     The same order as :meth:`Engine._run_setup`, so the probe sees the model as the FMU will.
 
-    :param data: the config being inferred; updated in place.
+    :param data: the config being inferred.
     :type data: dict
     :param obj: the constructed object (runs the method steps), or None (runs the function steps).
     """
@@ -496,7 +496,8 @@ def _made_up_training():
 
 
 def _made_up_variants(fn, params):
-    """The set-up's made-up arguments as call texts (:func:`_made_up_argument`), then those made up as 1.0 as numpy
+    """The set-up's made-up arguments as call texts (:func:`_made_up_argument`), then with configs built with no
+    arguments given sizes (:func:`_sized_instance`), then those made up as 1.0 as numpy
     arrays (a single capital letter or a ``matrix`` name as a 1 x 1 matrix, others a vector of one), then those
     matrices as scipy sparse ones (osqp's ``setup(P, q, A, l, u)``: "P is required to be a sparse matrix")."""
     made = [_made_up_argument(fn, p) for p in params]
@@ -768,10 +769,10 @@ def _unfit_properties(obj, data, comments, arrays, taken):
 
 
 def _check_sizes(obj, method_name, data, comments):
-    """Call the step method a second time and drop arrays whose size changed.
+    """Call the step method a second time and handle arrays whose size changed.
 
-    An array whose size changes (a history that grows each call) can't be an FMI array, which
-    has a fixed size.
+    An array whose size changes can't be an FMI array, which has a fixed size: one that grows by
+    entries each call (a history) is read as its last entry; any other is commented out.
 
     :param obj: the model object.
     :param method_name: the step method.
@@ -824,7 +825,7 @@ def _check_sizes(obj, method_name, data, comments):
 def _taken(data):
     """Names already used by variables of any section.
 
-    :param data: the config being inferred; updated in place.
+    :param data: the config being inferred.
     :type data: dict
     :rtype: set[str]
     """
@@ -974,7 +975,7 @@ ARRAY_RETRIES = ("numpy", "torch:tensor")
 def _probe_constants(data, table, positional=False):
     """Constants set in the config (e.g. computed by a call), resolved as the FMU would.
 
-    :param data: the config being inferred; updated in place.
+    :param data: the config being inferred.
     :type data: dict
     :param table: ``"constants"`` or ``"call_constants"``.
     :type table: str
@@ -999,7 +1000,7 @@ def _probe_constants(data, table, positional=False):
 
 
 class ConstantError(InterfaceError):
-    """A constant (e.g. ``--start NAME=call:...``) that can't be computed: the FMU would fail the same way.
+    """A constant (e.g. ``--const NAME=call:...``) that can't be computed: the FMU would fail the same way.
 
     Re-raised instead of being turned into a comment, because no config could fix it.
     """
@@ -1108,7 +1109,7 @@ def _call_with_probe_inputs(fn, data, constants_key):
     """Call ``fn`` once with the inferred inputs, time arguments and constants.
 
     :param fn: the function or bound step method.
-    :param data: the config being inferred; updated in place.
+    :param data: the config being inferred.
     :type data: dict
     :param constants_key: the constants table passed with the call.
     :type constants_key: str
@@ -1173,9 +1174,13 @@ def _probe_once(fn, data, comments, constants_key="constants"):
 def _probe_attempt(fn, data, comments, constants_key="constants"):
     """Call ``fn`` with the probe inputs, retrying in forms the model may need.
 
-    If it fails: with naive date-time epochs, retry them in UTC; with array inputs that are plain
-    lists, retry as numpy arrays, then torch tensors (when installed); with scalar inputs, retry
-    as one-element numpy arrays. The first form that works is kept in ``data`` with a comment.
+    If it fails: ``**kwargs`` inputs by position (:func:`_keywords_to_positions`); naive date-time
+    epochs in UTC; array inputs that are plain lists as numpy arrays, then torch tensors (when
+    installed). Without such arrays, in turn: numbers as one-element numpy arrays, dated pandas
+    Series and pint quantities; other made-up values (:func:`_retry_made_up`); optional arguments
+    (:func:`_retry_options`); the arguments the error names (:func:`_retry_named`); text; positional
+    numbers for a callable without a signature; integers a C++ prototype asks for. The first form
+    that works is kept in ``data`` with a comment.
 
     :param fn: the function or bound step method.
     :param data: the config being inferred; updated in place.
@@ -1408,7 +1413,8 @@ MAX_OPTION_SETS = 40
 
 def _retry_options(call, fn, data, comments, section="inputs"):
     """Call again giving some numeric arguments whose default is None, made up as 1.0 (1 for a count or size,
-    :data:`fmugen.arguments.COUNT_NAME`): one alone, then two.
+    :data:`fmugen.arguments.COUNT_NAME`): one alone, then two, then a count alone as each of
+    :data:`OTHER_NUMBERS`.
 
     For models that need some of several optional arguments (fluids' ``Reynolds(V, D, rho=None, mu=None,
     nu=None)``: "Either density and viscosity, or kinematic viscosity is needed"; pyet's pressure or
@@ -1570,7 +1576,7 @@ def _none_needed(call, params, names, taken, variables, failures):
     return []
 
 
-#: Sentinel: :func:`_retry_as_arrays` found no call that works.
+#: Sentinel: a retry (:func:`_retry_as_arrays`, :func:`_retry_made_up`, ...) found no call that works.
 _FAILED = object()
 
 #: The comment of an input passed through ``**kwargs`` (set by :func:`fmugen.arguments._arguments`).
@@ -1614,7 +1620,9 @@ def _construct(build, data, comments):
     """Build the model object for the probe, retrying list parameters as numpy arrays, then torch tensors.
 
     As the step's inputs are (:func:`_probe_once`): GPy's ``GPRegression(X, Y)`` takes only arrays.
-    The first form that works is kept in ``data`` with a comment.
+    Without list parameters, other made-up values (:func:`_retry_made_up`), optional arguments
+    (:func:`_retry_options`) and the arguments the error names (:func:`_retry_named`) are tried. The
+    first form that works is kept in ``data`` with a comment.
 
     :param build: the class, ``--create`` classmethod or factory.
     :param data: the config being inferred; updated in place.
@@ -1797,15 +1805,16 @@ def _retry_made_up(call, data, comments, section, obj=None, error=None):
 
     The made-up start is 1.0 (not 0.0, which models refuse when they check it's positive or divide
     by it: blackscholes' "Asset price (S) needs to be larger than 0", pedon's division by zero); some
-    models need an array (ahrs' quaternion, GPy's ``X``, scikit-learn's ``predict(X)``). Tried
-    in turn: those whose annotation or docstring says they are arrays as arrays of ones in that shape
-    (:func:`fmugen.arguments._shape_key`), the others as made up; every one as 0.0 (quantecon's matrices,
-    singular when all ones); every one as an
-    array of ones in each of :data:`MADE_UP_SHAPES`;
-    each one alone as such an array, the others as made up; for a torch module, every one as a torch
-    tensor of ones in those shapes (norse, snntorch); every one, then each one alone, as a plain list of
-    two ones, of ints for sizes (FNO's ``n_modes``, pytorch-tcn's ``num_channels``, haversine's points).
-    The first that works is kept, with a comment.
+    models need an array (ahrs' quaternion, GPy's ``X``, scikit-learn's ``predict(X)``). Tried in turn:
+    those whose annotation or docstring says they are arrays as arrays of ones in that shape
+    (:func:`fmugen.arguments._shape_key`), the others as made up; a value of the object's gymnasium
+    space; the Integer 1 when the error asks for an integer; lists of sizes for names like
+    ``layer_sizes``; every one as 0.0 (quantecon's matrices, singular when all ones); annotated tensors
+    as torch tensors; every one, then each one alone, as an array of ones in the shapes the error names,
+    the fitted model's feature count gives and :data:`MADE_UP_SHAPES`; for a torch module, as torch
+    tensors (norse, snntorch); every one, then each one alone, as a plain list of two ones, of ints for
+    sizes (FNO's ``n_modes``, haversine's points); integer arrays; :data:`OTHER_NUMBERS`. The first
+    that works is kept, with a comment.
 
     :param call: makes the probe call (or builds the object).
     :type call: callable
@@ -2123,7 +2132,7 @@ def _state_bytes(obj):
 def _check_picklable(obj, data, comments):
     """Pick ``[model] save_state`` by trying to pickle the object as the runtime would.
 
-    FMU state save/restore pickles the model object (pickle, else cloudpickle). If that fails,
+    FMU state save/restore pickles the model object (pickle, cloudpickle or dill). If that fails,
     save only the attributes that can be pickled; if none can, declare save/restore unsupported.
 
     :param obj: the model object.
@@ -2284,7 +2293,7 @@ def _probe_args(data, sections, fn=None, constants_key=None):
     Includes the positional constants of ``constants_key``; item and field bindings
     (``arg:pair[0]``, ``arg:u.T``) are assembled as the runtime does (:func:`assemble_items`).
 
-    :param data: the config being inferred; updated in place.
+    :param data: the config being inferred.
     :type data: dict
     :param sections: the variable sections passed (``("inputs",)`` or ``("parameters",)``).
     :type sections: tuple[str, ...]
@@ -2320,7 +2329,7 @@ def _probe_kwargs(data, sections):
 
     Enum members, reshaped (numpy) arrays, Binary bytes and ``convert`` functions are applied.
 
-    :param data: the config being inferred; updated in place.
+    :param data: the config being inferred.
     :type data: dict
     :param sections: the variable sections.
     :type sections: tuple[str, ...]
@@ -2676,7 +2685,8 @@ def _public_properties(obj, arrays=False):
     return values
 
 def _detect_states(data, comments, returned, attrs):
-    """Turn inputs named like a previous value into states.
+    """Turn inputs into states: those the probe saw returned under their own name with a new value,
+    and those named like a previous value.
 
     An input named like a previous value (x_prev, x_old, last_x, ...) whose next value is
     returned or stored as an attribute as x_next, next_x, x_new, new_x or x is a state, with

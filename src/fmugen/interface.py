@@ -260,8 +260,10 @@ def _with_timeout(timeout, fn, *args):
 
 
 def _infer_config(target, call, config_dir, fmi_version, starts, setup, kind, create, probe, converts, examples=True):
-    """:func:`_infer_config_once`; then, while the probe fails on a made-up argument that has to be a dict or an
-    object with some attributes (:func:`_shaped_starts`), again with it made up so.
+    """:func:`_infer_config_once`; when the probe fails and no ``--setup`` was given, again with a set-up function
+    of the module the error asks for (:func:`_module_setups`); then, while the probe fails on a made-up argument
+    that has to be a dict, an object or another value the error describes (:func:`_shaped_starts`), again with
+    it made up so.
 
     river's ``learn_one(x, y)`` takes a dict of features, simglucose's ``step(action)`` an object with ``CHO`` and
     ``insulin``, a hyperparameter function a dict with its keys: each error names what's missing, so this
@@ -1492,7 +1494,8 @@ def _add_globals(data, comments, entry_module, local_dir=None):
     :type local_dir: pathlib.Path or None
     """
     top = entry_module.__name__.split(".")[0]
-    def local(m):   # a module of the user's project (next to the config), not an installed one
+
+    def local(m):
         """Whether a module is a file of the user's project (next to the config), not an installed one.
 
         :param m: the module.
@@ -1960,14 +1963,11 @@ def _infer_class_once(cls, call, data, comments, arrays=False, starts=None, crea
     _detect_states(data, comments, returned=seen_returns | set(read.names), attrs=attrs)
 
 
-
-
-
-
 def _pick_method(cls, starts=None, constructor=None):
     """The step method of a class: the first of :data:`CALL_NAMES` it has (``update`` only when it has no
-    :data:`STEP_LIKE` method: osqp's ``update`` changes settings, ``solve`` runs it), else the only method the
-    ``--start`` names fit (:func:`_methods_taking`), else its only public method, else the best of
+    :data:`STEP_LIKE` method: osqp's ``update`` changes settings, ``solve`` runs it), else ``__next__`` for an
+    iterator, else the only method the ``--start`` names fit (:func:`_methods_taking`), else the one they point
+    at (:func:`_method_from_starts`), else its only public method, else the best of
     :func:`_rank_methods`: asked at a prompt in a terminal (:func:`_ask_method`), else picked with a warning
     listing the candidates.
 
@@ -1979,7 +1979,7 @@ def _pick_method(cls, starts=None, constructor=None):
     :param starts: the ``--start`` / ``--const`` values.
     :type starts: dict or None
     :param constructor: the constructor (or ``--create`` classmethod), for the names it takes.
-    :return: ``(method, comment)``; the comment says why, when the ``--start`` names chose it.
+    :return: ``(method, comment)``; the comment says why, when it wasn't one of :data:`CALL_NAMES`.
     :rtype: tuple[str, str or None]
     :raises InterfaceError: the class has no public method.
     """

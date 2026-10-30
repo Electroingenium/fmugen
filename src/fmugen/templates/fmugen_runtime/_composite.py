@@ -269,7 +269,6 @@ class CompositeEngine:
         return status
 
     def do_step(self, current_time, step_size):
-        # a part that discards its step undoes the whole step: the parts before it are put back too
         """Step every part in order, feeding each its connected inputs first.
 
         When any part has ``discard_on`` and the FMU can save state, the state of all parts is

@@ -110,7 +110,7 @@ def _guessed(comments, name):
 def guessed_outputs(data, comments):
     """Outputs still in the config whose type is a guess (see :func:`_guessed`).
 
-    :param data: the config being inferred; updated in place.
+    :param data: the config being inferred.
     :type data: dict
     :param comments: ``(section, key) -> text`` for :func:`render_toml`, plus internal ``("init", ...)`` keys.
     :type comments: dict
@@ -470,8 +470,8 @@ def _arguments(fn, section, data, comments, skip_self=False, allow_time=True, co
     """Sort the arguments of ``fn`` into variables of ``section`` and time arguments.
 
     Reads the signature with :func:`inspect.signature`. Each parameter becomes, in order of
-    precedence: a ``[time]`` argument (named like a time, or a date-time), a call constant
-    (``--start NAME=call:...``), item or field variables (tuple/dict starts, dataclass-like
+    precedence: a ``[time]`` argument (named like a time, or a date-time), a constant
+    (``--const``), item or field variables (tuple/dict starts, dataclass-like
     objects), or a variable typed from its default, ``--start`` value or annotation.
     Positional-only parameters get ``to = "pos:N"``. Arguments whose default is not an FMI value
     (None, tuples, objects) keep their code default; they are listed as commented-out constants
@@ -800,7 +800,7 @@ def _object_fields(cls):
 def _split_fields(fn, p, variables, section, comments, starts, arrays):
     """Make one variable per field of an object argument.
 
-    An argument that is a dataclass / pydantic / attrs object (by its default or its annotation)
+    An argument that is a dataclass / pydantic / attrs / namedtuple object (by its default or its annotation)
     becomes one variable per field, NAME_FIELD, bound with ``to = "arg:NAME.FIELD"``. Fields that
     aren't FMI values keep the default's value; without a default, they must have their own
     default.
@@ -1252,7 +1252,6 @@ def _scalar_of(value):
         value = value.magnitude
     elif hasattr(value, "unit") and hasattr(value, "to_value"):   # an astropy Quantity
         value = value.value
-    # numpy scalars (np.float32, ...) also have ndim 0, but are handled as they are, keeping their type
     if getattr(value, "ndim", None) == 0 and hasattr(value, "item") and type(value).__name__ not in NUMPY_SCALARS:
         try:
             return value.item()

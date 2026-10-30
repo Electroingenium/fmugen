@@ -33,13 +33,13 @@ class Returned:
     :ivar may_be_none: some return statements return None (simpy's Environment.run).
     :ivar nullable: names whose value may be None (database columns).
     """
-    names: list = dataclasses.field(default_factory=list)   # output names, in order
-    sources: dict = dataclasses.field(default_factory=dict)  # name -> "return" / "return:<key>"
-    types: dict = dataclasses.field(default_factory=dict)    # name -> FMI type (when known)
-    array: bool = False      # the whole result is an array (size unknown)
-    unknown: str = None      # why the result couldn't be read, if it couldn't
-    may_be_none: bool = False   # some return statements return None (simpy's Environment.run)
-    nullable: list = dataclasses.field(default_factory=list)   # names whose value may be None (database columns)
+    names: list = dataclasses.field(default_factory=list)
+    sources: dict = dataclasses.field(default_factory=dict)
+    types: dict = dataclasses.field(default_factory=dict)
+    array: bool = False
+    unknown: str = None
+    may_be_none: bool = False
+    nullable: list = dataclasses.field(default_factory=list)
 
 
 def function_node(fn):
@@ -275,7 +275,8 @@ def returned(fn, namespace=None, attributes=None):
     """What ``fn`` returns: dict keys, tuple positions, NamedTuple/dataclass fields, or a single value.
 
     First the return annotation (:func:`typing.get_type_hints`, which resolves string
-    annotations); without a usable one, the function's source is parsed and its ``return``
+    annotations): NamedTuple/TypedDict/dataclass fields, a SQLAlchemy model's typed columns, a
+    scalar or an array type; without a usable one, the function's source is parsed and its ``return``
     statements read: a dict literal (or a local dict filled key by key) gives its keys, a tuple
     its positions, a call of a NamedTuple/dataclass its fields. Local variables assigned in the
     body give the kinds of returned names.

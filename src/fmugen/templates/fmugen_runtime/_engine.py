@@ -117,7 +117,7 @@ class Engine:
     arrays, 1-based ints for enumerations). Before a call, variables bound with ``to``
     (``pos:N``, ``arg:name``, ``init:name``, ``initpos:N``, ``attr:path``, ``call:method``) are
     converted to Python (:meth:`_to_python`) and passed; after it, variables with ``from``
-    (``return`` / ``attr``) and states with ``next`` are read back (:meth:`_read_results`,
+    (``return`` / ``attr`` / ``get``) and states with ``next`` are read back (:meth:`_read_results`,
     :meth:`_from_python`). Field meanings: ``docs/interface.md``.
 
     :ivar resources_dir: the FMU's ``resources/`` folder (holds ``interface.json`` and ``fmugen_model/``).
@@ -174,8 +174,8 @@ class Engine:
         failure reaches the importer with its traceback. Ends with :meth:`reset`, so all start
         values are in place and ``mode`` is ``"instantiated"``.
 
-        Side effects: may install output capture (``capture_output``, UniFMU only), lowers the root
-        logger to INFO inside UniFMU, sets Hugging Face offline environment variables when
+        Side effects: may install output capture (``capture_output``, UniFMU only), raises the root
+        logger's level from DEBUG to INFO inside UniFMU, sets Hugging Face offline environment variables when
         ``resources/hf_cache`` exists, prepends ``sys_path`` entries to ``sys.path``.
 
         :param resources_dir: the FMU's ``resources/`` folder (or a composite part's folder).
@@ -351,7 +351,8 @@ class Engine:
                every clock).
             4. With ``entry.init_call``: call the model once at the start time (step size
                ``experiment.step_size``) and read its outputs; otherwise read only the outputs that
-               are available without a call (attributes). Missing values are tolerated here.
+               are available without a call (attributes); when a ``get:`` output raises there, the
+               model is called once as with ``init_call``. Missing values are tolerated here.
             5. Read the outputs of every input clock that are available as attributes.
             """
             self._resolve_constants()
@@ -436,8 +437,9 @@ class Engine:
 
             * ``integrate``: the model returns derivatives; :meth:`_integrate` advances the states
               over the step, then the model is called once more at the end time to read outputs.
-            * ``entry.step`` true (the default): call the model once with the step's inputs, then read
-              outputs (``from``) and next states (``next``).
+            * ``entry.step`` true (the default): call the model with the step's inputs, once or
+              ``repeat`` times over equal parts of the step (``[model] substeps``), then read outputs
+              (``from``) and next states (``next``).
             * ``entry.step`` false (``[model] call = false``): only clocks run code; read attribute
               outputs only.
 
@@ -1654,10 +1656,10 @@ class Engine:
         return getattr(self.obj, call) if self.is_class else getattr(self.module, call)
 
     def _source_value(self, source, result, have_result, missing_ok=False):
-        """Read a value from a ``{"kind": "return" | "attr", "name": ...}`` source.
+        """Read a value from a ``{"kind": "return" | "attr" | "get", "name": ...}`` source.
 
         ``return`` picks from the call's result (whole result when ``name`` is absent), ``attr``
-        follows a path on the model object.
+        follows a path on the model object, ``get`` calls the getter method at that path.
 
         :param source: a ``from``, ``next``, ``der`` or event source.
         :type source: dict

@@ -170,7 +170,7 @@ def main(argv=None):
                                    "See docs/init.md.")
     i.add_argument("model", help="model.py, model.py:Name, or package.module:Name")
     i.add_argument("-o", "--output", help="config path (default: fmugen.toml next to the model; - prints it)")
-    i.add_argument("--call", help="method run on each step, for classes (default: step/do_step/update/__call__)")
+    i.add_argument("--call", help="method run on each step, for classes (default: step, do_step, update or __call__, else the likeliest; asked in a terminal)")
     i.add_argument("--force", action="store_true", help="overwrite an existing config")
     i.add_argument("--fmi", type=int, choices=(2, 3), help="target FMI version; 3 also infers Binary, Float32 and resizable arrays")
     i.set_defaults(value_order=[])

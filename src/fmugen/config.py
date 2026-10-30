@@ -840,7 +840,7 @@ def _check_annotations(text):
 def _save_state(model):
     """Validate ``[model] save_state``: how the FMU saves and restores its state.
 
-    true: the whole model object (pickle, else cloudpickle); false: not supported; a list of
+    true: the whole model object (pickle, cloudpickle or dill); false: not supported; a list of
     attribute paths: only those attributes. fmugen init picks one by trying to pickle the object.
 
     :param model: the ``[model]`` table.
@@ -882,8 +882,8 @@ def parse_call(text):
 
         :param node: the argument's AST node.
         :type node: ast.expr
-        :return: a plain value, ``{"python": source}`` or ``{"ref": dotted name}``.
-        :raises InterfaceError: the node is neither a literal nor a (dotted) name.
+        :return: a plain value, ``{"python": source}``, ``{"ref": dotted name}`` or ``{"call": source}``.
+        :raises InterfaceError: the node is neither a literal, a (dotted) name nor a call of one.
         """
         try:
             value = ast.literal_eval(node)

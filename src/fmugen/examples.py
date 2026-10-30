@@ -41,9 +41,9 @@ class Usage:
     :ivar create: the classmethod that built the object, or None.
     :ivar call: the step method, or None (a function model: the function itself).
     :ivar setup: the calls on the object before the step, as ``[model] setup`` strings.
-    :ivar init: the constructor's (or classmethod's, or function's) arguments that have no default in the code:
-        name -> a start value (a
-        literal), or ``{"call": "module:expr"}`` / ``{"python": repr}`` for a value that isn't an FMU variable.
+    :ivar init: the constructor's (or classmethod's, or function's) arguments that have no default in the
+        code: name -> a start value (a literal), ``{"call": "module:expr"}`` / ``{"python": repr}`` for a
+        value that isn't an FMU variable, or ``{"expr": text}`` for arithmetic on imports, computed by init.
     :ivar step: the step method's arguments, likewise.
     :ivar dropped: calls before the step left out of ``setup``: their arguments aren't literals or imports.
     :ivar sources: argument name -> where its value was found, when not in ``source`` (:func:`find_values`).
@@ -356,8 +356,9 @@ class _Snippet:
         return False, None
 
     def value(self, node):
-        """``node`` as a start value (a literal) or ``{"call": "module:expr"}``, or None when it uses names the
-        snippet doesn't import or bind to such a value."""
+        """``node`` as a start value (a literal), ``{"python": repr}``, ``{"call": "module:expr"}`` or
+        ``{"expr": text}`` (arithmetic on imports), or None when it uses names the snippet doesn't import or
+        bind to such a value."""
         node = _Inline(self).visit(_copy(node))
         if node is None:
             return None
@@ -448,8 +449,8 @@ def _module_prefix(dotted):
 
 
 def _start(literal, node):
-    """A literal as a start value: a number, bool, string or a (nested) list of numbers; else ``{"call": ...}``
-    of ``builtins`` for a dict or a list of other things, or None."""
+    """A literal as a start value: a number, bool, string or a (nested) list of numbers; else ``{"python": repr}``
+    for a dict, list or tuple of other things, or None."""
     if isinstance(literal, (bool, int, float, str)):
         return literal
 
@@ -610,6 +611,8 @@ def _argument_text(snippet, node):
     if isinstance(value, dict):
         if "python" in value:
             return value["python"]
+        if "expr" in value:   # arithmetic, which a setup call's arguments can't hold
+            return None
         module, _, rest = value["call"].partition(":")
         return f"{module}.{rest}"
     return repr(value)

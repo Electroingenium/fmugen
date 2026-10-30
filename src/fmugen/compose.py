@@ -165,8 +165,8 @@ def _type_mismatch(source, target, source_interface, target_interface):
 def combine(composite, interfaces, version, model_name=None, author=None):
     """Build the composite FMU's interface from its parts' interfaces.
 
-    Each connection is checked (an output or local into an input, fed once, unclocked, same size,
-    compatible types) and stored as the parts' value references. The FMU's variables are the
+    Each connection is checked (any variable but an input into an input, fed once, unclocked, same
+    size, compatible types) and stored as the parts' value references. The FMU's variables are the
     parts' variables not fed by a connection, named ``<part>.<name>`` and carrying ``part`` and
     ``local`` (the reference inside the part), which :class:`CompositeEngine` uses to route
     calls. Clocks follow the variables. Parts with a fixed step must agree on it.

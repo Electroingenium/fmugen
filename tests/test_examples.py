@@ -53,6 +53,23 @@ def test_the_readme_gives_the_step_its_set_up_and_start_values(tmp_path):
     assert "start from the example in README.md" in text
 
 
+def test_a_set_up_with_arithmetic_is_left_out_not_the_whole_example(tmp_path):
+    path = write(tmp_path, "tank.py", TANK)
+    write(tmp_path, "README.md", """
+        ```python
+        import math
+        from tank import Tank
+        t = Tank(area=2.5)
+        t.configure(0.1 * math.pi)
+        for i in range(10):
+            h = t.advance(q=1.2)
+        ```
+    """)
+    data, text = run(f"{path}:Tank", tmp_path)
+    assert data["model"]["call"] == "advance" and "setup" not in data["model"]
+    assert data["parameters"]["area"]["start"] == 2.5
+
+
 def test_options_given_win_over_the_readme(tmp_path):
     path = write(tmp_path, "tank.py", TANK)
     write(tmp_path, "README.md", """
