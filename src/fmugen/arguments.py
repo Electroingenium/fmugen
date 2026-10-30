@@ -865,7 +865,8 @@ def _split_fields(fn, p, variables, section, comments, starts, arrays):
 
 
 #: Annotations that aren't objects to build: FMI values, containers, arrays.
-NOT_BUILT = (bool, int, float, complex, str, bytes, bytearray, list, tuple, dict, set, frozenset, type(None))
+NOT_BUILT = (bool, int, float, complex, str, bytes, bytearray, list, tuple, dict, set, frozenset, type(None),
+             enum.Enum)   # an Enum: its first member (_first_member)
 
 
 def _default_instance(fn, p, data, comments, constants_key, probe):
@@ -924,10 +925,19 @@ COUNT_NAME = re.compile(r"^(n|num|number)_\w+$|^(?!.*step)\w*size$|^\w+_(sizes|d
 
 def _first_member(fn, p):
     """The first member of the Enum an argument is annotated with (``Optional`` too), or None."""
-    try:
-        hint = typing.get_type_hints(fn).get(p.name, p.annotation)
-    except Exception:
-        hint = p.annotation
+    hint = p.annotation
+    # a class's are its __init__'s; a string annotation (from __future__ import annotations) is resolved where
+    # the code is (pyfluids' Fluid(name: 'FluidsList'))
+    for owner in ((fn.__init__, fn) if inspect.isclass(fn) else (fn,)):
+        try:
+            hint = typing.get_type_hints(owner).get(p.name, hint)
+        except Exception:
+            continue
+        if not isinstance(hint, str):
+            break
+    if isinstance(hint, str):
+        module = sys.modules.get(getattr(fn, "__module__", None) or "")
+        hint = getattr(module, hint, hint) if hint.isidentifier() else hint
     hint = static.unwrap_optional(hint)
     if isinstance(hint, type) and issubclass(hint, enum.Enum):
         return next(iter(hint), None)

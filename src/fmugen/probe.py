@@ -365,25 +365,30 @@ def _setup_first(build, obj, method_name, error, data, comments):
                       if p.default is p.empty and p.kind in (p.POSITIONAL_ONLY, p.POSITIONAL_OR_KEYWORD)]
         except (TypeError, ValueError):
             continue
-        made = [_made_up_argument(getattr(obj, name), p) for p in params]
-        step = f"{name}({', '.join(made)})"
-        setup = [*data["model"].get("setup", []), step]
-        trial = dict(data, model=dict(data["model"], setup=setup))
-        try:
-            fresh = _build_set_up(build, trial)
-        except Exception:
-            continue
-        saved = {n: dict(i) for n, i in data.get("inputs", {}).items()}
-        saved_comments = dict(comments)
-        try:
-            # with the made-up inputs' retries: timesfm's forecast() takes a list of arrays, not 1.0
-            _probe_call(_step_method(fresh, method_name, data), data, comments, constants_key="call_constants")
-            fresh = _build_set_up(build, trial)   # not stepped: the object the FMU starts from
-        except Exception:
-            if "inputs" in data:
-                data["inputs"] = saved
-            comments.clear()
-            comments.update(saved_comments)
+        worked = False
+        for made in _made_up_variants(getattr(obj, name), params):
+            step = f"{name}({', '.join(made)})"
+            setup = [*data["model"].get("setup", []), step]
+            trial = dict(data, model=dict(data["model"], setup=setup))
+            try:
+                fresh = _build_set_up(build, trial)
+            except Exception:
+                continue
+            saved = {n: dict(i) for n, i in data.get("inputs", {}).items()}
+            saved_comments = dict(comments)
+            try:
+                # with the made-up inputs' retries: timesfm's forecast() takes a list of arrays, not 1.0
+                _probe_call(_step_method(fresh, method_name, data), data, comments, constants_key="call_constants")
+                fresh = _build_set_up(build, trial)   # not stepped: the object the FMU starts from
+            except Exception:
+                if "inputs" in data:
+                    data["inputs"] = saved
+                comments.clear()
+                comments.update(saved_comments)
+                continue
+            worked = True
+            break
+        if not worked:
             unhelpful.add(name)
             continue
         data["model"]["setup"] = setup
@@ -488,6 +493,43 @@ def _made_up_training():
         if series is not None:
             tries.append(((series,), f"a TimeSeries of {samples} values"))
     return tries
+
+
+def _made_up_variants(fn, params):
+    """The set-up's made-up arguments as call texts (:func:`_made_up_argument`), then those made up as 1.0 as numpy
+    arrays (a single capital letter or a ``matrix`` name as a 1 x 1 matrix, others a vector of one), then those
+    matrices as scipy sparse ones (osqp's ``setup(P, q, A, l, u)``: "P is required to be a sparse matrix")."""
+    made = [_made_up_argument(fn, p) for p in params]
+    yield made
+    # a config built with no arguments, its integer fields that default to 0 as 16 (timesfm's
+    # compile(ForecastConfig()): "Horizon must be less than the max horizon. 1 > 0")
+    sized = [_sized_instance(text) for text in made]
+    if any(sized):
+        yield [new or text for new, text in zip(sized, made)]
+    numbers = [i for i, text in enumerate(made) if text == "1.0"]
+    if not numbers or importlib.util.find_spec("numpy") is None:
+        return
+    matrices = {i for i in numbers if re.fullmatch(r"[A-Z]|\w*matrix\w*", params[i].name)}
+    yield [("numpy.ones((1, 1))" if i in matrices else "numpy.ones(1)") if i in numbers else text
+           for i, text in enumerate(made)]
+    if matrices and importlib.util.find_spec("scipy") is not None:
+        yield [("scipy.sparse.csc_matrix(numpy.ones((1, 1)))" if i in matrices else "numpy.ones(1)")
+               if i in numbers else text for i, text in enumerate(made)]
+
+
+def _sized_instance(text):
+    """``module.Class(field=16, ...)`` for call text ``module.Class()`` naming a dataclass with integer fields that
+    default to 0, else None."""
+    if not text.endswith("()"):
+        return None
+    module, _, name = text[:-2].rpartition(".")
+    try:
+        cls = getattr(importlib.import_module(module), name)
+    except Exception:
+        return None
+    zeros = [f.name for f in getattr(cls, "__dataclass_fields__", {}).values()
+             if f.default == 0 and type(f.default) is int]
+    return f"{text[:-2]}({', '.join(f'{z}=16' for z in zeros)})" if zeros else None
 
 
 def _made_up_argument(fn, p):
@@ -1079,7 +1121,56 @@ def _call_with_probe_inputs(fn, data, constants_key):
     return results_of(fn(*args, **kwargs))
 
 
+#: A made-up series going up and down, for a step that returns nothing from a constant one.
+MADE_UP_VARIED = [0.0, 1.0, -1.0, 2.0, -2.0, 1.0, 0.0, 1.5]
+
+
+def _empty(result):
+    """Whether a step's result is an empty list, tuple or array (nothing to read outputs from)."""
+    if isinstance(result, (list, tuple)):
+        return not result
+    return getattr(result, "size", None) == 0 and hasattr(result, "shape")
+
+
+def _retry_varied(call, data, comments):
+    """Call again with the made-up number inputs as :data:`MADE_UP_VARIED` (numpy arrays), when the step returned
+    nothing for made-up ones. The result when it's not empty, else :data:`_FAILED` (the inputs are put back)."""
+    made = {name: info for name, info in data.get("inputs", {}).items()
+            if (comments.get(("inputs", name)) == MADE_UP or str(comments.get(("inputs", name), "")).startswith(
+                "passed as numpy.atleast_1d")) and isinstance(info.get("start"), (int, float))
+            and not isinstance(info.get("start"), bool) and "dimensions" not in info}
+    if not made or importlib.util.find_spec("numpy") is None:
+        return _FAILED
+    saved = {name: dict(info) for name, info in made.items()}
+    for info in made.values():
+        info.pop("convert", None)
+        info.update(dimensions=[len(MADE_UP_VARIED)], start=list(MADE_UP_VARIED), numpy=True)
+    try:
+        result = call()
+    except Exception:
+        result = None
+    if result is None or _empty(result):
+        for name, info in made.items():
+            info.clear()
+            info.update(saved[name])
+        return _FAILED
+    for name in made:
+        comments[("inputs", name)] = ("no default in the code: made up as 8 values going up and down (the step "
+                                      "returned nothing for a constant one); check it")
+    return result
+
+
 def _probe_once(fn, data, comments, constants_key="constants"):
+    """:func:`_probe_attempt`; when it returns nothing (an empty list or array), again with the made-up inputs
+    varied (:func:`_retry_varied`): rainflow's ``count_cycles(series)`` of one value has no cycles."""
+    result = _probe_attempt(fn, data, comments, constants_key)
+    if _empty(result):
+        varied = _retry_varied(lambda: _call_with_probe_inputs(fn, data, constants_key), data, comments)
+        return result if varied is _FAILED else varied
+    return result
+
+
+def _probe_attempt(fn, data, comments, constants_key="constants"):
     """Call ``fn`` with the probe inputs, retrying in forms the model may need.
 
     If it fails: with naive date-time epochs, retry them in UTC; with array inputs that are plain
@@ -1149,6 +1240,8 @@ def _probe_once(fn, data, comments, constants_key="constants"):
                 result = _retry_as_text(call, data, comments, error)
             if result is _FAILED:
                 result = _retry_positional(call, fn, data, comments, error)
+            if result is _FAILED:
+                result = _retry_prototype_integers(call, fn, data, comments, error)
             if result is _FAILED:
                 raise
             return result
@@ -1271,6 +1364,44 @@ def _retry_positional(call, fn, data, comments, error):
     return _FAILED
 
 
+#: A C++ parameter that is an integer or an enum: "Option::Type", "Size", "Natural", "int".
+INTEGER_PARAMETER = re.compile(r"^(?:const )?(?:\w+::)*(?:Type|int|long|Size|Natural|Integer|UnsignedInteger|bool)"
+                               r"(?: const)?(?: ?&)?(?: \w+)?$")
+
+
+def _retry_prototype_integers(call, fn, data, comments, error):
+    """Call again with the made-up inputs a SWIG prototype the error lists takes as integers or enums as the
+    Integer 1 (QuantLib's ``blackFormula(Option::Type,Real,Real,Real,Real,Real)``: optionType), by their position
+    in ``fn``'s signature. The first prototype that works is kept, with a comment.
+
+    :return: the result, or :data:`_FAILED`.
+    """
+    try:
+        names = [p.name for p in inspect.signature(fn).parameters.values() if p.name != "self"]
+    except (TypeError, ValueError):
+        return _FAILED
+    inputs = data.get("inputs", {})
+    for prototype in PROTOTYPE.findall(str(error)):
+        parts = [p.strip() for p in prototype.split(",") if p.strip()]
+        chosen = [names[i] for i, part in enumerate(parts) if i < len(names) and INTEGER_PARAMETER.match(part)
+                  and comments.get(("inputs", names[i])) == MADE_UP and isinstance(inputs.get(names[i], {}).get("start"), float)]
+        if not chosen:
+            continue
+        for name in chosen:
+            inputs[name].update(start=1, type="Integer")
+        try:
+            result = call()
+        except Exception:
+            for name in chosen:
+                inputs[name].pop("type")
+                inputs[name]["start"] = 1.0
+            continue
+        for name in chosen:
+            comments[("inputs", name)] = "no default in the code: made up as 1, an integer the C++ prototype asks for; check it"
+        return result
+    return _FAILED
+
+
 #: How many sets of optional arguments :func:`_retry_options` tries, at most.
 MAX_OPTION_SETS = 40
 
@@ -1316,10 +1447,12 @@ def _retry_options(call, fn, data, comments, section="inputs"):
             inputs[name] = {"start": value if COUNT_NAME.search(name) else float(value)}
         try:
             result = call()
-        except Exception:
-            for name in chosen:
-                inputs.pop(name)
-            continue
+        except Exception as failed:
+            # with them, the inputs may have to be quantities (fluids.units' Reynolds: rho and mu, in units)
+            if (result := _converted_retry(call, data, comments, failed)) is _FAILED:
+                for name in chosen:
+                    inputs.pop(name)
+                continue
         for name in chosen:
             for table in ("constants", "call_constants"):
                 comments.pop(("model", f"{table}.{name}"), None)
@@ -1328,6 +1461,21 @@ def _retry_options(call, fn, data, comments, section="inputs"):
         return result
     if not inputs:
         data.pop(section)
+    return _FAILED
+
+
+#: An error asking for a quantity with units: fluids.units' "1.0 has no quantity", "dimensionless".
+QUANTITY_ASKED = re.compile(r"quantit|dimensionless|\bunits?\b", re.I)
+
+
+def _converted_retry(call, data, comments, error):
+    """After giving more arguments, the conversion the error asks for, which the retries before tried without them:
+    the inputs as dated series ("'float' object has no attribute 'time'": pyet) or pint quantities
+    (:data:`QUANTITY_ASKED`: fluids.units). The result, or :data:`_FAILED`."""
+    if "object has no attribute" in str(error):
+        return _retry_as_series(call, data, comments)
+    if QUANTITY_ASKED.search(str(error)):
+        return _retry_as_pint(call, data, comments)
     return _FAILED
 
 
@@ -1355,30 +1503,71 @@ def _retry_named(call, fn, data, comments, section, error):
     keywords = any(p.kind == p.VAR_KEYWORD for p in params.values())
     taken = {*data.get("inputs", {}), *data.get("parameters", {}), *data.get("time", {}),
              *(n for table in ("constants", "call_constants") for n in data["model"].get(table, {}))}
-    names = [n for n in dict.fromkeys(ERROR_NAME.findall(str(error))) if n not in taken and not n[0].isdigit()
-             and (n in params and params[n].default is None and params[n].kind in (
-                  inspect.Parameter.POSITIONAL_OR_KEYWORD, inspect.Parameter.KEYWORD_ONLY)
-                  or n not in params and keywords and "_" in n)][:4]
+    def named(error):
+        # quoted, or a word naming an argument with a None default (pyet's "provide either pressure or the elevation")
+        words = ERROR_NAME.findall(str(error)) + [w for w in re.findall(r"\b[a-z]\w{2,}\b", str(error)) if w in params]
+        return [n for n in dict.fromkeys(words) if n not in taken and not n[0].isdigit()
+                and (n in params and params[n].default is None and params[n].kind in (
+                     inspect.Parameter.POSITIONAL_OR_KEYWORD, inspect.Parameter.KEYWORD_ONLY)
+                     or n not in params and keywords and "_" in n)][:4]
+
+    names = named(error)
     if not names:
         return _FAILED
     variables = data.setdefault(section, {})
-    for value in NAMED_VALUES:
-        for name in names:
-            counted = COUNT_NAME.search(name) or LENGTH_NAME.search(name)
-            variables[name] = {"start": value if counted else float(value)}
-        try:
-            result = call()
-        except Exception:
-            continue
-        for name in names:
-            comments[(section, name)] = (f"made up as {variables[name]['start']}: the probe failed without it "
-                                         f"({type(error).__name__}: it asks for {', '.join(names)}); check it")
-        return result
+    for _ in range(4):   # given those, the error may name others (pyet: then the humidity)
+        failures = []
+        for value in NAMED_VALUES:
+            for name in names:
+                counted = COUNT_NAME.search(name) or LENGTH_NAME.search(name)
+                variables[name] = {"start": value if counted else float(value)}
+            try:
+                result = call()
+            except Exception as failed:
+                failures.append(failed)
+                # with them, the inputs may have to be dated series (pyet's rs: "'float' object has no attribute
+                # 'time'"), which the retries before this one tried without them
+                if (result := _converted_retry(call, data, comments, failed)) is _FAILED:
+                    continue
+            for name in names:
+                comments[(section, name)] = (f"made up as {variables[name]['start']}: the probe failed without it "
+                                             f"({type(error).__name__}: it asks for {', '.join(names)}); check it")
+            return result
+        more = [n for failed in failures for n in named(failed) if n not in names]
+        if not more and any("'NoneType' object" in str(failed) for failed in failures):
+            # an argument left None the error doesn't name (pyet's rs, then lat): each in turn, as 16
+            more = _none_needed(call, params, names, taken, variables, failures)
+        if not more:
+            break
+        names += more[:1]   # one: "either `rh` or `tmin`" asks for one of them
     for name in names:
         variables.pop(name)
     if not variables:
         data.pop(section)
     return _FAILED
+
+
+def _none_needed(call, params, names, taken, variables, failures):
+    """The first argument with a None default (not ``names``, not ``taken``) that, made up as 16.0 with ``names``
+    as 16, gets the call past a "'NoneType' object" error: ``[name]``, or []."""
+    from fmugen.arguments import COUNT_NAME
+    candidates = [n for n, p in params.items() if p.default is None and n not in names and n not in taken
+                  and p.kind in (p.POSITIONAL_OR_KEYWORD, p.KEYWORD_ONLY)][:12]
+    for candidate in candidates:
+        for name in [*names, candidate]:
+            counted = COUNT_NAME.search(name) or LENGTH_NAME.search(name)
+            variables[name] = {"start": 16 if counted else 16.0}
+        try:
+            call()
+        except Exception as failed:
+            plain = re.sub(r"'\w+' object", "object", str(failed))   # 'float' for 'NoneType': not past it
+            if any(plain == re.sub(r"'\w+' object", "object", str(f)) for f in failures):
+                continue
+        variables.pop(candidate)
+        return [candidate]
+    for candidate in candidates:
+        variables.pop(candidate, None)
+    return []
 
 
 #: Sentinel: :func:`_retry_as_arrays` found no call that works.
@@ -1512,6 +1701,15 @@ MADE_UP_SHAPES = ([3], [1, 1], [1, 3], [3, 3], [4])
 
 #: An error asking for an integer: "'float' object cannot be interpreted as an integer", "must be int".
 INTEGER_ASKED = re.compile(r"\binteger\b|\bmust be int\b|expected int\b|\bint64\b", re.I)
+
+
+#: Channels-first batches on a grid, tried last for a torch module: neuraloperator's FNO(n_modes=[1, 1]) takes
+#: (batch, channels, height, width).
+MADE_UP_GRIDS = ([1, 1, 8], [1, 1, 8, 8])
+
+
+#: Names of a list of sizes, one per layer: deepxde's ``layer_sizes``, ``hidden_sizes``, ``widths``.
+PLURAL_SIZES = re.compile(r"(^|_)(sizes|widths|hsizes|layers|hidden_dims|channels_list)$")
 
 
 #: Numbers tried last for made-up values that fail as 1.0, 0.0, arrays and lists.
@@ -1655,6 +1853,9 @@ def _retry_made_up(call, data, comments, section, obj=None, error=None):
             made[name].update(saved[name], start=value)
 
     tries = [("as 0.0", {n: 0 for n in made})]
+    sized = [n for n in made if PLURAL_SIZES.search(n)]
+    if sized:   # deepxde's FNN(layer_sizes): a list of sizes, not an array (a (1, 1) array builds no layers)
+        tries.insert(0, ("as lists of two ones", {n: ("list", 2) if n in sized else None for n in made}))
     if INTEGER_ASKED.search(str(error or "")):   # nengo's run_steps(steps): "cannot be interpreted as an integer"
         tries.insert(0, ("as the Integer 1", {n: ("integer", 1) for n in made}))
     spaced = {n: _space_value(obj, n) for n in made}
@@ -1688,7 +1889,7 @@ def _retry_made_up(call, data, comments, section, obj=None, error=None):
                        {m: s if m == n else None for m in made}) for n in made for s in shapes]
     if _torch_module(obj):   # a torch module's forward() takes tensors (norse, snntorch)
         tries += [(f"as torch tensors of ones, shape {tuple(s)}", {n: ("tensor", s) for n in made})
-                  for s in list(MADE_UP_SHAPES) + _object_shapes(obj)]
+                  for s in list(MADE_UP_SHAPES) + _object_shapes(obj) + list(MADE_UP_GRIDS)]
     if "torch" in sys.modules:
         # a float32 batch as wide as made-up training data (skorch's predict(X) on a torch network trained on it)
         tries += [(f"as torch tensors of ones, shape {(1, MADE_UP_TRAINING[1])}",

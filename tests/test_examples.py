@@ -717,3 +717,100 @@ def test_an_empty_list_default_gets_as_many_values_as_the_error_asks(tmp_path):
     """)
     data, text = run(f"{path}:Circuit", tmp_path, probe=True, call="predict")
     assert "made up as 3 ones" in text and "y" in data["outputs"]
+
+
+def test_a_name_argument_is_made_up_as_a_name_the_failing_code_looks_up(tmp_path):
+    path = write(tmp_path, "net.py", """
+        def get(identifier):
+            if isinstance(identifier, str):
+                return {"relu": abs, "tanh": abs}[identifier]
+            raise TypeError("Could not interpret activation identifier: {}".format(identifier))
+
+        class Net:
+            def __init__(self, activation):
+                self.f = get(activation)
+
+            def forward(self, x):
+                return self.f(x)
+    """)
+    data, text = run(f"{path}:Net", tmp_path, probe=True, call="forward")
+    assert data["parameters"]["activation"]["start"] == "relu" and "y" in data["outputs"]
+
+
+def test_unquoted_arguments_an_error_names_are_made_up_one_error_after_another(tmp_path):
+    path = write(tmp_path, "et.py", """
+        def evaporation(tmean, pressure=None, elevation=None, rh=None, lat=None):
+            if pressure is None and elevation is None:
+                raise ValueError("Please provide either pressure or the elevation!")
+            if rh is None:
+                raise ValueError("calc_ea requires `rh` when `ea` is not provided")
+            if lat is None:
+                raise ValueError("the radiation needs the latitude, lat")
+            return tmean * rh
+    """)
+    data, text = run(f"{path}:evaporation", tmp_path, probe=True)
+    assert {"pressure", "elevation", "rh", "lat"} <= set(data["inputs"]) and "probe call failed" not in text
+
+
+def test_a_function_argument_left_none_is_made_up_as_a_function(tmp_path):
+    path = write(tmp_path, "derivative.py", """
+        class Derivative:
+            def __init__(self, fun=None, step=None):
+                self.fun = fun
+
+            def __call__(self, x):
+                assert self.fun is not None
+                return (self.fun(x + 1e-6) - self.fun(x)) / 1e-6
+    """)
+    data, text = run(f"{path}:Derivative", tmp_path, probe=True, call="__call__")
+    assert data["model"]["constants"]["fun"] == {"call": "numpy:sin"} and "y" in data["outputs"]
+
+
+def test_a_time_argument_that_must_be_positive_is_made_up(tmp_path):
+    path = write(tmp_path, "identify.py", """
+        class Identifier:
+            def fit(self, x, t):
+                if t <= 0:
+                    raise ValueError("t must be positive")
+                self.rate_ = x / t
+                return self
+    """)
+    data, text = run(f"{path}:Identifier", tmp_path, probe=True, call="fit")
+    assert data["inputs"]["t"]["start"] == 1.0 and "rate_" in data["outputs"]
+
+
+def test_a_step_returning_nothing_for_a_constant_input_gets_a_varied_one(tmp_path):
+    path = write(tmp_path, "cycles.py", """
+        def count_cycles(series):
+            return [(abs(b - a), 0.5) for a, b in zip(series, series[1:]) if a != b]
+    """)
+    data, text = run(f"{path}:count_cycles", tmp_path, probe=True)
+    assert data["inputs"]["series"]["dimensions"] == [8] and "going up and down" in text
+
+
+def test_a_made_up_number_is_tried_as_each_value_the_error_lists(tmp_path):
+    path = write(tmp_path, "vad.py", """
+        class Detector:
+            def detect(self, x, sr):
+                if sr not in (8000, 16000):
+                    raise ValueError("Supported sampling rates: [8000, 16000]")
+                return x * sr
+    """)
+    data, text = run(f"{path}:Detector", tmp_path, probe=True, call="detect")
+    assert data["inputs"]["sr"]["start"] == 8000 and "a value the error lists" in text
+
+
+def test_a_set_up_the_step_needs_gets_made_up_arrays(tmp_path):
+    path = write(tmp_path, "qp.py", """
+        class Solver:
+            def __init__(self):
+                self._size = None
+
+            def setup(self, P, q):
+                self._size = P.shape[0] + len(q)
+
+            def solve(self):
+                return self._size * 2.0
+    """)
+    data, text = run(f"{path}:Solver", tmp_path, probe=True, call="solve")
+    assert data["model"]["setup"] == ["setup(numpy.ones((1, 1)), numpy.ones(1))"] and "y" in data["outputs"]
