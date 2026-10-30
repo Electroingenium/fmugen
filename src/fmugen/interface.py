@@ -1073,7 +1073,6 @@ def _infer_config_once(target, call, config_dir, fmi_version, starts, setup, kin
     _add_globals(data, comments, module, config_dir if path else None)
     _add_requirements(data, comments, module_name, config_dir, Path(path).resolve() if path else None)
     _rename_duplicates(data, comments)
-    # FMI 2 too: importers name the simulation time `time` in their results (FMPy), hiding the variable
     _rename_reserved(data, comments, is_class="call" in data["model"] or inspect.isclass(entry))
     step = data["model"].get("call")
     _add_docstring_units(data, comments, entry,

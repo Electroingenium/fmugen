@@ -679,7 +679,7 @@ def _check_tunable(obj, method_name, data, comments, arrays):
 
 
 #: GEKKO classes that hold solved results: Var/SV/CV, Intermediate, FV/MV (not Param, Const).
-GEKKO_RESULTS = ("GKVariable", "GK_Intermediate", "GK_FV")   # Var/SV/CV, Intermediate, FV/MV (not Param, Const)
+GEKKO_RESULTS = ("GKVariable", "GK_Intermediate", "GK_FV")
 
 
 def _gekko_result(value):
@@ -968,7 +968,7 @@ def _add_attributes(cls, method_name, data, comments, arrays, probe, seen):
                                                  "uncomment if it is a number, or run init --probe")
 
 #: Converters tried in order when a probe call fails with list inputs.
-ARRAY_RETRIES = ("numpy", "torch:tensor")   # tried in order when a probe call fails with list inputs
+ARRAY_RETRIES = ("numpy", "torch:tensor")
 
 
 def _probe_constants(data, table, positional=False):
@@ -1694,8 +1694,8 @@ def _retry_as_arrays(call, data, comments):
         comments[("inputs", name)] = "passed as numpy.atleast_1d(...): the probe failed with plain numbers"
     return result
 
-#: Shapes tried for a made-up input that fails as a number: a vector, a one-row and a three-row matrix, and a vector
-#: of 4 (commpy's modulate takes a whole number of 2- or 4-bit symbols).
+#: Shapes tried for a made-up input that fails as a number: a vector of 3, 1×1, 1×3 and 3×3 matrices, and a
+#: vector of 4 (commpy's modulate takes a whole number of 2- or 4-bit symbols).
 MADE_UP_SHAPES = ([3], [1, 1], [1, 3], [3, 3], [4])
 
 

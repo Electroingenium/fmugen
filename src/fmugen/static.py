@@ -18,7 +18,7 @@ PRIMITIVE_TYPES = {float: "Real", int: "Integer", bool: "Boolean", str: "String"
 #: Substrings of an annotation's repr that mean an array (size unknown statically).
 ARRAY_ANNOTATIONS = ("ndarray", "Tensor", "jax.Array", "tf.Tensor", "list[", "List[", "Sequence[", "numpy")
 #: How far to follow self.method() calls when collecting assigned attributes.
-MAX_DEPTH = 6   # how far to follow self.method() calls
+MAX_DEPTH = 6
 
 
 @dataclasses.dataclass
@@ -482,7 +482,7 @@ def _installed_packages():
 
 
 #: (folders holding distributions, their modification times) -> packages_distributions().
-_DISTRIBUTIONS = {}   # (folders holding distributions, their modification times) -> packages_distributions()
+_DISTRIBUTIONS = {}
 
 
 def packages_distributions():

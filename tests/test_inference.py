@@ -413,7 +413,7 @@ def test_setup_call_takes_calls_as_arguments():
 
 
 def test_call_constant_refuses_text_after_the_call():
-    # was Path() (the current folder): everything after the first ')' was dropped (rembg, easyocr)
+    # "pathlib:Path('x').read_bytes()" (rembg, easyocr) would run only Path(), dropping the rest: refused
     from fmugen.templates.fmugen_runtime import resolve_constant
     with pytest.raises(ValueError, match="only one call"):
         resolve_constant({"call": "pathlib:Path('x.png').read_bytes()"})
@@ -524,7 +524,7 @@ def test_factory_annotated_with_a_base_class(tmp_path):
     '''))
     data, _ = infer(f"{tmp_path / 'fac.py'}:load", call="forecast")
     assert "x" in data["inputs"] and "y" in data["outputs"]
-    data, comments = infer(f"{tmp_path / 'fac.py'}:load", call="forecast", probe=False)   # was AttributeError
+    data, comments = infer(f"{tmp_path / 'fac.py'}:load", call="forecast", probe=False)   # without --probe: a comment, not an AttributeError
     assert "known only by running it" in comments[("inputs", None)]
 
 

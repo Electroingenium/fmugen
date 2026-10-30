@@ -32,7 +32,6 @@ FMI_TYPES = (*FLOAT_TYPES, *INT_TYPES, "Boolean", "String", "Binary", "Enumerati
 #: FMI 2 has one float and one 32-bit integer type: the other float and integer types become those;
 #: FMI 3 ``Real`` / ``Integer`` mean ``Float64`` / ``Int32``.
 TYPE_NAMES = {
-    # FMI 2 has one float and one 32-bit integer type: the other float and integer types become those
     2: {**{t: "Real" for t in FLOAT_TYPES}, **{t: "Integer" for t in INT_TYPES},
         "Boolean": "Boolean", "String": "String", "Enumeration": "Enumeration"},
     3: {"Real": "Float64", "Integer": "Int32", **{t: t for t in FMI_TYPES if t not in ("Real", "Integer")}},
@@ -44,7 +43,7 @@ DEFAULT_START = {
 }
 
 #: Folder of the user's code inside the FMU's ``resources/`` folder.
-MODEL_DIR = "fmugen_model"   # the user's code, inside the FMU's resources/ folder
+MODEL_DIR = "fmugen_model"
 
 #: Module names already used by the UniFMU backend and fmugen in ``resources/``;
 #: a model module with one of these names would shadow them.
@@ -72,7 +71,7 @@ EXPERIMENT_KEYS = {"start_time", "stop_time", "step_size", "tolerance", "fixed_s
 #: What a ``[time]`` argument can receive.
 TIME_SOURCES = ("time", "step_size", "end_time", "start_time", "stop_time", "tolerance")
 #: Built-in ``[model] integrate`` methods, besides ``"scipy:<solve_ivp method>"``.
-INTEGRATORS = ("euler", "rk4")   # [model] integrate, besides "scipy:<solve_ivp method>"
+INTEGRATORS = ("euler", "rk4")
 #: ``scipy.integrate.solve_ivp`` methods allowed as ``integrate = "scipy:<method>"``.
 SCIPY_METHODS = ("RK45", "RK23", "DOP853", "Radau", "BDF", "LSODA")
 #: FMI 2 Integer is 32-bit: these types are narrowed to it (with a note).
