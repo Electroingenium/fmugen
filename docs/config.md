@@ -2,9 +2,9 @@
 
 `fmugen.toml` describes how an unmodified Python model becomes an FMU. It sits in the model's folder, and every path in it is relative to that folder. This page is the reference for every key; it is the only one, and the other pages link here.
 
-- `fmugen init` writes a first version: what it infers is in [models.md](models.md#what-fmugen-init-infers), and [init-tutorial.md](init-tutorial.md) walks through a generated config.
+- `fmugen init` writes a first version: what it infers, and a walk through a generated config, are in [init.md](init.md).
 - [models.md](models.md) has a worked example for each kind of model; the [complete example](#complete-example) below uses most keys at once.
-- The `fmugen` command's options are in [manual.md](manual.md#4-commands).
+- The `fmugen` command's options are in [cli.md](cli.md).
 
 Unknown keys are rejected with an error, so typos don't go unnoticed. Keys marked **FMI 3** are only accepted when building FMI 3 (`[model] fmi_version = 3` or `fmugen build --fmi 3`). Building such a config as FMI 2 fails with an error that says so. Otherwise the same config builds either version.
 
@@ -263,7 +263,7 @@ The model itself is not run: errors in the model show up when the FMU runs, or e
 
 ## Complete example
 
-An FMI 3 config that uses most sections. It is illustrative: `plant.py` is not part of the repository. For real configs, see the hand configs linked from [tested-models.md](tested-models.md).
+An FMI 3 config that uses most sections. It is illustrative: `plant.py` is not part of the repository. For real configs, see the hand configs linked from [tested-models.md](testing/tested-models.md).
 
 ```toml
 [model]

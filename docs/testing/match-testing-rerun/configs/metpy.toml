@@ -1,0 +1,11 @@
+# docs/testing/tested-models.md "Hand configs / metpy": the published [inputs] and [outputs]; [model]
+# entry added (the docs show only the two tables)
+[model]
+entry = "metpy.calc:dewpoint_from_relative_humidity"
+
+[inputs]
+temperature = { start = 25.0, unit = "degC", convert = "pint" }
+relative_humidity = { start = 0.5, unit = "dimensionless", convert = "pint" }
+
+[outputs]
+y = { from = "return", unit = "degC" }

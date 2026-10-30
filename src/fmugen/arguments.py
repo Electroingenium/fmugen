@@ -9,6 +9,8 @@ import json
 import keyword
 import math
 import re
+import sys
+import textwrap
 import typing
 
 from fmugen import static
@@ -108,7 +110,7 @@ def _guessed(comments, name):
 def guessed_outputs(data, comments):
     """Outputs still in the config whose type is a guess (see :func:`_guessed`).
 
-    :param data: the config being inferred; updated in place.
+    :param data: the config being inferred.
     :type data: dict
     :param comments: ``(section, key) -> text`` for :func:`render_toml`, plus internal ``("init", ...)`` keys.
     :type comments: dict
@@ -158,6 +160,15 @@ def unfit_outputs(comments):
 ASSUMPTIONS = (
     ("(its annotation, with no arguments)", "objects built with no arguments from their annotation: give real "
                                            "ones with --const if the model needs them"),
+    ("its docstring's default", "no default in the code: the start value is the docstring's, check it"),
+    ("its docstring's unit", "no default in the code: the start value is a typical one in its docstring's unit, "
+                             "check it"),
+    ("passes the code's checks", "no default in the code: the start value is one the code's checks accept, "
+                                 "check it"),
+    ("start from the example in", "start values taken from the package's examples: check them"),
+    ("default None, made up as", "default None in the code, made up as 1 as the probe failed without "
+                                     "it: check it, or remove it if your model passes another of them"),
+    ("'s first member", "no default in the code: the first member of its Enum, check it"),
     ("no default in the code", "no default in the code: the start value is made up, check it"),
     ("no default: check the start value", "no default in the code: the start value is made up, check it"),
     ("Integer because the default is an int", "typed Integer because the default is an int; "
@@ -459,8 +470,8 @@ def _arguments(fn, section, data, comments, skip_self=False, allow_time=True, co
     """Sort the arguments of ``fn`` into variables of ``section`` and time arguments.
 
     Reads the signature with :func:`inspect.signature`. Each parameter becomes, in order of
-    precedence: a ``[time]`` argument (named like a time, or a date-time), a call constant
-    (``--start NAME=call:...``), item or field variables (tuple/dict starts, dataclass-like
+    precedence: a ``[time]`` argument (named like a time, or a date-time), a constant
+    (``--const``), item or field variables (tuple/dict starts, dataclass-like
     objects), or a variable typed from its default, ``--start`` value or annotation.
     Positional-only parameters get ``to = "pos:N"``. Arguments whose default is not an FMI value
     (None, tuples, objects) keep their code default; they are listed as commented-out constants
@@ -554,17 +565,32 @@ def _arguments(fn, section, data, comments, skip_self=False, allow_time=True, co
             raise InterfaceError(f"--start {p.name}: arrays and bytes need --fmi 3 (FMI 2 has only scalar variables)")
         has_default = p.default is not p.empty or p.name in starts
         default = starts.get(p.name, None if p.default is p.empty else p.default)
+        first = _first_member(fn, p) if not has_default else None
+        if first is not None:   # pyfluids' Fluid(name: FluidsList): an enum's first member, not 1.0
+            has_default, default = True, first
+            comments[(section, p.name)] = f"no default in the code: {type(first).__name__}'s first member; check it"
         before = len(variables)
         if not has_default and arrays and probe:   # tried by the probe if 1.0 fails (gsw's array_like takes numbers)
             shape = _made_up_array(fn, p)
             if shape:
                 comments[_shape_key(section, p.name)] = shape
+                if "Tensor" in repr(p.annotation):   # torch's: tried as tensors (chronos' predict(inputs))
+                    comments[_shape_key(section, p.name, tensor=True)] = shape
         if not has_default or isinstance(default, SCALARS):
-            info = _type_info(default, p.annotation)
+            counted = not has_default and COUNT_NAME.search(p.name) and (
+                p.annotation is p.empty or _counts_by_annotation(p.annotation))
+            info = _type_info(default, int if counted else p.annotation)   # hidden_size: 1, not 1.0
             if p.name in starts:
                 comments.setdefault((section, p.name), "start from --start")
             elif not has_default:
-                comments[(section, p.name)] = MADE_UP
+                informed = _informed_start(fn, p) if not isinstance(info["start"], (bool, str)) else None
+                if informed:
+                    value, why = informed
+                    info = {"start": int(value) if isinstance(info["start"], int) and float(value).is_integer()
+                            else float(value)}
+                    comments[(section, p.name)] = f"no default in the code: {why}; check the start value"
+                else:
+                    comments[(section, p.name)] = MADE_UP
             elif type(default) is int and static.unwrap_optional(p.annotation) is not int:
                 comments[(section, p.name)] = "Integer because the default is an int; write a float start for Real"
             variables[p.name] = info
@@ -774,7 +800,7 @@ def _object_fields(cls):
 def _split_fields(fn, p, variables, section, comments, starts, arrays):
     """Make one variable per field of an object argument.
 
-    An argument that is a dataclass / pydantic / attrs object (by its default or its annotation)
+    An argument that is a dataclass / pydantic / attrs / namedtuple object (by its default or its annotation)
     becomes one variable per field, NAME_FIELD, bound with ``to = "arg:NAME.FIELD"``. Fields that
     aren't FMI values keep the default's value; without a default, they must have their own
     default.
@@ -815,8 +841,10 @@ def _split_fields(fn, p, variables, section, comments, starts, arrays):
             value = None
         elif not isinstance(value, SCALARS) and not (arrays and _array_info(value)):
             continue   # None or not an FMI value: the default's value (or the field's default) is kept
-        info = _array_info(value, with_start=True) if value is not None and not isinstance(value, SCALARS)             else _type_info(value, static.unwrap_optional(hint))
-        if isinstance(info.get("start"), int) and not isinstance(info["start"], bool)                 and static.unwrap_optional(hint) is float:
+        info = _array_info(value, with_start=True) if value is not None and not isinstance(value, SCALARS) \
+                else _type_info(value, static.unwrap_optional(hint))
+        if isinstance(info.get("start"), int) and not isinstance(info["start"], bool) \
+                and static.unwrap_optional(hint) is float:
             info["start"] = float(info["start"])
         info["to"] = f"{'init' if section == 'parameters' else 'arg'}:{p.name}.{field}"   # a constructor's
         found[f"{p.name}_{field}"] = info
@@ -837,7 +865,8 @@ def _split_fields(fn, p, variables, section, comments, starts, arrays):
 
 
 #: Annotations that aren't objects to build: FMI values, containers, arrays.
-NOT_BUILT = (bool, int, float, complex, str, bytes, bytearray, list, tuple, dict, set, frozenset, type(None))
+NOT_BUILT = (bool, int, float, complex, str, bytes, bytearray, list, tuple, dict, set, frozenset, type(None),
+             enum.Enum)   # an Enum: its first member (_first_member)
 
 
 def _default_instance(fn, p, data, comments, constants_key, probe):
@@ -888,12 +917,45 @@ def _default_instance(fn, p, data, comments, constants_key, probe):
     return True
 
 
+#: Names of unannotated arguments that are counts or sizes, made up as an Integer: ``n_inputs``, ``num_layers``,
+#: ``hidden_size``, ``in_features``, ``units`` (torch layers fail on a float size).
+COUNT_NAME = re.compile(r"^(n|num|number)_\w+$|^(?!.*step)\w*size$|^\w+_(sizes|dim|dims|features|channels|units|layers|"
+                        r"neurons|count|heads|classes|outputs|inputs|nodes|states)$|^(units|layers|neurons|n|heads|classes|nodes)$")
+
+
+def _first_member(fn, p):
+    """The first member of the Enum an argument is annotated with (``Optional`` too), or None."""
+    hint = p.annotation
+    # a class's are its __init__'s; a string annotation (from __future__ import annotations) is resolved where
+    # the code is (pyfluids' Fluid(name: 'FluidsList'))
+    for owner in ((fn.__init__, fn) if inspect.isclass(fn) else (fn,)):
+        try:
+            hint = typing.get_type_hints(owner).get(p.name, hint)
+        except Exception:
+            continue
+        if not isinstance(hint, str):
+            break
+    if isinstance(hint, str):
+        module = sys.modules.get(getattr(fn, "__module__", None) or "")
+        hint = getattr(module, hint, hint) if hint.isidentifier() else hint
+    hint = static.unwrap_optional(hint)
+    if isinstance(hint, type) and issubclass(hint, enum.Enum):
+        return next(iter(hint), None)
+    return None
+
+
+def _counts_by_annotation(annotation):
+    """Whether an annotation allows an int but not a float: ``int | list[int]`` (ncps' ``input_size``)."""
+    args = typing.get_args(annotation)
+    return int in args and float not in args
+
+
 #: The comment of an argument with no default (and no --start): its start is made up.
 MADE_UP = "no default in the code: check the start value"
-def _shape_key(section, name):
+def _shape_key(section, name, tensor=False):
     """The comments key (not rendered) of the shape of a made-up argument its annotation or docstring
     says is an array, for the probe to try when the call fails with 1.0."""
-    return ("init", f"made up shape {section}.{name}")
+    return ("init", f"made up {'tensor' if tensor else 'shape'} {section}.{name}")
 
 
 def _made_up_array(fn, p):
@@ -916,6 +978,109 @@ def _made_up_array(fn, p):
                                                             if p.annotation is not p.empty else None):
         return None
     return documented.get(p.name) or [MADE_UP_SIZE]
+
+
+#: A documented default: ``default 1e-6``, ``defaults to 0.5``, ``(default: 3)``, ``default=300``.
+_DOCUMENTED_DEFAULT = re.compile(r"\bdefaults?(?:\s+value)?(?:\s+is|\s+to|\s+of)?\s*[:=]?\s*`*([-+]?(?:\d+\.?\d*|\.\d+)"
+                                 r"(?:[eE][-+]?\d+)?)(?![\w.])", re.I)
+#: A typical value for a quantity in a unit a docstring gives, where 1.0 is far from any real one.
+TYPICAL_BY_UNIT = {"K": 293.15, "degC": 20.0, "°C": 20.0, "Pa": 101325.0, "kPa": 101.325, "MPa": 0.101325,
+                   "bar": 1.01325, "mbar": 1013.25, "hPa": 1013.25, "psi": 14.696}
+#: Values tried, in order, against the checks the code makes on an argument (``if x < 10: raise``).
+CHECKED_VALUES = (1.0, 0.5, 2.0, 10.0, 0.1, 100.0, 1000.0, 0.0, -1.0, 1e4, 1e5, 1e6)
+
+
+def _informed_start(fn, p):
+    """A start for an argument with no default from what the code says of it, rather than 1.0.
+
+    In order: a default its docstring gives (``tol : float, default 1e-6``); a typical value of its
+    docstring unit when that unit is one where 1.0 is far from real values (293.15 for ``[K]``); a
+    value the checks in the code accept, when they refuse 1.0 (``if n_harmonics < 3: raise``).
+
+    :param fn: the function the argument is of.
+    :param p: the parameter.
+    :type p: inspect.Parameter
+    :return: ``(value, why)``, or None.
+    :rtype: tuple or None
+    """
+    from fmugen.interface import docstring_parameters, docstring_units
+    owner = _owner_class(fn)
+    try:
+        text = docstring_parameters(fn, owner).get(p.name, "")
+    except Exception:
+        text = ""
+    match = _DOCUMENTED_DEFAULT.search(text)
+    if match:
+        return float(match.group(1)), f"its docstring's default, {match.group(1)}"
+    try:
+        unit = docstring_units(fn, owner)[0].get(p.name)
+    except Exception:
+        unit = None
+    if unit in TYPICAL_BY_UNIT:
+        return TYPICAL_BY_UNIT[unit], f"a typical value in {unit}, its docstring's unit"
+    checks = _value_checks(fn, p.name)
+    if checks and not _passes(checks, p.name, 1.0):
+        value = next((v for v in CHECKED_VALUES[1:] if _passes(checks, p.name, v)), None)
+        if value is not None:
+            return value, f"{value:g} passes the code's checks on it, 1.0 doesn't"
+    return None
+
+
+def _owner_class(fn):
+    """The class of a constructor or method (numpydoc puts a constructor's parameters on the class), or None."""
+    qualname = getattr(fn, "__qualname__", "") or ""
+    owner = sys.modules.get(getattr(fn, "__module__", None) or "")
+    for part in qualname.split(".")[:-1]:
+        owner = getattr(owner, part, None)
+    return owner if inspect.isclass(owner) else None
+
+
+def _value_checks(fn, name):
+    """The checks the code of ``fn`` makes on argument ``name``: ``(test, raises)`` of ``if test: raise``
+    (raises True) and ``assert test`` (False), whose test only compares ``name`` with numbers.
+
+    :rtype: list[tuple]
+    """
+    try:
+        tree = ast.parse(textwrap.dedent(inspect.getsource(fn)))
+    except (OSError, TypeError, SyntaxError, IndentationError):
+        return []
+
+    def number(s):
+        if isinstance(s, ast.UnaryOp) and isinstance(s.op, (ast.USub, ast.UAdd)):
+            s = s.operand
+        return isinstance(s, ast.Constant) and isinstance(s.value, (int, float)) and not isinstance(s.value, bool)
+
+    def simple(test):
+        if isinstance(test, ast.BoolOp):
+            return all(simple(v) for v in test.values)
+        if isinstance(test, ast.UnaryOp) and isinstance(test.op, ast.Not):
+            return simple(test.operand)
+        if not isinstance(test, ast.Compare):
+            return False
+        sides = [test.left, *test.comparators]
+        return any(isinstance(s, ast.Name) and s.id == name for s in sides) \
+            and all((isinstance(s, ast.Name) and s.id == name) or number(s) for s in sides)
+
+    checks = []
+    for node in ast.walk(tree):
+        if isinstance(node, ast.If) and simple(node.test) and any(isinstance(b, ast.Raise) for b in node.body):
+            checks.append((node.test, True))
+        elif isinstance(node, ast.Assert) and simple(node.test):
+            checks.append((node.test, False))
+    return checks
+
+
+def _passes(checks, name, value):
+    """Whether ``value`` for ``name`` passes the checks of :func:`_value_checks`."""
+    for test, raises in checks:
+        try:
+            result = bool(eval(compile(ast.Expression(test), "<check>", "eval"), {"__builtins__": {}}, {name: value}))
+        except Exception:
+            return False
+        if result == raises:
+            return False
+    return True
 
 
 def _type_info(value, annotation=inspect.Parameter.empty):
@@ -1087,7 +1252,6 @@ def _scalar_of(value):
         value = value.magnitude
     elif hasattr(value, "unit") and hasattr(value, "to_value"):   # an astropy Quantity
         value = value.value
-    # numpy scalars (np.float32, ...) also have ndim 0, but are handled as they are, keeping their type
     if getattr(value, "ndim", None) == 0 and hasattr(value, "item") and type(value).__name__ not in NUMPY_SCALARS:
         try:
             return value.item()

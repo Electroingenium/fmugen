@@ -667,7 +667,7 @@ def set_path(obj, path, value):
     the part read as :func:`get_path` reads it (a key, an index). The last part is set as an item
     only where there's no such attribute and it can only be an item: a key already in a mapping or
     a labelled pandas/xarray object (``"loads.p_set.l"`` sets ``obj.loads.p_set["l"]``), or an
-    index of a list or array (``"qpos.0"``). Everything else is set as an attribute, as before.
+    index of a list or array (``"qpos.0"``). Everything else is set as an attribute.
 
     :param obj: the start object (the model object).
     :param path: the dotted path.
@@ -675,19 +675,27 @@ def set_path(obj, path, value):
     :param value: the new value.
     """
     *parents, last = path.split(".")
+    table = column = None
     for part in parents:
+        table, column = obj, part
         try:
             obj = getattr(obj, part)
         except AttributeError:   # a key or an index: "loads.p_set.l", "data.qpos.0"
             obj = get_path(obj, part)
     try:
         attribute = hasattr(obj, last)
-    except Exception:   # a property that fails to read: set it as before
+        if attribute and _labelled(obj) and not hasattr(type(obj), last) and last in obj:
+            attribute = False   # pandas reads labels as attributes (series.l): it's an item
+    except Exception:   # a property that fails to read: set it as an attribute
         attribute = True
     if attribute:
         setattr(obj, last, value)
     elif (isinstance(obj, Mapping) or _labelled(obj)) and last in obj:
-        obj[last] = value
+        if _labelled(table) and hasattr(table, "loc") and column in getattr(table, "columns", ()):
+            # a column of a table is a copy under pandas' copy-on-write: set the table's cell
+            table.loc[last, column] = value
+        else:
+            obj[last] = value
     elif last.lstrip("-").isdigit() and last.count("-") <= 1 and _indexable(obj):
         obj[int(last)] = value
     else:

@@ -169,6 +169,7 @@ class Model:
 
         Ends in event mode when the importer uses it, else in step mode
         (:meth:`Engine.exit_initialization_mode`).
+
         :return: the FMI status (``Fmi3Status``).
         :rtype: int
         """
@@ -662,7 +663,6 @@ class Model:
         return self.engine.set_debug_logging(logging_on, categories or ())
 
     def log(self, message, status, category = "logEvents"):
-        # Removing the line below will break logging.
         """Send a message to the importer through UniFMU.
 
         :param message: the text.
@@ -672,6 +672,7 @@ class Model:
         :param category: the FMI log category.
         :type category: str
         """
+        # Removing the line below will break logging.
         self._log_callback(status, category, message)
 
 

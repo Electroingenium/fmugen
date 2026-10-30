@@ -1,0 +1,13 @@
+# docs/testing/tested-models.md "Hand configs / fluids.units": the `init` config with convert = "pint"
+# and a unit on each input (units are fluids' SI units)
+[model]
+entry = "fluids.units:Reynolds"
+
+[inputs]
+V = { start = 1.0, unit = "m/s", convert = "pint" }
+D = { start = 0.1, unit = "m", convert = "pint" }
+rho = { start = 1000.0, unit = "kg/m**3", convert = "pint" }
+mu = { start = 0.001, unit = "Pa*s", convert = "pint" }
+
+[outputs]
+y = { from = "return" }    # docs: 76401.3 (dimensionless)

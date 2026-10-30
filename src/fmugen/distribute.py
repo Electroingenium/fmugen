@@ -422,11 +422,11 @@ def _modules(interface):
     return sorted(modules)
 
 
+#: Distributions never collected into a compiled FMU: fmugen itself and the build tools.
 NOT_COLLECTED = {"fmugen", "pyinstaller", "pyinstaller-hooks-contrib", "nuitka", "pip", "setuptools", "wheel"}
 #: Packages that import their own submodules by name, so they are collected with all of them even when
-#: they are only a dependency (``pyomo.environ`` imports its plugins: OpenHENS).
-#: Packages that import their own submodules by name: pyomo's plugins, tensorly's backends
-#: (neuraloperator), ray's _private modules (neuralforecast).
+#: they are only a dependency: pyomo's plugins (OpenHENS), tensorly's backends (neuraloperator), ray's
+#: _private modules (neuralforecast).
 IMPORTS_OWN_SUBMODULES = {"pyomo", "tensorly", "ray"}
 
 

@@ -310,7 +310,7 @@ def test_an_annotated_object_argument_gets_a_default_instance(tmp_path, monkeypa
     text = output.read_text()
     assert "constants" not in plain["model"] and "atoms" not in plain.get("inputs", {})
     assert '# atoms = { call = "crystal:Atoms()" }  # no default in the code: uncomment to use Atoms()' in text
-    with isolated_imports():   # Grid() fails: no constant, as before
+    with isolated_imports():   # Grid() fails: no constant
         _, data = init(f"{path}:field", output=tmp_path / "field.toml", probe=True)
     assert "constants" not in data["model"] and "grid" in data["inputs"]
 
@@ -855,7 +855,7 @@ def test_a_set_up_the_step_needs_is_found(tmp_path):
                 return self._solver.solve()
     """)
     data, text = probe(f"{path}:QP", tmp_path, call="solve")
-    assert data["model"]["setup"] == ["setup(1.0, 1.0)"] and "made up as 1.0: check them" in text
+    assert data["model"]["setup"] == ["setup(1.0, 1.0)"] and "made up (1.0, 1.0): check them" in text
     assert data["outputs"]
 
 
@@ -877,8 +877,9 @@ def test_a_set_up_the_error_names_is_found(tmp_path):
     assert data["model"]["setup"] == ["connect()"] and data["outputs"]
 
 
-def test_training_is_named_not_made_up(tmp_path):
-    # like scikit-learn: predict before fit; fitting on made-up data is the user's part
+def test_training_on_made_up_data_is_only_for_the_probe(tmp_path):
+    # like scikit-learn: predict before fit; the probe fits made-up data to find the outputs, the config
+    # leaves fit() to the user's data
     path = write(tmp_path, "reg.py", """
         class Regressor:
             def __init__(self):
@@ -894,7 +895,8 @@ def test_training_is_named_not_made_up(tmp_path):
                 return self.coef_ * X
     """)
     data, text = probe(f"{path}:Regressor", tmp_path, call="predict")
-    assert "setup" not in data["model"] and 'predict() seems to need fit() first (it sets coef_' in text
+    assert "setup" not in data["model"] and '# setup = ["fit(...)"]  # predict() needs fit() first' in text
+    assert data["outputs"] and "probe call failed" not in text
 
 
 def test_a_method_the_error_names_otherwise_is_no_set_up(tmp_path):

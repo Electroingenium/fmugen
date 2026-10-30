@@ -1,4 +1,4 @@
-"""Model shapes found by testing published neural networks (docs/tested-models.md):
+"""Model shapes found by testing published neural networks (docs/testing/tested-models.md):
 factory functions, computed constants, tuple/dict arguments, NamedTuple and 0-d results,
 and array inputs that must be numpy arrays without saying so."""
 import textwrap
