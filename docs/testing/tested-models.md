@@ -10,6 +10,7 @@ fmugen has been tried on 210 unmodified Python models (three needed a file renam
 - [Neural networks](#neural-networks)
 - [GEKKO models](#gekko-models)
 - [Hand configs](#hand-configs)
+- [Pending models](#pending-models)
 - [Known problems](#known-problems)
 - [Versions](#versions)
 - [Reproducing a run](#reproducing-a-run)
@@ -561,6 +562,120 @@ y = { from = "return", unit = "degC" }
 ```
 
 ---
+
+## Pending models
+
+100 models found on 2026-10-29 on PyPI, Hugging Face and GitHub, not yet run. The entry points are a first guess and may change when tested.
+
+### Machine learning
+
+| Model | Source | Status |
+|---|---|---|
+| `ngboost:NGBRegressor` | PyPI `ngboost` | pending |
+| `interpret.glassbox:ExplainableBoostingRegressor` | PyPI `interpret` | pending |
+| `pygam:LinearGAM` | PyPI `pygam` | pending |
+| `autogluon.tabular:TabularPredictor` | PyPI `autogluon.tabular` | pending |
+| `flaml:AutoML` | PyPI `flaml` | pending |
+| `hmmlearn.hmm:GaussianHMM` | PyPI `hmmlearn` | pending |
+| `tslearn.neighbors:KNeighborsTimeSeriesRegressor` | PyPI `tslearn` | pending |
+| `sktime.forecasting.theta:ThetaForecaster` | PyPI `sktime` | pending |
+| `aeon.classification.convolution_based:RocketClassifier` | PyPI `aeon` | pending |
+| `neuralprophet:NeuralProphet` | PyPI `neuralprophet` | pending |
+| `skforecast.recursive:ForecasterRecursive` | PyPI `skforecast` | pending |
+| `mlforecast:MLForecast` | PyPI `mlforecast` | pending |
+| `mapie.regression:MapieRegressor` | PyPI `mapie` | pending |
+| `umap:UMAP` | PyPI `umap-learn` | pending |
+| `hdbscan:HDBSCAN` | PyPI `hdbscan` | pending |
+| `pysr:PySRRegressor` | PyPI `pysr` | pending |
+| `gplearn.genetic:SymbolicRegressor` | PyPI `gplearn` | pending |
+| `imodels:RuleFitRegressor` | PyPI `imodels` | pending |
+| `sksurv.ensemble:RandomSurvivalForest` | PyPI `scikit-survival` | pending |
+| `botorch.models:SingleTaskGP` | PyPI `botorch` | pending |
+| `numpyro.infer:MCMC` | PyPI `numpyro` | pending |
+| `brian2:NeuronGroup` | PyPI `brian2` | pending |
+| `spikingjelly.activation_based.neuron:LIFNode` | GitHub [fangwei123456/spikingjelly](https://github.com/fangwei123456/spikingjelly) | pending |
+| `alibi_detect.cd:KSDrift` | PyPI `alibi-detect` | pending |
+| `cleanlab.regression.learn:CleanLearning` | PyPI `cleanlab` | pending |
+| `open_clip:create_model_and_transforms` | HF [laion/CLIP-ViT-B-32-laion2B-s34B-b79K](https://huggingface.co/laion/CLIP-ViT-B-32-laion2B-s34B-b79K) | pending |
+| `transformers:SamModel` | HF [facebook/sam-vit-base](https://huggingface.co/facebook/sam-vit-base) | pending |
+| `transformers:pipeline (depth-estimation)` | HF [depth-anything/Depth-Anything-V2-Small-hf](https://huggingface.co/depth-anything/Depth-Anything-V2-Small-hf) | pending |
+| `transformers:DetrForObjectDetection` | HF [facebook/detr-resnet-50](https://huggingface.co/facebook/detr-resnet-50) | pending |
+| `mediapipe.solutions.pose:Pose` | PyPI `mediapipe` | pending |
+| `deepface:DeepFace` | PyPI `deepface` | pending |
+| `doctr.models:ocr_predictor` | PyPI `python-doctr` | pending |
+| `transformers:VisionEncoderDecoderModel (TrOCR)` | HF [microsoft/trocr-base-printed](https://huggingface.co/microsoft/trocr-base-printed) | pending |
+| `faster_whisper:WhisperModel` | PyPI `faster-whisper` | pending |
+| `vosk:KaldiRecognizer` | PyPI `vosk` + small English model | pending |
+| `kokoro:KPipeline` | HF [hexgrad/Kokoro-82M](https://huggingface.co/hexgrad/Kokoro-82M) | pending |
+| `piper:PiperVoice` | PyPI `piper-tts` | pending |
+| `torchcrepe:predict` | PyPI `torchcrepe` | pending |
+| `basic_pitch.inference:predict` | PyPI `basic-pitch` | pending |
+| `demucs.api:Separator` | PyPI `demucs` | pending |
+| `gliner:GLiNER` | HF [urchade/gliner_small-v2.1](https://huggingface.co/urchade/gliner_small-v2.1) | pending |
+| `spacy:load` | PyPI `spacy` + `en_core_web_sm` | pending |
+| `vaderSentiment.vaderSentiment:SentimentIntensityAnalyzer` | PyPI `vaderSentiment` | pending |
+| `keybert:KeyBERT` | PyPI `keybert` | pending |
+| `fasttext:load_model` | HF [facebook/fasttext-language-identification](https://huggingface.co/facebook/fasttext-language-identification) | pending |
+| `chemprop.models:MPNN` | PyPI `chemprop` | pending |
+| `transformers:EsmForMaskedLM (ESM-2)` | HF [facebook/esm2_t6_8M_UR50D](https://huggingface.co/facebook/esm2_t6_8M_UR50D) | pending |
+| `orb_models.forcefield.pretrained:orb_v3_conservative_inf_omat` | PyPI `orb-models` | pending |
+| `sevenn.calculator:SevenNetCalculator` | PyPI `sevenn` | pending |
+| `pyts.classification:BOSSVS` | PyPI `pyts` | pending |
+
+### Other models
+
+| Model | Source | Status |
+|---|---|---|
+| `rocketpy:Flight` | PyPI `rocketpy` | pending |
+| `aerosandbox:AeroBuildup` | PyPI `aerosandbox` | pending |
+| `jsbsim:FGFDMExec` | PyPI `jsbsim` | pending |
+| `skyfield.api:EarthSatellite` | PyPI `skyfield` | pending |
+| `rebound:Simulation` | PyPI `rebound` | pending |
+| `galpy.orbit:Orbit` | PyPI `galpy` | pending |
+| `gym_pybullet_drones.envs:HoverAviary` | GitHub [utiasDSL/gym-pybullet-drones](https://github.com/utiasDSL/gym-pybullet-drones) | pending |
+| `minigrid.envs:EmptyEnv` | PyPI `minigrid` | pending |
+| `pettingzoo.mpe:simple_v3` | PyPI `pettingzoo` | pending |
+| `metaworld:MT1` | GitHub [Farama-Foundation/Metaworld](https://github.com/Farama-Foundation/Metaworld) | pending |
+| `citylearn.citylearn:CityLearnEnv` | PyPI `citylearn` | pending |
+| `sinergym.envs:EplusEnv` | PyPI `sinergym` | pending |
+| `pymgrid:Microgrid` | PyPI `python-microgrid` | pending |
+| `ochre:Dwelling` | PyPI `ochre-nrel` | pending |
+| `demandlib.bdew:ElecSlp` | PyPI `demandlib` | pending |
+| `feedinlib:Photovoltaic` | PyPI `feedinlib` | pending |
+| `pvfactors.engine:PVEngine` | PyPI `solarfactors` | pending |
+| `py_wake.literature.noj:Jensen_1983` | PyPI `py_wake` | pending |
+| `ccblade:CCBlade` | PyPI `ccblade` | pending |
+| `capytaine:BEMSolver` | PyPI `capytaine` | pending |
+| `openmdao.test_suite.components.sellar:SellarNoDerivatives` | PyPI `openmdao` | pending |
+| `geopy.distance:geodesic` | PyPI `geopy` | pending |
+| `reaktoro:EquilibriumSolver` | PyPI `reaktoro` | pending |
+| `thermopack.cubic:cubic` | PyPI `thermopack` | pending |
+| `teqp:build_multifluid_model` | PyPI `teqp` | pending |
+| `pycalphad:equilibrium` | PyPI `pycalphad` | pending |
+| `phreeqpython:PhreeqPython` | PyPI `phreeqpython` | pending |
+| `equilibrator_api:ComponentContribution` | PyPI `equilibrator-api` | pending |
+| `cobra.io:load_model` | PyPI `cobra` | pending |
+| `gillespy2:Model` | PyPI `gillespy2` | pending |
+| `pysb.examples.robertson:model` | PyPI `pysb` | pending |
+| `roadrunner:RoadRunner` | PyPI `libroadrunner` | pending |
+| `myokit:Simulation` | PyPI `myokit` | pending |
+| `biosppy.signals.ecg:ecg` | PyPI `biosppy` | pending |
+| `mne.filter:filter_data` | PyPI `mne` | pending |
+| `yasa:bandpower` | PyPI `yasa` | pending |
+| `flopy.mf6:MFSimulation` | PyPI `flopy` | pending |
+| `pysheds.grid:Grid` | PyPI `pysheds` | pending |
+| `rrmpg.models:GR4J` | GitHub [kratzert/RRMPG](https://github.com/kratzert/RRMPG) | pending |
+| `hydroeval:evaluator` | PyPI `hydroeval` | pending |
+| `PySpice.Spice.Netlist:Circuit` | PyPI `PySpice` | pending |
+| `fatpack:find_rainflow_ranges` | PyPI `fatpack` | pending |
+| `pylife.materiallaws:WoehlerCurve` | PyPI `pylife` | pending |
+| `uxsim:World` | PyPI `uxsim` | pending |
+| `cityflow:Engine` | GitHub [cityflow-project/CityFlow](https://github.com/cityflow-project/CityFlow) | pending |
+| `bluesky:init` | PyPI `bluesky-simulator` | pending |
+| `sippy_unipi:system_identification` | PyPI `sippy_unipi` | pending |
+| `pygeomag:GeoMag` | PyPI `pygeomag` | pending |
+| `oemof.thermal.stratified_thermal_storage:calculate_losses` | PyPI `oemof.thermal` | pending |
+| `sunpy.coordinates.sun:carrington_rotation_number` | PyPI `sunpy` | pending |
 
 ## Known problems
 

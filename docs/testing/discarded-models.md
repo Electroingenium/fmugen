@@ -42,3 +42,14 @@ These are containers the user fills before there is anything to simulate: a phys
 | `pymunk:Space` | ✗ no useful outputs | ✓ ([config](match-testing-rerun/configs/pymunk.toml)) | ✓ (hand config, 48.7 MB) | `init`: outputs are only constant settings (`damping`, `collision_slop`, …). The hand config adds gravity and one body in `setup` and reads `attr:bodies.0.position.y`: `Space.bodies` is a `dict_keys` view, indexed by position. |
 | `Pynite:FEModel3D` | ✗ no useful outputs | ✓ [config](pending-100/hand/pynite_lib/fmugen.toml) | ✓ 125 MB | Frame built in `setup`, `analyze` each step, results from the nodes' result dicts (`attr:nodes.N2.DY.Combo 1`). |
 | `pypsa:Network` | ✗ simulate fails | ✓ [config](pending-100/hand/pypsa_lib/fmugen.toml) | ✓ 432 MB | Network built in `setup` (`add` calls), `pf` each step, load as an input through `attr:loads.p_set.l`. `init` wrote `call_on_class = true` because `pf`'s first parameter is `n`, and passed it a float; fixed since: rerun, neither config has `call_on_class` (`init` checked only, not built). Needed a wrapper before `attr:` could set a key. |
+
+## Discarded before testing
+
+Found with the pending models in [tested-models.md](tested-models.md#pending-models) on 2026-10-29 and left out without running them.
+
+| Model | Reason |
+|---|---|
+| `gpytorch.models:ExactGP` (gpytorch) | A model is a subclass written in code (`__init__` and `forward`), then trained. |
+| `lag_llama.gluon.estimator:LagLlamaEstimator` (lag-llama) | Goes through a GluonTS estimator and predictor, like `gluon_deepar.py` above, which needed a wrapper. |
+| `pyomo.environ:ConcreteModel` (pyomo) | An empty container: variables, constraints and objective are added in code. |
+| `control:NonlinearIOSystem` (python-control) | The update and output functions are written in code; python-control is already tested through `control:StateSpace`. |
