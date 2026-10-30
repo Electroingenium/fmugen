@@ -36,7 +36,7 @@ from fmugen.arguments import (
 from fmugen.probe import (
     ConstantError, _run_setup, _probe_call, _probe_class, _forwarded,
     _outputs_from_return, _add_returned, _add_attributes, _detect_states,
-    _taken, _split_varargs, _varargs_by_keyword,
+    _taken, _split_varargs, _varargs_by_keyword, MADE_UP_TEXT,
 )
 
 #: Step method names tried in order when a class is given without ``--call``.
@@ -369,9 +369,12 @@ MISSING_ATTRIBUTE = re.compile(r"'(?:float|int|types\.SimpleNamespace)' object h
 ARRAY_ATTRIBUTES = {"shape", "ndim", "dim", "dtype", "size", "T", "astype", "copy", "reshape", "numpy", "values",
                     "index", "columns", "iloc", "loc", "flatten", "ravel", "tolist", "detach", "to", "cpu",
                     "device", "real", "imag", "is_integer", "unit", "units", "magnitude", "value"}
+#: Attributes of text: the argument is a string.
+STRING_ATTRIBUTES = {"strip", "lower", "upper", "split", "startswith", "endswith", "encode", "replace", "casefold",
+                     "isdigit", "isalpha", "rstrip", "lstrip", "partition", "format"}
 #: An error asking for a dict: river's "'float' object is not an instance of 'dict'".
 DICT_ASKED = re.compile(r"instance of '?dict|must be (?:a )?dict|expected (?:a )?dict|"
-                        r"'(?:float|int)' object has no attribute '(?:items|keys)'|not a mapping", re.I)
+                        r"'(?:float|int)' object has no attribute '(?:items|keys|get)'|not a mapping", re.I)
 #: "KeyError('n_estimators')": the argument is a dict with that key.
 MISSING_KEY = re.compile(r"KeyError\('(\w+)'\)")
 
@@ -436,6 +439,12 @@ def _shaped_starts(data, comments, starts, shaped):
         elif DICT_ASKED.search(error) and current is None:
             tries.append(({name: {"a": 1.0, "b": 1.0}}, "made up as a dict of two features: the probe failed with a "
                                                       "number; set your own"))
+        elif (match := MISSING_ATTRIBUTE.search(error)) and match.group(1) in STRING_ATTRIBUTES and current is None:
+            # thermo's Chemical(ID): "'float' object has no attribute 'strip'", a name: the examples' if any
+            text = _example_value(data["model"].get("entry", ""), name)
+            text = text if isinstance(text, str) else MADE_UP_TEXT
+            tries.append(({name: text}, f"made up as {text!r}: the probe failed with a number where it needs text; "
+                                        "check it"))
         elif (match := MISSING_ATTRIBUTE.search(error)) and match.group(1) not in ARRAY_ATTRIBUTES \
                 and (current is None or name in shaped and "SimpleNamespace" in str(current)):
             fields = re.findall(r"(\w+)=1\.0", str(current or "")) + [match.group(1)]
@@ -508,6 +517,14 @@ def _shaped_starts(data, comments, starts, shaped):
         added = {n: v for n, v in _stub_arguments(data["model"].get("entry", "")).items() if n not in starts}
         if added:
             tries.append((added, "made up from the constructor in the package's type stub (.pyi): check it"))
+    split = list(dict.fromkeys(
+        str(info.get("to", ""))[5:].partition(".")[0] for info in data.get("parameters", {}).values()
+        if str(info.get("to", "")).startswith("init:") and "." in str(info.get("to", ""))))
+    if error.startswith("probe construction failed") and split and not any(n in starts for n in split):
+        # arguments built from the fields of their annotation, which is a descriptor, not what they take:
+        # astropy's FlatLambdaCDM(H0: Parameter, Om0: Parameter) takes numbers
+        tries.append((dict.fromkeys(split, 1.0), "made up as 1.0: the probe failed building it from the fields of "
+                                                 "its annotation; check it"))
     for name, source in data.get("time", {}).items():
         # passed the simulation time, 0 at the probe: pysindy's fit(x, t), a time step that must be positive
         if source == "time" and name not in starts and name not in shaped:
@@ -625,6 +642,20 @@ TORCHSCRIPT_MADE_UP = {"Tensor": {"call": "torch:ones(1, 512)"}, "int": 1, "floa
 #: An error listing the values a number may take: silero's "Supported sampling rates: [8000, 16000]".
 ALLOWED_VALUES = re.compile(r"(?:supported|one of|allowed|valid|must be in)[^\[\]()]{0,40}[\[(]((?:\s*-?\d+(?:\.\d+)?\s*,)+"
                             r"\s*-?\d+(?:\.\d+)?\s*)[\])]", re.I)
+
+
+def _example_value(entry_ref, name):
+    """The value the package's examples pass to an argument ``name`` (:func:`fmugen.examples.find_values`), or
+    None."""
+    from fmugen.examples import find_values
+    entry = _entry_object(entry_ref)
+    module_name = entry_ref.partition(":")[0]
+    if entry is None or module_name.endswith(".py"):
+        return None
+    try:
+        return find_values(entry, importlib.import_module(module_name)).get(name, (None,))[0]
+    except Exception:
+        return None
 
 
 def _stub_arguments(entry_ref):
@@ -1917,9 +1948,13 @@ def _pick_method(cls, starts=None, constructor=None):
     :raises InterfaceError: the class has no public method.
     """
     has_step = any(callable(getattr(cls, m, None)) for m in STEP_LIKE)
+    left = _leftover_starts(constructor, starts)
+    fitting = _methods_taking(cls, left) if left else []
     for name in CALL_NAMES:
         if name == "update" and has_step:
             continue
+        if fitting and callable(getattr(cls, name, None)) and not _fits(getattr(cls, name), left):
+            continue   # nengo's step() takes no steps=10; run_steps(steps) does
         if name == "__call__":
             if any("__call__" in vars(k) for k in cls.__mro__[:-1]):
                 return name, None
@@ -1929,8 +1964,6 @@ def _pick_method(cls, starts=None, constructor=None):
         return "__next__", (f"__next__(): {cls.__name__} is an iterator, each next() a step "
                             "(pass --call METHOD to choose another)")
     public = [n for n, v in vars(cls).items() if not n.startswith("_") and inspect.isfunction(v)]
-    left = _leftover_starts(constructor, starts)
-    fitting = _methods_taking(cls, left) if left else []
     if len(fitting) == 1:   # before the only public method: skfem's MeshTri defines element_finder, refined is inherited
         return fitting[0], (f"{fitting[0]}() from the --start names: {', '.join(left)} are its arguments, not the "
                             "constructor's, and no other method takes them")

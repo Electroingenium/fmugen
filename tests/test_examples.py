@@ -814,3 +814,12 @@ def test_a_set_up_the_step_needs_gets_made_up_arrays(tmp_path):
     """)
     data, text = run(f"{path}:Solver", tmp_path, probe=True, call="solve")
     assert data["model"]["setup"] == ["setup(numpy.ones((1, 1)), numpy.ones(1))"] and "y" in data["outputs"]
+
+
+def test_an_argument_the_code_treats_as_text_is_made_up_as_text(tmp_path):
+    path = write(tmp_path, "chemical.py", """
+        def molar_mass(ID, T=298.15):
+            return len(ID.strip()) * T
+    """)
+    data, text = run(f"{path}:molar_mass", tmp_path, probe=True)
+    assert isinstance(data["inputs"]["ID"]["start"], str) and "needs text" in text

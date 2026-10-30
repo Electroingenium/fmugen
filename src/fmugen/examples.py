@@ -118,6 +118,9 @@ def _collect_values(code, source, entry, module, values):
         for call in [n for n in ast.walk(node) if isinstance(n, ast.Call)]:
             dotted = _dotted(call.func)
             full = snippet.resolve(dotted) if dotted else None
+            if not full and dotted and source.startswith("the docstring") \
+                    and hasattr(module, dotted.partition(".")[0]):
+                full = f"{module.__name__}.{dotted}"   # a doctest runs in its module: thermo's Chemical('Nitrogen')
             if not full or full.partition(".")[0] != snippet.top:   # the package's own: numpy's x isn't the model's
                 continue
             fn = _imported(full)
