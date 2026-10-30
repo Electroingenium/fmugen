@@ -1,6 +1,6 @@
 # Tested models
 
-fmugen has been tried on 208 unmodified Python models (three needed a file renamed or a script wrapped in a class, and one synthetic input data; see their notes): models from about 132 libraries on PyPI, 44 neural networks, 13 models built on [GEKKO](https://github.com/BYU-PRISM/GEKKO), one model published as source on GitHub and one unpublished model. Each model is listed once, with its most recent result. 205 simulate with useful results (195 with a config `init` wrote, the rest with a hand config); 3 fail because the library has no function or class that is the model. 20 libraries tested at first turned out not to be models: 17 are tools for building one, and 3 (pymunk, PyNite, PyPSA) are empty containers that the user fills with bodies, nodes or buses; they are listed in [discarded-models.md](discarded-models.md).
+fmugen has been tried on 210 unmodified Python models (three needed a file renamed or a script wrapped in a class, and one synthetic input data; see their notes): models from about 132 libraries on PyPI, 44 neural networks, 13 models built on [GEKKO](https://github.com/BYU-PRISM/GEKKO), one model published as source on GitHub and one unpublished model. Each model is listed once, with its most recent result. 207 simulate with useful results (195 with a config `init` wrote, the rest with a hand config); 3 fail because the library has no function or class that is the model. 20 libraries tested at first turned out not to be models: 17 are tools for building one, and 3 (pymunk, PyNite, PyPSA) are empty containers that the user fills with bodies, nodes or buses; they are listed in [discarded-models.md](discarded-models.md).
 
 - [How the models were tested](#how-the-models-were-tested)
 - [Summary](#summary)
@@ -39,16 +39,16 @@ Columns: **`init` / `init --probe`**: given only the model and `--start` values 
 
 ## Summary
 
-208 models: 193 from libraries and neural networks, 13 built on GEKKO, one from a GitHub repository and one unpublished. FMI 2 and FMI 3 results are combined: a model counts as passing if it passes with either. The 82 tested later ran on fmugen before the fixes below; the 19 that failed on fmugen problems were run again with the fixes, and those results are counted.
+210 models: 195 from libraries and neural networks, 13 built on GEKKO, one from a GitHub repository and one unpublished. FMI 2 and FMI 3 results are combined: a model counts as passing if it passes with either. The 82 tested later ran on fmugen before the fixes below; the 19 that failed on fmugen problems were run again with the fixes, and those results are counted.
 
-| | Models (208) |
+| | Models (210) |
 |---|---|
 | `init` writes a config | 186 |
 | `init --probe` writes a config | 192 |
 | **Simulates with useful results** (a config from `init` or `init --probe`) | **195** |
 | …of which given only the model and `--start` values | **104** |
 | …of which given other options (`--call`, `--const`, `--setup`, …) | **91** |
-| …or with a hand-written config | **205** |
+| …or with a hand-written config | **207** |
 | Fails | **3**: all need a wrapper |
 | **Compiled FMU simulates** | **207**; py-pde simulates uncompiled only |
 
@@ -58,12 +58,11 @@ How far each step gets:
 
 | Config | Models | Success |
 |---|---|---|
-| `init` (code only), given other options where needed | 55 of 208 | 26 % |
-| `init --probe` (or `init`, when it already works), given only the model and `--start` values | 104 of 208 | 50 % |
-| `init --probe` (or `init`), given other options where needed (`--call`, `--const`, `--setup`, …) | 195 of 208 | 94 % |
-| `init --probe` + a hand-written config | 205 of 208 | 99 % |
+| `init` (code only), given other options where needed | 55 of 210 | 26 % |
+| `init --probe` (or `init`, when it already works), given only the model and `--start` values | 104 of 210 | 50 % |
+| `init --probe` (or `init`), given other options where needed (`--call`, `--const`, `--setup`, …) | 195 of 210 | 93 % |
+| `init --probe` + a hand-written config | 207 of 210 | 99 % |
 
-Without the 3 models that need a wrapper, `init --probe` + a hand config gets all 205.
 
 The `init` config fails mostly on models that return arrays, tuples, strings or objects, which only `--probe` types correctly; the error message points to it. Of the 67 `init` configs of the first group that simulate, 23 only output parameters, settings or constants. GEKKO models keep their results in GEKKO variables, which only `--probe` finds. The hand configs add `PropsSI`, cantera, PyTCI and the kalman example ([Hand configs](#hand-configs)), pandapower, seirsplus, tellurium, the GEKKO model OpenHENS, sgp4 and pybamm ([configs](match-testing-rerun/configs/)).
 
