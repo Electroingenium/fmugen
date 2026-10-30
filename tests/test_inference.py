@@ -585,7 +585,7 @@ def test_generator_results_are_read_and_nested_tuples_split(tmp_path):
     data, _ = infer(f"{tmp_path / 'gen.py'}:Game", call="equilibria")
     assert data["outputs"] == {"y0_0": {"from": "return:0.0", "dimensions": [2]},
                                "y0_1": {"from": "return:0.1", "dimensions": [3]}}
-    # a tuple of numbers stays one array, as before
+    # a tuple of numbers stays one array
     data, _ = infer(f"{tmp_path / 'gen.py'}:Game", call="pairs")
     assert data["outputs"] == {"y0": {"from": "return:0", "dimensions": [2]}, "y1": {"from": "return:1"}}
 

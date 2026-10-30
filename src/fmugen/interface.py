@@ -261,7 +261,7 @@ def _with_timeout(timeout, fn, *args):
 
 def _infer_config(target, call, config_dir, fmi_version, starts, setup, kind, create, probe, converts, examples=True):
     """:func:`_infer_config_once`; then, while the probe fails on a made-up argument that has to be a dict or an
-    object with some attributes (:func:`_shaped_start`), again with it made up so.
+    object with some attributes (:func:`_shaped_starts`), again with it made up so.
 
     river's ``learn_one(x, y)`` takes a dict of features, simglucose's ``step(action)`` an object with ``CHO`` and
     ``insulin``, a hyperparameter function a dict with its keys: each error names what's missing, so this
@@ -387,6 +387,9 @@ def _shaped_starts(data, comments, starts, shaped):
     a dict of two features, a dict with the key it lacks, an object (:class:`types.SimpleNamespace`) with the
     attributes it lacks; for each made-up argument in turn, the inputs first (those already made up so first).
 
+    :param data: the config being inferred.
+    :param comments: ``(section, key) -> text``; ``("outputs", None)`` holds the probe's error.
+    :param starts: the ``--start`` values, which are never replaced.
     :param shaped: name -> its comment, of those made up so far.
     :rtype: list[tuple]
     """

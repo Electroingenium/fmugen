@@ -1,7 +1,7 @@
 """SI base-unit exponents of common unit strings, for <BaseUnit> in modelDescription.xml.
 
 `base_unit("kW.h")` -> {"kg": 1, "m": 2, "s": -2, "factor": 3600000.0}; None when the unit isn't
-recognised (the unit is then declared by name only, as before). Units are written as in Modelica
+recognised (the unit is then declared by name only). Units are written as in Modelica
 and FMI ("m/s2", "W/(m2.K)", "kg.m-3"), with "*", "^" and spaces also accepted.
 """
 import math

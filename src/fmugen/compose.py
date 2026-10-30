@@ -8,7 +8,7 @@ A composite fmugen.toml lists other fmugen configs (the parts) and connections:
     connections = ["sky.poa_global -> cell.poa_global"]
 
 Each part is built as usual into resources/parts/<name>/ and run by its own runtime Engine
-(templates/fmugen_runtime.py, CompositeEngine). This module validates the composite config and
+(templates/fmugen_runtime/, CompositeEngine). This module validates the composite config and
 combines the parts' interfaces into the FMU's interface.
 """
 import keyword

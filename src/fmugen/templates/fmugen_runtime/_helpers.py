@@ -667,7 +667,7 @@ def set_path(obj, path, value):
     the part read as :func:`get_path` reads it (a key, an index). The last part is set as an item
     only where there's no such attribute and it can only be an item: a key already in a mapping or
     a labelled pandas/xarray object (``"loads.p_set.l"`` sets ``obj.loads.p_set["l"]``), or an
-    index of a list or array (``"qpos.0"``). Everything else is set as an attribute, as before.
+    index of a list or array (``"qpos.0"``). Everything else is set as an attribute.
 
     :param obj: the start object (the model object).
     :param path: the dotted path.
@@ -686,7 +686,7 @@ def set_path(obj, path, value):
         attribute = hasattr(obj, last)
         if attribute and _labelled(obj) and not hasattr(type(obj), last) and last in obj:
             attribute = False   # pandas reads labels as attributes (series.l): it's an item
-    except Exception:   # a property that fails to read: set it as before
+    except Exception:   # a property that fails to read: set it as an attribute
         attribute = True
     if attribute:
         setattr(obj, last, value)

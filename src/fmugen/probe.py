@@ -1793,7 +1793,7 @@ def _error_shapes(error):
 
 
 def _retry_made_up(call, data, comments, section, obj=None, error=None):
-    """Call again with the made-up values of ``section`` (no default, no ``--start``) as 0.0, then as arrays of ones.
+    """Call again with other values for the made-up arguments of ``section`` (no default, no ``--start``).
 
     The made-up start is 1.0 (not 0.0, which models refuse when they check it's positive or divide
     by it: blackscholes' "Asset price (S) needs to be larger than 0", pedon's division by zero); some
@@ -1817,6 +1817,8 @@ def _retry_made_up(call, data, comments, section, obj=None, error=None):
     :type section: str
     :param obj: the model object the step is called on, if any: a fitted scikit-learn-style model
         gives its number of features (:data:`FEATURE_COUNTS`), so ``(1, n)`` and ``(n,)`` are tried first.
+    :param error: the error of the failed call: the shapes it names are tried first, and an Integer when it
+        asks for one.
     :return: the result, or :data:`_FAILED`.
     """
     made = {name: info for name, info in data.get(section, {}).items()

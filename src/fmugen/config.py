@@ -7,7 +7,7 @@ settings such as the default experiment. See docs/config.md for the full referen
 `load_config()` only reads and validates the file. `normalize()` needs the imported
 entry object (to tell a function from a class and to check argument names) and
 returns the interface spec that is written to resources/interface.json and read by
-the runtime engine (templates/fmugen_runtime.py) and the XML writer (description.py).
+the runtime engine (templates/fmugen_runtime/) and the XML writer (description.py).
 The spec has the same shape for FMI 2 and FMI 3, except for the type names and the
 FMI 3-only parts (arrays, structural parameters, clocks, events).
 """

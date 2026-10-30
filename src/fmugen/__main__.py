@@ -167,7 +167,7 @@ def main(argv=None):
     i = sub.add_parser("init", help="write a fmugen.toml by inspecting a model",
                        description="Import the model, read its signatures and source code, and write a commented "
                                    "fmugen.toml to review. The model is not called unless --probe is given. "
-                                   "See docs/models.md.")
+                                   "See docs/init.md.")
     i.add_argument("model", help="model.py, model.py:Name, or package.module:Name")
     i.add_argument("-o", "--output", help="config path (default: fmugen.toml next to the model; - prints it)")
     i.add_argument("--call", help="method run on each step, for classes (default: step/do_step/update/__call__)")

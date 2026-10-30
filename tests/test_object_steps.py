@@ -39,7 +39,7 @@ def test_set_path_sets_keys_and_indexes_where_there_is_no_attribute():
     set_path(obj, "qpos.1", 4.0)
     set_path(obj, "qpos.-1", 5.0)
     assert obj.table["p_set"]["l"] == 3.0 and obj.qpos == [0.0, 5.0]
-    with pytest.raises(AttributeError):        # not a key yet: set as an attribute, which fails as before
+    with pytest.raises(AttributeError):        # not a key yet: set as an attribute, which fails
         set_path(obj, "table.new", 6.0)
     assert obj.table == {"p_set": {"l": 3.0}}
 

@@ -576,7 +576,7 @@ def test_dotted_path_indexes_any_iterable():
         get_path(Space(), "bodies.2")
     with pytest.raises(AttributeError):   # strings, mappings and iterators aren't indexed this way
         get_path({"s": "abc"}, "s.0")
-    with pytest.raises(KeyError):   # a mapping's part is a key, as before
+    with pytest.raises(KeyError):   # a mapping's part is a key
         get_path({"d": {"x": 1}}, "d.0")
     with pytest.raises(AttributeError):
         get_path({"g": iter([1, 2])}, "g.0")
@@ -595,7 +595,7 @@ def test_dotted_path_reads_items_of_objects_with_getitem():
 
     assert get_path(Solution(), "Voltage [V].entries.-1") == 4.0
     assert get_path(Solution(), "t.-1") == 100.0   # an attribute comes first
-    with pytest.raises(AttributeError):   # no such key: the attribute error, as before
+    with pytest.raises(AttributeError):   # no such key: the attribute error
         get_path(Solution(), "Current [A]")
 
 

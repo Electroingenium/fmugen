@@ -310,7 +310,7 @@ def test_an_annotated_object_argument_gets_a_default_instance(tmp_path, monkeypa
     text = output.read_text()
     assert "constants" not in plain["model"] and "atoms" not in plain.get("inputs", {})
     assert '# atoms = { call = "crystal:Atoms()" }  # no default in the code: uncomment to use Atoms()' in text
-    with isolated_imports():   # Grid() fails: no constant, as before
+    with isolated_imports():   # Grid() fails: no constant
         _, data = init(f"{path}:field", output=tmp_path / "field.toml", probe=True)
     assert "constants" not in data["model"] and "grid" in data["inputs"]
 
