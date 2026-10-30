@@ -19,7 +19,7 @@ classifiers = [
 # The FMU runs with the Python fmugen is installed in (the model's virtual environment),
 # so that environment needs what UniFMU 0.14's Python backend imports.
 dependencies = [
-    "protobuf==5.27.3",
+    "protobuf==5.29.6",
     "pyzmq>=27.2.0",
     "cloudpickle>=3.0",   # FMU state save/restore when pickle can't (lambdas, local functions)
 ]
