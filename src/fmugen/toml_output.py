@@ -7,7 +7,7 @@ SECTION_ORDER = ("experiment", "time", "structural_parameters", "parameters", "c
                  "inputs", "states", "outputs", "locals")
 #: Commented example appended to FMI 3 configs: clocks can't be inferred.
 CLOCKS_EXAMPLE = """
-# FMI 3 clocks run model code on events; they can't be inferred. Example (docs/models.md#clocks):
+# FMI 3 clocks run model code on events; they can't be inferred. Example (docs/models.md#clocks-fmi-3):
 # [clocks.sample]
 # interval = 0.1            # a periodic input clock, ticked by the importer
 # call = "sample"           # method (or function) run when it ticks

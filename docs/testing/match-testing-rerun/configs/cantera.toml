@@ -1,0 +1,19 @@
+# docs/testing/tested-models.md "Hand configs / Cantera", as published (fmi_version = 3 there; built
+# here with --fmi 2, since nothing in it needs FMI 3)
+[model]
+entry = "cantera:Solution"
+fmi_version = 3
+call = "equilibrate"
+setup = ["__setattr__('TPX', (300.0, 101325.0, 'CH4:1, O2:2, N2:7.52'))"]
+
+[parameters]
+infile = { start = "gri30.yaml" }
+
+[inputs]
+XY = { start = "HP" }
+
+[outputs]
+T = { unit = "K" }
+P = { unit = "Pa" }
+density = {}
+mean_molecular_weight = {}

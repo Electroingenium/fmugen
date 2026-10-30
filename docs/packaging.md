@@ -1,21 +1,12 @@
 # Packaging and runtime
 
-- [CLI](#cli)
+What `fmugen build` puts in an FMU, which Python the FMU runs with, and the options for FMUs that run on other machines (`--vendor`, `--compile`, `--hf-weights`, `--distributed`). Every option is in [cli.md](cli.md#fmugen-build).
+
 - [What `fmugen build` does](#what-fmugen-build-does)
 - [Generated FMU layout](#generated-fmu-layout)
 - [The FMU's Python environment](#the-fmus-python-environment)
 - [FMUs for other machines](#fmus-for-other-machines)
-- [Simulating](#simulating)
-- [Project layout](#project-layout)
-- [UniFMU version](#unifmu-version)
-
----
-
-## CLI
-
-Install fmugen into your model's virtual environment (fmugen is not on PyPI yet: `pip install path/to/2025_Inkindcontributions`) and run it from there. `fmugen build` also needs the UniFMU 0.14.0 CLI (see [UniFMU version](#unifmu-version)). To work on fmugen itself, `uv sync` installs it in editable mode with the test dependencies.
-
-Every option of `fmugen init` and `fmugen build` is in [manual.md](manual.md#4-commands). This page explains what `build` does and the options for other machines (`--vendor`, `--compile`, `--hf-weights`).
+- [UniFMU](#unifmu)
 
 ---
 
@@ -164,7 +155,7 @@ A freezer only follows `import` statements. Libraries also read files next to th
 - **numpy's `numpy.core` compatibility modules**, which older pickles name, e.g. data loaded with `numpy.load`.
 - **The `.py` sources of packages built on transformers** (PyInstaller only). transformers reads the source of the classes it decorates, as PyInstaller's own hook already arranges for transformers itself. These sources are in the FMU.
 
-A model that unpickles objects, e.g. `joblib.load` of a scikit-learn model, needs the packages of those objects listed in `[model] requirements` (`init` can't see them): then their submodules are collected too. The FMU grows by the collected files: in the tests, 0 to 25 MB more than before this change (pvlib, mesa) for models that already worked. The model's non-Python files are bundled next to its modules. If something is still missed, the build's error or the FMU's log names it. When the importer shows nothing, see [unifmu-limitations.md §13](unifmu-limitations.md#13-a-backend-that-exits-during-a-call-can-abort-the-importer) for running the frozen backend directly to read its error.
+A model that unpickles objects, e.g. `joblib.load` of a scikit-learn model, needs the packages of those objects listed in `[model] requirements` (`init` can't see them): then their submodules are collected too. The FMU grows by the collected files: in the tests, 0 to 25 MB more than before this change (pvlib, mesa) for models that already worked. The model's non-Python files are bundled next to its modules. If something is still missed, the build's error or the FMU's log names it. When the importer shows nothing, see [unifmu-limitations.md §13](limitations/unifmu.md#12-a-backend-that-exits-during-a-call-can-abort-the-importer) for running the frozen backend directly to read its error.
 
 ### Distributed FMUs (`--distributed`)
 
@@ -191,7 +182,7 @@ This builds the FMU in two halves with UniFMU's `generate-distributed` (FMI 2 an
 ACTION REQUIRED ~ Connect remote backend to dispatcher through port: PORT
 ```
 
-under the `logUnifmuMessages` log category, and waits for the private side to connect. **The importer must have logging on, including that category**, or the port is never shown. A firewall between the two hosts must allow the port. See [unifmu-limitations.md §14](unifmu-limitations.md#14-the-distributed-proxys-port-cant-be-set).
+under the `logUnifmuMessages` log category, and waits for the private side to connect. **The importer must have logging on, including that category**, or the port is never shown. A firewall between the two hosts must allow the port. See [unifmu-limitations.md §14](limitations/unifmu.md#13-the-distributed-proxys-port-cant-be-set).
 
 With FMPy, start the private side from the logger callback:
 
@@ -209,69 +200,10 @@ simulate_fmu("out/model.fmu", stop_time=10, debug_logging=True, logger=logger)
 
 ---
 
-## Simulating
+## UniFMU
 
-```bash
-fmpy simulate out/pid.fmu --stop-time 10 --start-values Kp 4 --output-file out/results.csv
-```
-
-FMPy simulates FMI 2 and FMI 3 FMUs the same way. In Python, `fmpy.simulate_fmu(..., event_mode_used=True)` also handles output clocks (`eventHandlingNeeded`) and `[events] terminate`. FMPy never ticks *input* clocks, though. FMUs whose code runs on input clocks need an importer that ticks them, or a script using `fmpy.fmi3.FMU3Slave` (see `tests/test_fmi3.py`).
-
-Time-varying inputs come from a CSV whose first column is time and whose other columns are named like the FMU's inputs, e.g. a `measurements.csv` for the PID FMU:
-
-```
-time,input_
-0,0.0
-5,0.5
-```
-
-```bash
-fmpy simulate out/pid.fmu --input-file measurements.csv --stop-time 10 --output-file out/pid.csv
-```
-
-Without `--output-file`, FMPy plots the result instead, which requires matplotlib (`pip install matplotlib`).
-
-```bash
-uv run python -m fmpy.gui
-```
-
-In the GUI, open the `.fmu`, set start values, press play, and tick outputs to plot.
-
-![FMPy GUI example](../image.png)
-
----
-
-## Project layout
-
-| Path | Contents |
-|---|---|
-| `src/fmugen/config.py` | `fmugen.toml` loading, validation, normalisation into the interface spec (FMI 2 and 3) |
-| `src/fmugen/interface.py` | `fmugen init`: inference orchestration (import, infer, rename, requirements) |
-| `src/fmugen/arguments.py` | Argument processing and type/value utilities used by inference |
-| `src/fmugen/probe.py` | Probing (calling the model once), output detection and state detection |
-| `src/fmugen/toml_output.py` | Render an inferred config dict as a `fmugen.toml` file |
-| `src/fmugen/description.py` | `modelDescription.xml` writers (FMI 2 and FMI 3) |
-| `src/fmugen/templates/fmugen_runtime/` | The engine: split into `_constants`, `_helpers`, `_engine`, `_composite` for development; concatenated into one file at build time |
-| `src/fmugen/templates/model_fmi2.py`, `model_fmi3.py` | The adapters copied into the FMU as `resources/model.py`: FMI calls → engine |
-| `src/fmugen/__main__.py` | CLI (argparse and `main()`) |
-| `src/fmugen/builder.py` | Build/init orchestration, packaging, UniFMU version check |
-| `src/fmugen/distribute.py` | `--vendor` and `--compile` |
-| `src/fmugen/templates/fmugen_launch.py` | The launcher of vendored FMUs: offline install into a cached environment |
-| `tests/` | `uv run pytest` |
-
----
-
-## UniFMU version
-
-fmugen doesn't ship UniFMU. Every `fmugen build` runs the UniFMU CLI to generate the FMU skeleton (native binaries for Windows, Linux and macOS, plus the Python backend), so it must be installed:
-
-- Download UniFMU **0.14.0** from https://github.com/INTO-CPS-Association/unifmu/releases.
-- Put `unifmu` on `PATH`, or set `FMUGEN_UNIFMU` to the executable's path.
-
-fmugen runs `unifmu --version` and refuses any other version, because the adapters (`resources/model.py`) are written against that version's `backend.py` and protobuf messages. The pinned version is `UNIFMU_VERSION` in `src/fmugen/builder.py`.
+fmugen doesn't ship UniFMU. Every `fmugen build` runs the UniFMU **0.14.0** CLI to generate the FMU skeleton (native binaries for Windows, Linux and macOS, plus the Python backend), and refuses any other version, because fmugen's adapters are written against that version's backend. The backend and binaries are taken as they are; fmugen replaces `resources/model.py` and `modelDescription.xml`, adds `fmugen_runtime.py`, `interface.json` and `fmugen_model/`, and rewrites `requirements.txt` and `launch.toml`.
 
 UniFMU 0.14 writes `fmiVersion="3.0-beta.4"` into the FMI 3 template's `modelDescription.xml`. That file is replaced on every build, so it doesn't matter.
 
-`fmugen` replaces `resources/model.py` and `modelDescription.xml`, adds `fmugen_runtime.py`, `interface.json` and `fmugen_model/`, and rewrites `requirements.txt` and `launch.toml`. The backend and binaries are taken as-is.
-
-To move to a newer UniFMU: change `UNIFMU_VERSION`, check the backend's command list in the generated `resources/backend.py` against [fmi.md](fmi.md) and the adapters, then run `uv run pytest`. If the new backend imports other packages, update `BACKEND_REQUIREMENTS` and fmugen's dependencies in `pyproject.toml`.
+What UniFMU can't do, and how fmugen works around it, is in [limitations/unifmu.md](limitations/unifmu.md). Moving fmugen to a newer UniFMU is described in [development.md](development.md#updating-unifmu).

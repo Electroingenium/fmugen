@@ -158,7 +158,7 @@ A clock is an event the importer and the FMU agree on. fmugen maps clocks onto y
 - **Time arguments in clock calls:** `[time]` arguments the clock's `call` accepts get `time` = the event time, and `step_size` = the time since that clock last ticked (its interval on the first tick).
 - **State:** clock activity, intervals and shifts are part of the FMU state, so rollback restores them.
 
-Examples: [models.md](models.md#clocks-fmi-3) shows how to configure periodic and triggered input clocks and output clocks; simple-pid's `PID` (periodic) and filterpy's `KalmanFilter` (triggered, with array inputs) were tested with them ([tested-models.md](tested-models.md)).
+Examples: [models.md](models.md#clocks-fmi-3) shows how to configure periodic and triggered input clocks and output clocks; simple-pid's `PID` (periodic) and filterpy's `KalmanFilter` (triggered, with array inputs) were tested with them ([tested-models.md](testing/tested-models.md)).
 
 ---
 

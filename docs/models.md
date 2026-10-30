@@ -2,7 +2,7 @@
 
 fmugen packages Python code **as it is**. Nothing in your model has to import fmugen, follow a naming convention, or declare its interface. All of that lives in `fmugen.toml` (see [config.md](config.md)), and `fmugen init` writes a first version of it for you.
 
-This page shows the shapes of code fmugen understands, how each maps onto an FMU, and what to check after `fmugen init`. [tested-models.md](tested-models.md) lists the published models fmugen has been tried on, and what each needed. Everything works for FMI 2 and FMI 3; the sections marked **FMI 3** need `[model] fmi_version = 3` (or `fmugen build --fmi 3`).
+This page shows the shapes of code fmugen understands, how each maps onto an FMU, and what to check after `fmugen init`. [tested-models.md](testing/tested-models.md) lists the published models fmugen has been tried on, and what each needed. Everything works for FMI 2 and FMI 3; the sections marked **FMI 3** need `[model] fmi_version = 3` (or `fmugen build --fmi 3`).
 
 - [How a model runs inside the FMU](#how-a-model-runs-inside-the-fmu)
 - [A function](#a-function)
@@ -23,6 +23,7 @@ This page shows the shapes of code fmugen understands, how each maps onto an FMU
 - [Stopping the simulation from the model (FMI 3)](#stopping-the-simulation-from-the-model-fmi-3)
 - [Logging and errors](#logging-and-errors)
 - [What `fmugen init` infers](#what-fmugen-init-infers)
+- [Several models in one FMU](#several-models-in-one-fmu)
 - [Limits](#limits)
 
 ---
@@ -78,7 +79,7 @@ energy_balance = { unit = "W" }
 
 Values nested in dicts, NamedTuples, dataclasses and `SimpleNamespace`s become outputs named with dots: `{"zone": {"T": 21}}` gives the output `"zone.T"` (quoted in TOML). `init` finds them in dict literals in the code, and with `--probe` in the actual result (up to 4 levels deep).
 
-Published functions packaged this way: `fluids.core:Reynolds`, `psychrolib:GetHumRatioFromRelHum` and others in [tested-models.md](tested-models.md).
+Published functions packaged this way: `fluids.core:Reynolds`, `psychrolib:GetHumRatioFromRelHum` and others in [tested-models.md](testing/tested-models.md).
 
 ---
 
@@ -114,7 +115,7 @@ output = { from = "return" }
 - **Probe retries:** list inputs and constructor parameters the model refuses are retried as numpy arrays, then torch tensors (GPy's `GPRegression(X, Y)`). `--start` values for a method that only declares `(*args, **kwargs)` are passed by keyword; if it refuses keywords (neuromancer's `forward(*inputs)`), they are retried by position.
 - **Renaming:** `to = "arg:input_"` gives an argument a different FMU name.
 
-Try it: `pip install simple-pid`, then `fmugen init simple_pid:PID -o -` ([tested-models.md](tested-models.md)).
+Try it: `pip install simple-pid`, then `fmugen init simple_pid:PID -o -` ([tested-models.md](testing/tested-models.md)).
 
 ---
 
@@ -453,7 +454,7 @@ x = { dimensions = ["dim_x"] }            # self.x, shape (2, 1) or (2,): any sh
 
 `fmugen init --fmi 3` infers arrays from list, tuple and numpy defaults and results, and `Binary` from `bytes`.
 
-Try it: `pip install filterpy`, then `fmugen init filterpy.kalman:KalmanFilter --call predict --fmi 3 --start dim_x=2 --start dim_z=1 -o -` ([tested-models.md](tested-models.md)).
+Try it: `pip install filterpy`, then `fmugen init filterpy.kalman:KalmanFilter --call predict --fmi 3 --start dim_x=2 --start dim_z=1 -o -` ([tested-models.md](testing/tested-models.md)).
 
 ---
 
@@ -514,7 +515,7 @@ After a step that ticks an output clock, `doStep` returns `eventHandlingNeeded`.
 
 What each interval variability means, and the exact rules for activation and reset: [fmi.md](fmi.md#clocks-fmi-3). Clocks can't be inferred; `fmugen init --fmi 3` writes a commented example.
 
-Tested with clocks: simple-pid's `PID` on a periodic clock and filterpy's `KalmanFilter` on a triggered clock ([tested-models.md](tested-models.md)).
+Tested with clocks: simple-pid's `PID` on a periodic clock and filterpy's `KalmanFilter` on a triggered clock ([tested-models.md](testing/tested-models.md)).
 
 ---
 
@@ -548,63 +549,7 @@ When it is true after a step or a clock tick, the FMU returns `terminateSimulati
 
 ## What `fmugen init` infers
 
-Every `init` option is in [manual.md](manual.md#fmugen-init); [init-tutorial.md](init-tutorial.md) walks through a generated config.
-
-It imports the module, picks the entry, reads the signatures and **the source code**, and writes a commented config. **It does not call the model**: no object is built, no setup call or step is run. Models that need a device, a network or a licence can be configured anywhere. (Importing the module runs its top-level code, as any import does.)
-
-Reading the code is enough for most plain-Python models. On the published models in [tested-models.md](tested-models.md), it gives the same outputs as calling the model for all 11 scalar functions (pvlib, fluids, ht, chemicals, iapws, psychrolib) and for the RC building. What it can't know, the config says in comments ([below](#not-inferred)).
-
-**`--probe`** also calls the model once with the start values (setup calls, construction, one step), and fills in exactly those. Use it for ML models, C extensions and anything with array results. The probe only works if the model accepts the start values: arguments without a default start at `0`, which many models reject (`Re=0`, `dim=0`, a time step of 0).
-
-```bash
-fmugen init fluids.friction:friction_factor --start Re=1e5 -o -
-```
-
-```bash
-fmugen init psychrolib:GetHumRatioFromRelHum --setup "psychrolib:SetUnitSystem(psychrolib.SI)" --start TDryBulb=25.0 --start RelHum=0.5 --start Pressure=101325.0 -o -
-```
-
-A `--start` or `--const` name that appears in both the constructor and the step method goes to the one without a default; on a tie, to the step method. Names that neither declares are passed through `**kwargs`, if one of them accepts it. For a constructor that only declares `(*args, **kwargs)`, such as `control.StateSpace`, they are passed by position instead (`to = "pos:N"`), in the order given. When the step method also takes only `*args` (SWIG classes such as `openturns.Normal(mu, sigma).computePDF(x)`), the signatures can't tell which values go where: with `--probe`, the first values in `--start` order go to the constructor and the rest to the method, and `init` keeps the first split for which both calls work, trying the method with as many values as possible first (C built-ins without a signature are split the same way). Without `--probe`, all of them go to the constructor, with a warning. If the constructor and the step method both have an argument `NAME` (radioactivedecay's `Inventory(contents, units).decay(decay_time, units)`), the step method's variable is named `<method>_NAME` (`decay_units`), bound with `to = "arg:NAME"`. To give both a value, pass the step method's by that name: `--start decay_units=…` goes to the step method, and then `--start units=…` to the constructor. With `--fmi 3`, a variable for an argument or result named `time`, which FMI 3 reserves, is named `model_time` and bound with `to` / `from`. A signature default that is a descriptor with a `default` (astropy's `Parameter(default=3.04, ...)`) is read as that default. `ARG.FIELD` names go wherever `ARG` goes; `init` stops with an error if `ARG`'s class can't be told from its default or annotation, or has no such field.
-
-| | Inferred from |
-|---|---|
-| **Entry** | The name after `:`, else the only public function or class defined in the module |
-| **Inputs (functions) / parameters (classes)** | Arguments with a `bool`/`int`/`float`/`str` default, or with no default |
-| **Start values and types** | The default value. With no default: the annotation, otherwise Real `0.0` |
-| **Time arguments** | Arguments named `dt`, `h`, `step_size`, `stepSize`, `time_step` (step size); `t`, `time`, `currentTime`, `t_now` (time at the start of the step); `until`, `end_time`, `t_end`, `t_next` (time at its end, e.g. simpy's `Environment.run(until)`). Case and underscores don't matter. With `--probe`, a time argument defaulting to `None` is dropped from `[time]` when the probe call fails with a number there and works with the default (ssqueezepy's `t`, the signal's time vector). An `h` that is a count rather than a step size (annotated `int`, or defaulting to an integer or `None`, like a forecast horizon) is left as an argument. A `--start` for one of them makes it a fixed input instead, with a hint |
-| **Date-time arguments** | Annotated `datetime`/`date`, or named `when`, `date`, `dateandtime`, …: [`[time]` with an `epoch`](config.md#time) |
-| **Outputs from the return value** | The code: dict keys (also a dict built in a variable), tuple positions, a single value (`y`), NamedTuple/dataclass fields, or the return annotation (a SQLAlchemy model: its typed columns; nullable ones commented out). With `--probe`: the actual result |
-| **Outputs and locals of classes** | Public attributes the step method assigns, following the methods it calls on `self` (also assigned in `__init__`: local; else output), and annotated properties. With `--probe`: also what the step actually created or changed, and every readable numeric property. When the step returns nothing, also C attributes the step made readable (ephem's `ra` after `compute()`) and getter methods called without arguments (`get_farm_power()`, `getQuat6D()`: `from = "get:..."`). An output whose property or C attribute failed with an error other than a missing attribute before the step gets `init_call = true` |
-| **States** | An input `x_prev` (or `x_old`, `x_last`, `prev_x`, `last_x`, `old_x`) whose next value is returned or stored as `x_next`, `next_x`, `x_new`, `new_x` or `x` |
-| **Sources** | Local modules under the config's folder that the model imported |
-| **Constants** | Non-FMI defaults, written as commented-out examples |
-| **Positional-only arguments** | Bound with [`to = "pos:N"`](#positional-only-arguments) |
-| **Arrays and Binary** (`--fmi 3`) | List, tuple and numpy defaults and results become `dimensions` (`numpy = true` for numpy inputs); `bytes` becomes Binary; numpy `float32` becomes Float32 |
-
-Check afterwards:
-
-- **Start values:** arguments without a default get `0.0` unless you pass `--start`; make sure the model is valid there.
-- **Objects without a default:** an argument annotated with a class (`atoms: Atoms`) is an object, not a number. With `--probe`, `init` builds `Atoms()` with no arguments and, if that works, makes it a constant (`atoms = { call = "ase:Atoms()" }`) with a comment saying so: replace it with `--const atoms=call:...` when the model needs a real one. Without `--probe` nothing is built: the line is written commented out. Classes that can't be built without arguments, and unannotated arguments, still need `--const`.
-- **States:** inputs named like a previous value (`x_prev`, `x_old`, `last_x`, …) are detected by name. With `--probe`, so is an input the step returns under its own name with a new value (`integrate(level, inflow)` returning `{"level": ...}`): it's fed back from `return:level`. A model that returns its previous result unnamed (Madgwick's `updateIMU(q, ...)` returning the new `q`) still needs a `[states]` entry: `q = { dimensions = [4], start = [1.0, 0.0, 0.0, 0.0], next = "return" }`.
-- **Tunable parameters:** with `--probe`, a parameter kept as an attribute of the object is changed on a copy of the model between two steps; if the results change, it's `variability = "tunable"` (with `attr` when it's passed by position). If they don't, it stays fixed with a note: with the start values used (a PID with no error), a tunable gain may not show. Random models are left undecided.
-- **Units:** a variable with no unit gets the one its numpydoc docstring states, in square brackets after the description (`rho : float` / `Density, [kg/m^3]`, as in fluids, ht, chemicals and thermo), with a comment. `[-]` and anything fmugen doesn't recognise as a unit are left out.
-- **Libraries that read their own source files:** if the model's libraries load their `.py` files by path while it's imported or probed (py-pde's `pde/backends/*/config.py`), the config says `--compile won't work`: a compiled FMU contains no `.py` files.
-- **Integer vs Real:** an `int` default (`setpoint=0`) gives an Integer. Write `0.0` for a Real.
-- **Units and descriptions:** add them; they can't be inferred.
-- **Outputs and locals:** remove the ones you don't need. Types come from annotations and what the code shows (`True`, comparisons, strings, arithmetic, the arguments or attributes returned); everything else is assumed Real, and `init` names those outputs in a warning. If none is found, `init` warns that there are no outputs, and `build` notes it too. Uncomment and complete the commented lines (`dimensions = [...]`, properties, `save_state`), or rerun with `--probe`.
-- **Tunable parameters:** `init` only suggests them in comments (see [above](#a-class-with-a-step-method)).
-
-<a id="not-inferred"></a>Not inferred from the code (use `--probe`, or write them by hand; the config says so in comments):
-
-- **Array sizes.** With `--fmi 3`, array results appear as commented lines with `dimensions = [...]` to fill in.
-- **Results built at runtime** (filled in loops, set by helper functions, returned from library calls) and **code without Python source** (C extensions, compiled models): the `[outputs]` section says the outputs couldn't be read.
-- **Unannotated properties**: commented lines, to uncomment if they are numbers (reading a property runs code).
-- **`save_state`**: a commented `save_state = false` line to uncomment if the model holds a device, file, socket or ONNX session.
-- **Factories whose class the code doesn't show**: the step method's inputs and outputs. The class is found from the return annotation, or from return statements that call a class, or a function that does (tellurium's `loada` → `loadAntimonyModel` → `roadrunner.RoadRunner(...)`); otherwise it is only known by calling the factory.
-
-Never inferred: units, descriptions, tunable variability (suggested in comments), states with other names, clocks, events, setter-method inputs (`call:`). With `--probe`, if the probe call fails, `init` still writes the config, with what the code shows, and says why in a comment.
-
-`fmugen build model.py` runs the same inference in memory. That's handy for a quick try; for anything you keep, write the config.
+What `init` reads from the code, what only `--probe` finds, where `--start` values go, and what to check afterwards are in [init.md](init.md#2-how-init-infers-the-config).
 
 ---
 

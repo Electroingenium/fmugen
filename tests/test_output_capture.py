@@ -108,7 +108,7 @@ PERCENT_LOG = textwrap.dedent("""
     logs = []
     # FMPy formats FMI 2 messages with their variadic arguments: an unescaped "%s" reads a missing argument
     # and crashes. Two steps: UniFMU's backend also echoes each record to its console, which must stay
-    # under the ~4 KB that hangs UniFMU 0.14 (docs/unifmu-limitations.md section 1).
+    # under the ~4 KB that hangs UniFMU 0.14 (docs/limitations/unifmu.md section 1).
     result = simulate_fmu(sys.argv[1], stop_time=1, output_interval=0.5, output=["y"],
                           logger=lambda *args: logs.append(args[-1]), debug_logging=True)
     messages = [m.decode() if isinstance(m, bytes) else m for m in logs]
@@ -118,8 +118,8 @@ PERCENT_LOG = textwrap.dedent("""
 
 @pytest.mark.fmu
 def test_fmi2_log_messages_with_percent_signs_reach_the_importer(tmp_path):
-    # UniFMU 0.14 passes FMI 2 messages to the importer as printf format strings (unifmu-limitations.md
-    # section 12); fmugen's FMI 2 adapter escapes them
+    # UniFMU 0.14 passes FMI 2 messages to the importer as printf format strings (limitations/unifmu.md
+    # section 11); fmugen's FMI 2 adapter escapes them
     (tmp_path / "progress.py").write_text(textwrap.dedent("""
         import logging
         def progress(x=3.0):
