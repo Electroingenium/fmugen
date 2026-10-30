@@ -313,6 +313,9 @@ def _infer_config(target, call, config_dir, fmi_version, starts, setup, kind, cr
         for section in ("parameters", "inputs"):
             for key in [k for k in comments if k[0] == section and (k[1] == name or str(k[1]).startswith(name + "."))]:
                 comments[key] = how
+            for item, info in data.get(section, {}).items():   # a tuple's items: species_coordinates_0
+                if str(info.get("to", "")).startswith(f"arg:{name}["):
+                    comments[(section, item)] = how
         for table in ("constants", "call_constants"):
             if name in data["model"].get(table, {}):
                 comments[("constant", f"{table}.{name}")] = how
@@ -431,6 +434,10 @@ def _shaped_starts(data, comments, starts, shaped):
     classes = {}   # name -> the first package class made up for it
     for name in dict.fromkeys(made):
         current = starts.get(name)
+        if MOLECULE_NAME.search(name) and (current is None or name in shaped) and current != MADE_UP_MOLECULE:
+            # torchani's forward(species_coordinates): atomic numbers and positions, "cannot unpack non-iterable float"
+            tries.append(({name: MADE_UP_MOLECULE}, "made up as a water molecule (atomic numbers, positions in Å): "
+                                                    "the probe failed with a number; give your own"))
         if (match := MISSING_KEY.search(error)) and (current is None or isinstance(current, dict)
                                                        and "call" not in current):
             keys = {**(current or {}), match.group(1): 1.0}
@@ -463,6 +470,11 @@ def _shaped_starts(data, comments, starts, shaped):
                 tries.append(({name: {"call": f"astropy.units:Quantity(1.0, {unit!r})"}},
                               f"made up as an astropy quantity, 1 {unit or '(no unit)'}: its docstring says it's a "
                               "Quantity; check the value and the unit"))
+        if current is None and "pymatgen" in sys.modules and STRUCTURE_ANNOTATION.search(
+                _annotation_text(data["model"].get("entry", ""), data["model"].get("call"), name)):
+            # chgnet's predict_structure(structure: Structure | Sequence[Structure])
+            tries.append(({name: {"call": MADE_UP_STRUCTURE}}, "made up as an aluminium crystal (pymatgen): the probe "
+                                                               "failed with a number; give your own"))
         if current is None and SERIES_ASKED.search(error):   # pastas' Model(oseries): a dated pandas Series
             tries.append(({name: {"call": MADE_UP_SERIES}}, "made up as a dated pandas Series of 24 days: the probe "
                                                             "failed with a number; set your own"))
@@ -815,6 +827,14 @@ ATOMS_ATTRIBUTES = {"symbols", "pbc", "positions", "cell", "numbers", "get_posit
                     "get_chemical_symbols", "get_cell", "get_pbc"}
 #: A made-up ASE ``Atoms``: a water molecule in a 10 Å box.
 MADE_UP_ATOMS = "ase.build:molecule('H2O', vacuum=5.0)"
+#: An argument holding both a molecule's atoms and their positions: torchani's ``species_coordinates``.
+MOLECULE_NAME = re.compile(r"(species|numbers|atoms).*(coord|position)", re.I)
+#: An annotation naming a pymatgen crystal structure: chgnet's ``structure: Structure | Sequence[Structure]``.
+STRUCTURE_ANNOTATION = re.compile(r"\bStructure\b")
+#: A made-up pymatgen ``Structure``: aluminium, face-centred cubic.
+MADE_UP_STRUCTURE = "pymatgen.core:Structure.from_spacegroup('Fm-3m', pymatgen.core.Lattice.cubic(4.05), ['Al'], [[0, 0, 0]])"
+#: A made-up molecule as (atomic numbers, positions in Å), a batch of one: water.
+MADE_UP_MOLECULE = ([[8, 1, 1]], [[[0.0, 0.0, 0.0], [0.96, 0.0, 0.0], [-0.24, 0.93, 0.0]]])
 #: An error about a time series: pastas' "The dtype of the values of the series 'None' is not float".
 SERIES_ASKED = re.compile(r"\bseries\b|DatetimeIndex|PeriodIndex", re.I)
 #: A made-up dated series (:data:`SERIES_ASKED`): 24 daily values going up and down.
@@ -863,6 +883,20 @@ def _package_class(entry_ref, name, error="", call=None):
 
 #: Units an astropy quantity is made up in, in turn: a time, a length, none.
 MADE_UP_UNITS = ("s", "m", "")
+
+
+def _annotation_text(entry_ref, call, name):
+    """The annotation of the argument ``name`` of the step ``call`` (or the constructor), as written; or ""."""
+    entry = _entry_object(entry_ref)
+    for fn in (getattr(entry, call, None) if call else None, entry):
+        try:
+            param = inspect.signature(fn).parameters.get(name)
+        except (TypeError, ValueError):
+            continue
+        if param is not None and param.annotation is not param.empty:
+            annotation = param.annotation
+            return annotation if isinstance(annotation, str) else getattr(annotation, "__name__", str(annotation))
+    return ""
 
 
 def _described(entry_ref, call):

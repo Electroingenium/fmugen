@@ -823,3 +823,13 @@ def test_an_argument_the_code_treats_as_text_is_made_up_as_text(tmp_path):
     """)
     data, text = run(f"{path}:molar_mass", tmp_path, probe=True)
     assert isinstance(data["inputs"]["ID"]["start"], str) and "needs text" in text
+
+
+def test_an_argument_of_atoms_and_positions_is_made_up_as_a_molecule(tmp_path):
+    path = write(tmp_path, "potential.py", """
+        def energy(species_coordinates):
+            species, coordinates = species_coordinates
+            return sum(len(row) for row in species) + len(coordinates[0][0])
+    """)
+    data, text = run(f"{path}:energy", tmp_path, probe=True)
+    assert data["inputs"]["species_coordinates_0"]["start"] == [8, 1, 1] and "water molecule" in text
