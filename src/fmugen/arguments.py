@@ -54,6 +54,35 @@ def _horizon(p):
     default = p.default
     return bool(annotation_ints) or default is None or isinstance(default, int) and not isinstance(default, bool)
 
+#: Words in a docstring's text of an argument that make it an array: ``t : np.ndarray``, ``Vector of times``.
+_ARRAY_WORDS = re.compile(r"\b(?:nd)?arrays?\b|array[_-]like|\bvectors?\b|\bsequence\b|\blist\b|linspace", re.I)
+
+
+def _time_vector(fn, p):
+    """Whether an argument named like the time (``t``) is a vector of times, not the time now.
+
+    ssqueezepy's ``ssq_cwt(x, t=None)``: ``t`` is the times of the samples. It's one when it's
+    annotated as an array, or its docstring entry (numpydoc, Google, Sphinx or ``t: np.ndarray``
+    lines under any header) calls it an array, a vector or a list.
+
+    :param fn: the function the argument is of.
+    :param p: the parameter.
+    :type p: inspect.Parameter
+    :rtype: bool
+    """
+    if _time_source(p.name) != "time":
+        return False
+    if p.annotation is not p.empty and static._is_array_hint(static.unwrap_optional(p.annotation)):
+        return True
+    try:
+        doc = inspect.getdoc(fn) or ""
+    except Exception:   # an odd object: no docstring
+        return False
+    entry = re.compile(rf"^[ \t]*(?::(?:param|type)\s+(?:\S+\s+)?)?{re.escape(p.name)}\b[^:\n]{{0,40}}:(.*)(\n.*)?",
+                       re.M)
+    return any(_ARRAY_WORDS.search(m.group(1) + (m.group(2) or "")) for m in entry.finditer(doc))
+
+
 #: Python types that are FMI scalar values.
 SCALARS = (bool, int, float, str)
 
@@ -290,12 +319,24 @@ def _apply_converts(data, converts):
 
     :param data: the config being inferred; updated in place.
     :type data: dict
+    A step method argument the constructor also has is named ``<method>_NAME`` (as for
+    ``--start``), also before it's renamed so: ``--convert calculate_optimal_actuation_x0=...``
+    then applies to the method's ``x0``, and NAME only to the constructor's.
+
     :param converts: ``{NAME: converter}``, or None.
     :type converts: dict or None
     """
-    for name, converter in (converts or {}).items():
+    converts = converts or {}
+    method = data["model"].get("call", "call").strip("_")
+    for name, converter in converts.items():
+        base = name[len(method) + 1:] if name.startswith(f"{method}_") else None
         for section in ("parameters", "inputs", "states"):
-            info = data.get(section, {}).get(name)
+            variables = data.get(section, {})
+            info = variables.get(name)
+            if info is None and base and section != "parameters" and name not in _all_variables(data):
+                info = variables.get(base)   # not renamed yet
+            elif info is not None and section != "parameters" and f"{method}_{name}" in converts:
+                continue   # the method's copy has its own --convert
             if info is None:
                 continue
             info.pop("numpy", None), info.pop("convert", None)
@@ -303,6 +344,11 @@ def _apply_converts(data, converts):
                 info["numpy"] = True
             else:
                 info["convert"] = converter
+
+
+def _all_variables(data):
+    """The names of the parameters, inputs and states of a config being inferred."""
+    return {n for section in ("parameters", "inputs", "states") for n in data.get(section, {})}
 
 
 def _assign_starts(init, method, starts):
@@ -530,8 +576,11 @@ def _arguments(fn, section, data, comments, skip_self=False, allow_time=True, co
         if p.kind is p.POSITIONAL_ONLY and not positional:
             continue
         if allow_time and _time_source(p.name) and p.name not in starts and not _horizon(p):
-            time_args[p.name] = _time_source(p.name)
-            continue
+            if not _time_vector(fn, p):
+                time_args[p.name] = _time_source(p.name)
+                continue
+            comments.setdefault((section, p.name), "a vector of times by its annotation or docstring, so not the "
+                                                   "simulation time")
         if allow_time and _time_source(p.name) and isinstance(starts.get(p.name), (int, float)):
             comments[(section, p.name)] = (f"from --start, so a fixed value; to pass the simulation time instead, "
                                            f"remove it and add [time] {p.name} = \"{_time_source(p.name)}\"")

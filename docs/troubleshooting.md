@@ -51,8 +51,7 @@ Every config error names the section and key, e.g. `[inputs] x: unknown key(s) [
 
 ## Known problems
 
-- **`init` binds an argument named `t` to the FMU time**, also when it is a time vector (ssqueezepy's `ssq_cwt(x, t=None)`): remove it from `[time]`.
-- **`--convert` is refused for a step method's argument given by its prefixed name** (`--convert calculate_optimal_actuation_x0=…`). Give a `call:` start instead (`--start calculate_optimal_actuation_x0=call:numpy:array(…)`).
+- **`init` binds an argument named `t` to the FMU time** unless its annotation or docstring says it's an array, a vector or a list (ssqueezepy's `ssq_cwt(x, t=None)`: "t: np.ndarray"). An undocumented time vector is still bound: remove it from `[time]`.
 - **PyInstaller stops on xgboost** unless hypothesis is installed: it imports every xgboost submodule, and `xgboost.testing` needs hypothesis.
 - **Windows long paths:** some packages (cantera, pybamm) fail to import from a venv in a deeply nested folder, and PyInstaller can miss deep data files. Keep build folders short.
 - **Module-level scripts can't be models:** a script that solves at import time has nothing to call. Wrap its code in a function or class.

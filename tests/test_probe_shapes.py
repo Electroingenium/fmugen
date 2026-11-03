@@ -973,3 +973,48 @@ def test_a_fitted_model_gets_its_number_of_features(tmp_path):
     data, text = probe(f"{path}:Regressor", tmp_path, call="predict",
                        setup=["fit(numpy.ones((5, 4)), numpy.ones(5))"])
     assert data["inputs"]["X"]["dimensions"] == [1, 4] and data["outputs"]
+
+
+def test_convert_of_the_step_methods_copy_of_a_constructor_argument(tmp_path):
+    # like CFTOC: --convert calculate_optimal_actuation_x0 is the step method's x0, x0 the constructor's
+    path = write(tmp_path, "ctrl.py", """
+        class Ctrl:
+            def __init__(self, x0):
+                self.x0 = x0
+
+            def solve(self, x0):
+                assert type(x0).__name__ == "tuple", type(x0)
+                return {"u": float(sum(x0)) + self.x0[0]}
+    """)
+    data, _ = probe(f"{path}:Ctrl", tmp_path, call="solve", fmi_version=3,
+                    starts={"x0": [1.0], "solve_x0": [2.0, 3.0]}, converts={"solve_x0": "builtins:tuple"})
+    assert data["inputs"]["solve_x0"]["convert"] == "builtins:tuple" and "convert" not in data["parameters"]["x0"]
+    assert data["outputs"] == {"u": {"from": "return:u"}}
+
+
+def test_a_vector_of_times_is_not_the_simulation_time(tmp_path):
+    # like ssqueezepy's ssq_cwt(x, t=None): t is the times of the samples
+    path = write(tmp_path, "cwt.py", '''
+        def cwt(x=1.0, t=None, fs=None):
+            """Transform.
+
+            # Arguments:
+                t: np.ndarray / None
+                    Vector of times at which samples are taken.
+            """
+            return {"y": x * 2}
+
+        def ode(y=1.0, t=0.0):
+            """Right-hand side.
+
+            Parameters
+            ----------
+            t : float
+                The time now.
+            """
+            return {"dy": -y}
+    ''')
+    data, _ = probe(f"{path}:cwt", tmp_path)
+    assert "t" not in data.get("time", {})
+    data, _ = probe(f"{path}:ode", tmp_path, force=True)
+    assert data["time"] == {"t": "time"}
