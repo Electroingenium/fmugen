@@ -1,0 +1,16 @@
+# OpenMDAO's Sellar problem: run_model returns nothing; the coupled results are read from the
+# Problem by name (prob["y1"], a one-element array), which `attr:` tries as a key.
+[model]
+entry = "openmdao.api:Problem"
+setup = ["setup"]
+call = "run_model"
+
+[model.constants]
+model = { call = "openmdao.test_suite.components.sellar:SellarNoDerivatives()" }
+
+[outputs]
+y1 = { from = "attr:y1.0" }
+y2 = { from = "attr:y2.0" }
+obj = { from = "attr:obj.0" }
+con1 = { from = "attr:con1.0" }
+con2 = { from = "attr:con2.0" }

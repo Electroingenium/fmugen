@@ -26,12 +26,13 @@ Each was tried through a short file written for the test, in [pending-100/wrappe
 
 ## Impractical to run
 
-These two ran and passed (see their notes), but `init --probe` on each used all the memory of a 23 GB WSL 2 machine on 2026-10-28, and the out-of-memory kill crashed WSL. They were moved here from [tested-models.md](tested-models.md) because checking them again isn't practical; their last results are kept below.
+These two ran and passed (see their notes), but `init --probe` on each used all the memory of a 23 GB WSL 2 machine on 2026-10-28, and the out-of-memory kill crashed WSL. They were moved here from [tested-models.md](tested-models.md) because checking them again isn't practical; their last results are kept below. sinergym (tested 2026-11-03) can't run unattended from pip: it needs EnergyPlus installed separately.
 
 | Model | `init` / `init --probe` | … with other options | Hand config | Compiled (PyInstaller) | Notes |
 |---|---|---|---|---|---|
 | `facenet_pytorch:MTCNN` | needs options | ✓ (`--call`, `--const`) | — | ✓ (`init --probe` config, 301 MB) | Failed before the fixes: `init --probe` finds no output: boxes and probabilities are numpy arrays of `dtype=object`. Face detection on ultralytics' `zidane.jpg`: 3 boxes and probabilities (numpy arrays of `dtype=object`). |
 | `ultralytics:YOLO` (FMI 3) | needs options | ✓ (`init --probe`, since 2026-10-27) (`--call`, `--const`, `--start` ×2) | ✓ ([config](pending-100/hand/yolo/fmugen.toml)) | ✓ (hand config) | Before the fixes, the compiled FMU failed to instantiate with no error message: torchvision's `_C_stable.so`, loaded by path, isn't collected. YOLO11n on ultralytics' `bus.jpg`. `predict` returns `Results` objects whose detections are tensors (`results[0].boxes.xyxy`): the hand config reads the 5 boxes, classes and confidences. **2026-10-27:** `init --probe` alone: the `Results` objects in the returned list are read, giving the boxes, classes and confidences (`y0.boxes.xyxy`, …) and the timings; FMU identical to the direct run (201 values, timings and paths left out). |
+| `sinergym.envs:EplusEnv` | ✗ import fails | — | — | — | Tested 2026-11-03. Needs EnergyPlus and its Python API (`pyenergyplus`), installed outside pip: `No module named 'pyenergyplus'`. |
 
 ## Empty containers
 
@@ -42,10 +43,42 @@ These are containers the user fills before there is anything to simulate: a phys
 | `pymunk:Space` | ✗ no useful outputs | ✓ ([config](match-testing-rerun/configs/pymunk.toml)) | ✓ (hand config, 48.7 MB) | `init`: outputs are only constant settings (`damping`, `collision_slop`, …). The hand config adds gravity and one body in `setup` and reads `attr:bodies.0.position.y`: `Space.bodies` is a `dict_keys` view, indexed by position. |
 | `Pynite:FEModel3D` | ✗ no useful outputs | ✓ [config](pending-100/hand/pynite_lib/fmugen.toml) | ✓ 125 MB | Frame built in `setup`, `analyze` each step, results from the nodes' result dicts (`attr:nodes.N2.DY.Combo 1`). |
 | `pypsa:Network` | ✗ simulate fails | ✓ [config](pending-100/hand/pypsa_lib/fmugen.toml) | ✓ 432 MB | Network built in `setup` (`add` calls), `pf` each step, load as an input through `attr:loads.p_set.l`. `init` wrote `call_on_class = true` because `pf`'s first parameter is `n`, and passed it a float; fixed since: rerun, neither config has `call_on_class` (`init` checked only, not built). Needed a wrapper before `attr:` could set a key. |
+| `gillespy2:Model` | ✗ no useful outputs | — | — | Tested 2026-11-03. A model with no species or reactions (`add_species`, `add_reaction` in code): the probe finds a JSON hash. |
+| `rebound:Simulation` | ✗ no useful outputs | — | — | Tested 2026-11-03. A simulation with no particles (`add(m=...)` in code): the outputs are its empty coordinates and settings. |
+| `uxsim:World` | ✗ simulate fails | — | — | Tested 2026-11-03. A traffic world with no nodes, links or demand (`addNode`, `addLink`, `adddemand` in code): the step `addVehicle` needs an origin and destination. |
+| `PySpice.Spice.Netlist:Circuit` | ✗ no useful outputs | — | — | Tested 2026-11-03. A circuit with no elements (`R(...)`, `V(...)` in code), simulated by ngspice, not installed with it: outputs `gnd` and an empty netlist. |
+| `bluesky:init` | ✗ no useful outputs | — | — | Tested 2026-11-03. Starts the air traffic simulator with no aircraft (created by stack commands such as `CRE`): returns nothing. |
+
+## Frameworks found while testing
+
+Of the 100 models tested on 2026-11-03 ([pending-r4](pending-r4/)), these turned out to be tools for building a model: the class or function needs objects the user assembles in code (a kernel around a Python model function, equations, a mesh, airfoils, a rocket, an airplane, a raster). Called with what `init` can give, the step fails or outputs only settings. They were not tried through wrappers.
+
+| Model | `init` / `init --probe` | Notes |
+|---|---|---|
+| `numpyro.infer:MCMC` | ✗ simulate fails | Needs a kernel (`NUTS(model)`) around a model written as a Python function, then `run` with data. |
+| `brian2:NeuronGroup` | ✗ no useful outputs | Neurons from equations given as a string (`dv/dt = (1 - v) / (10*ms) : 1`); the simulation runs through a `Network` or the global `run()`. The probe finds only `active`. |
+| `chemprop.models:MPNN` | ✗ simulate fails | Built from message-passing, aggregation and predictor modules, then trained. |
+| `capytaine:BEMSolver` | ✗ simulate fails | Solves problems built from a floating body's mesh made in code. |
+| `wisdem.ccblade.ccblade:CCBlade` | ✗ simulate fails | Needs the blade's airfoils as `CCAirfoil` objects loaded from data files; `ccblade` isn't on PyPI, it comes with WISDEM. |
+| `rocketpy:Flight` | ✗ simulate fails | Needs a `Rocket` assembled from a motor, fins and parachutes, and an `Environment`. |
+| `aerosandbox:AeroBuildup` | ✗ no useful outputs | Needs an `Airplane` built from wings and fuselages; with what the probe makes up, the outputs are the operating point. |
+| `pysheds.grid:Grid` | ✗ simulate fails | A container of rasters (DEMs) on which the user calls hydrological operations. |
+
+## Not installable for Python 3.13
+
+Tested on 2026-11-03 ([pending-r4](pending-r4/)): no version installs together with fmugen on Python 3.13.
+
+| Model | Notes |
+|---|---|
+| `alibi_detect.cd:KSDrift` | alibi-detect depends on TensorFlow, which needs protobuf ≥ 5.28; fmugen pins protobuf 5.27.3. |
+| `basic_pitch.inference:predict` | basic-pitch pins numpy < 1.24 and a TensorFlow without Python 3.13 wheels; FMPy 0.3.32 needs numpy ≥ 2.1.3. |
+| `citylearn.citylearn:CityLearnEnv` | citylearn pins pandas 1.3.5, which doesn't build for Python 3.13. |
+| `cityflow:Engine` ([cityflow-project/CityFlow](https://github.com/cityflow-project/CityFlow)) | Built from source: its bundled pybind11 doesn't compile for Python ≥ 3.11 (`PyFrameObject` is opaque). |
+| `reaktoro:EquilibriumSolver` | Not on PyPI: only on conda-forge. |
 
 ## Discarded before testing
 
-Found with the pending models in [tested-models.md](tested-models.md#pending-models) on 2026-10-29 and left out without running them.
+Found on 2026-10-29 with the 100 models tested on 2026-11-03 ([pending-r4](pending-r4/)) and left out without running them.
 
 | Model | Reason |
 |---|---|

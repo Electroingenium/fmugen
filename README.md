@@ -48,7 +48,7 @@ By default the FMU runs with the Python of your environment, so it works on the 
 
 ## What a model can look like
 
-Functions, classes with a step method, results stored as attributes, state fed back between steps, several files, packages from PyPI, libraries that need a setup call, C extensions, setter methods, arrays (FMI 3), clocks (FMI 3) and several models in one FMU. Each has a worked example in [docs/models.md](docs/models.md). fmugen has been tried on over 200 unmodified published models: [docs/testing/tested-models.md](docs/testing/tested-models.md).
+Functions, classes with a step method, results stored as attributes, state fed back between steps, several files, packages from PyPI, libraries that need a setup call, C extensions, setter methods, arrays (FMI 3), clocks (FMI 3) and several models in one FMU. Each has a worked example in [docs/models.md](docs/models.md). fmugen has been tried on over 290 unmodified published models: [docs/testing/tested-models.md](docs/testing/tested-models.md).
 
 FMUs are FMI 2.0 by default; `[model] fmi_version = 3` or `fmugen build --fmi 3` builds FMI 3.0, which adds more types, arrays, clocks and events. A config that doesn't use FMI 3-only features builds either version. See [docs/fmi.md](docs/fmi.md).
 

@@ -1,0 +1,20 @@
+# scikit-survival: `init --probe` stops on a property that raises NotImplementedError, and the
+# `init` config outputs the risk scores whole (an array, FMI 2). The risk scores of the first 4
+# rows; survival data synthetic.
+[model]
+entry = "sksurv.ensemble:RandomSurvivalForest"
+setup = ["fit(numpy.array([[0.1, 0.2, 0.3, 0.4], [0.5, 0.1, 0.9, 0.3], [0.2, 0.8, 0.4, 0.6], [0.9, 0.7, 0.1, 0.2], [0.3, 0.3, 0.5, 0.9], [0.6, 0.4, 0.2, 0.1], [0.8, 0.9, 0.6, 0.5], [0.4, 0.6, 0.8, 0.7]]), sksurv.util.Surv.from_arrays([True, False, True, True, False, True, True, False], [5.0, 8.0, 3.0, 9.0, 4.0, 7.0, 2.0, 6.0]))"]
+call = "predict"
+
+[parameters]
+n_estimators = { start = 20 }
+random_state = { start = 0 }
+
+[inputs]
+X = { dimensions = [8, 4], start = [0.1, 0.2, 0.3, 0.4, 0.5, 0.1, 0.9, 0.3, 0.2, 0.8, 0.4, 0.6, 0.9, 0.7, 0.1, 0.2, 0.3, 0.3, 0.5, 0.9, 0.6, 0.4, 0.2, 0.1, 0.8, 0.9, 0.6, 0.5, 0.4, 0.6, 0.8, 0.7] }
+
+[outputs]
+y0 = { from = "return:0" }
+y1 = { from = "return:1" }
+y2 = { from = "return:2" }
+y3 = { from = "return:3" }

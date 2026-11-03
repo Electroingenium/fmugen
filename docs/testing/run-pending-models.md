@@ -1,6 +1,8 @@
 # Running the pending models
 
-Instructions for running the 100 models in [tested-models.md, Pending models](tested-models.md#pending-models) on a remote Linux host. Follow the procedure in [tested-models.md, How the models were tested](tested-models.md#how-the-models-were-tested); this file summarizes it and adds what's needed to run unattended.
+**Done on 2026-11-03:** the results are in [tested-models.md](tested-models.md) and [discarded-models.md](discarded-models.md), the run in [pending-r4/](pending-r4/CONCLUSIONS.md). Kept as the procedure for the next batch of pending models.
+
+Instructions for running the 100 models that were in tested-models.md's Pending models tables on a remote Linux host. Follow the procedure in [tested-models.md, How the models were tested](tested-models.md#how-the-models-were-tested); this file summarizes it and adds what's needed to run unattended.
 
 ## Rules
 
