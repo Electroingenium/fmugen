@@ -32,11 +32,12 @@ from fmugen.arguments import (
     SCALARS, POSITIONAL_STARTS, START_ERRORS, NO_SIGNATURE, PROBED,
     _number_like, _array_info, _dotted_names, _arguments, _apply_converts,
     _assign_starts, assumptions, guessed_outputs, unfit_outputs, class_called, _only_varargs, _time_source,
+    _extra_info, _given_constant, _const_entry,
 )
 from fmugen.probe import (
     ConstantError, _run_setup, _probe_call, _probe_class, _forwarded,
     _outputs_from_return, _add_returned, _add_attributes, _detect_states,
-    _taken, _split_varargs, _varargs_by_keyword, MADE_UP_TEXT,
+    _taken, _split_varargs, _varargs_by_keyword, MADE_UP_TEXT, object_names,
 )
 
 #: Step method names tried in order when a class is given without ``--call``.
@@ -1929,6 +1930,15 @@ def _infer_class_once(cls, call, data, comments, arrays=False, starts=None, crea
         # getattr: a callable object (a library's placeholder for a missing optional dependency) has no __name__
         comments[("inputs", None)] = (f"the object {getattr(factory, '__name__', type(factory).__name__)}() returns is known only by running it: add the "
                                       f"inputs and outputs of {method_name}() by hand, or run init --probe")
+        # the --start names the factory doesn't take are the step's (transformers' pipeline(...)(inputs)):
+        # passed to it by keyword, unchecked
+        for name, value in call_starts.items():
+            if _given_constant(value):
+                data["model"].setdefault("call_constants", {})[name] = _const_entry(value)
+            else:
+                data.setdefault("inputs", {})[name] = _extra_info(name, value, arrays)
+                comments[("inputs", name)] = (f"from --start, passed to {method_name}() by keyword; "
+                                              "not checked without --probe")
     else:
         method = inspect.getattr_static(cls, method_name)
         _arguments(_forwarded(getattr(cls, method_name), method_name, cls), "inputs", data, comments,
@@ -1956,7 +1966,7 @@ def _infer_class_once(cls, call, data, comments, arrays=False, starts=None, crea
     _add_returned(read, data, comments, is_class=True, arrays=arrays, probe=probe, seen=seen_returns)
     if cls is not None:
         _add_attributes(cls, method_name, data, comments, arrays, probe, seen_attrs)
-    attrs = set(seen_attrs) | (set(dir(obj)) if obj is not None else set())
+    attrs = set(seen_attrs) | (set(object_names(obj)) if obj is not None else set())
     if cls is not None:
         attrs |= set(static.assigned_attributes(cls, method_name)) | set(static.assigned_attributes(cls, "__init__"))
         attrs |= set(static.own_properties(cls))

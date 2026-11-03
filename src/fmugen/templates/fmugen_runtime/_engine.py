@@ -1286,7 +1286,9 @@ class Engine:
         """
         if var.get("dimensions"):
             value = plain_number(value, var.get("unit"))   # an array quantity (pint, astropy)
-            flat = flatten(value.tolist() if hasattr(value, "tolist") else value)
+            if not hasattr(value, "tolist") and hasattr(value, "to_numpy"):   # an xarray DataArray
+                value = value.to_numpy()
+            flat =flatten(value.tolist() if hasattr(value, "tolist") else value)
             n = self.size(var)
             if len(flat) != n:
                 raise ValueError(f"{var['name']} has {len(flat)} values, expected {n}")

@@ -850,3 +850,69 @@ def test_an_argument_of_atoms_and_positions_is_made_up_as_a_molecule(tmp_path):
     """)
     data, text = run(f"{path}:energy", tmp_path, probe=True)
     assert data["inputs"]["species_coordinates_0"]["start"] == [8, 1, 1] and "water molecule" in text
+
+
+def test_a_single_dispatch_step_gets_its_first_argument_by_position(tmp_path):
+    # like galpy's Orbit.integrate(t, pot, ..., dt=None): a singledispatchmethod picks its code by the type
+    # of t, so t goes by position; dt beside a vector of times is the integrator's own step, not the FMU's
+    path = write(tmp_path, "orbit.py", """
+        import functools
+
+        class Orbit:
+            def __init__(self, x0=1.0):
+                self.x = x0
+
+            @functools.singledispatchmethod
+            def integrate(self, t, k=1.0, dt=None):
+                self.x = self.x * k + len(t)
+    """)
+    data, _ = run(f"{path}:Orbit", tmp_path, call="integrate",
+                     starts={"t": {"call": "builtins:list([0.0, 0.5, 1.0])"}})
+    assert data["model"]["call_constants"]["0"] == {"call": "builtins:list([0.0, 0.5, 1.0])"}
+    assert "dt" not in data.get("time", {})
+
+
+def test_names_both_kwargs_take_go_to_the_constructor(tmp_path):
+    # like feedinlib's Photovoltaic(**attributes).feedin(weather, **kwargs): the attributes configure the object
+    path = write(tmp_path, "pv.py", """
+        class Photovoltaic:
+            def __init__(self, **attributes):
+                self.attributes = attributes
+
+            def feedin(self, irradiance=1.0, **kwargs):
+                return irradiance * self.attributes["tilt"]
+    """)
+    data, _ = run(f"{path}:Photovoltaic", tmp_path, call="feedin", starts={"tilt": 30.0})
+    assert "tilt" in data["parameters"] and "tilt" not in data.get("inputs", {})
+
+
+def test_the_step_arguments_of_an_unprobed_factory_are_passed_by_keyword(tmp_path):
+    # like transformers' pipeline(task, model)(inputs): what pipeline() returns is known only by calling it
+    path = write(tmp_path, "pipe.py", """
+        def pipeline(task="double"):
+            return lambda inputs, scale=1.0: inputs * 2 * scale
+    """)
+    data, text = run(f"{path}:pipeline", tmp_path, call="__call__", starts={"task": "double", "inputs": 3.0})
+    assert data["parameters"]["task"]["start"] == "double" and data["inputs"]["inputs"]["start"] == 3.0
+    assert "not checked without --probe" in text
+
+
+def test_an_object_whose_dir_fails_is_still_probed(tmp_path):
+    # like scikit-survival: scikit-learn's __dir__ reads every attribute, and feature_importances_ raises
+    path = write(tmp_path, "forest.py", """
+        class Forest:
+            def __init__(self, n=2):
+                self.n = n
+
+            def __dir__(self):
+                return [a for a in super().__dir__() if hasattr(self, a)]
+
+            @property
+            def feature_importances_(self):
+                raise NotImplementedError()
+
+            def predict(self, x=1.0):
+                return x * self.n
+    """)
+    data, _ = run(f"{path}:Forest", tmp_path, call="predict", probe=True)
+    assert "y" in data["outputs"]

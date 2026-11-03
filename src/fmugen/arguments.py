@@ -99,8 +99,11 @@ def _dotted_names(text):
     try:
         tree = ast.parse(text.rstrip().removesuffix(")") or "0", mode="eval")
     except SyntaxError:
-        return []
-    return [ast.unparse(n) for n in ast.walk(tree) if isinstance(n, ast.Name)
+        try:   # the text after a call's "(", with a chain after its ")": "2024).utc(2024, 1)"
+            tree = ast.parse(f"_fmugen_called({text}", mode="eval")
+        except SyntaxError:
+            return []
+    return [ast.unparse(n) for n in ast.walk(tree) if isinstance(n, ast.Name) and n.id != "_fmugen_called"
             or isinstance(n, ast.Attribute) and isinstance(n.value, (ast.Name, ast.Attribute))]
 
 DATETIME_BY_NAME = ("init", "date-time by name")   # comments key (not rendered): [time] args only named like one
@@ -355,7 +358,9 @@ def _assign_starts(init, method, starts):
     """Split ``--start`` values between constructor and step method arguments.
 
     A name goes to the argument that has no default (it needs a value); on a tie, to the
-    step method. Names neither declares go to whichever accepts ``**kwargs`` (method first).
+    step method. Names neither declares go to whichever accepts ``**kwargs``; when both do, to the
+    constructor, whose keywords configure the object (feedinlib's ``Photovoltaic(**attributes)``
+    with ``feedin(weather, location, **kwargs)``).
     For a name both declare, ``<method>_NAME`` (the variable name init gives the method's one)
     goes to the method, and then NAME to the constructor: x0 and calculate_optimal_actuation_x0.
     A ``--const`` NAME both declare always goes to the constructor.
@@ -381,6 +386,8 @@ def _assign_starts(init, method, starts):
             return NO_SIGNATURE_PARAMETERS
 
     init_p, call_p = params(init), params(method)
+    # object.__init__(*args, **kwargs) of a class without its own doesn't take the step's keywords
+    init_kwargs = init is not object.__init__ and any(p.kind is p.VAR_KEYWORD for p in init_p.values())
     init_starts, call_starts = {}, {}
     # the method's copy of a shared name, given by the name _rename_duplicates gives its variable
     prefix = f"{getattr(method, '__name__', 'call').strip('_')}_"
@@ -402,9 +409,11 @@ def _assign_starts(init, method, starts):
                 else call_starts
         elif in_init or in_call:
             target = init_starts if in_init else call_starts
+        elif init_kwargs:
+            target = init_starts
         elif any(p.kind is p.VAR_KEYWORD for p in call_p.values()):
             target = call_starts
-        elif any(p.kind in (p.VAR_KEYWORD, p.VAR_POSITIONAL) for p in init_p.values()):
+        elif any(p.kind is p.VAR_POSITIONAL for p in init_p.values()):
             target = init_starts
         else:
             continue  # reported as unused
@@ -456,6 +465,19 @@ def _keywordless(fn):
     :rtype: bool
     """
     return hasattr(fn, "nin") and type(fn).__module__.split(".")[0] in ("numpy", "numba")
+
+
+def _single_dispatch(fn):
+    """Whether ``fn`` is a ``functools.singledispatch`` function or ``singledispatchmethod``.
+
+    These choose the implementation by the type of their first argument, so it must be passed by
+    position (galpy's ``Orbit.integrate(t, pot)``).
+
+    :param fn: a callable.
+    :rtype: bool
+    """
+    fn = getattr(fn, "__func__", fn)
+    return callable(getattr(fn, "register", None)) and (hasattr(fn, "registry") or hasattr(fn, "__wrapped__"))
 
 
 def _given_constant(value):
@@ -569,13 +591,22 @@ def _arguments(fn, section, data, comments, skip_self=False, allow_time=True, co
         params = params[1:]
     params = [_unwrap_descriptor(p) for p in params]
     keywordless = _keywordless(fn)
+    dispatched = _single_dispatch(fn)   # its first argument goes by position
+    # a vector of times given (galpy's integrate(t, ...)): a dt beside it is the integrator's own step
+    times_given = any(_time_source(p.name) == "time" and p.name in starts
+                      and (_given_constant(starts[p.name]) or isinstance(starts[p.name], (list, tuple)))
+                      for p in params)
     position = 0
-    for p in params:
+    for index, p in enumerate(params):
         if p.kind in (p.VAR_POSITIONAL, p.VAR_KEYWORD):
             continue
         if p.kind is p.POSITIONAL_ONLY and not positional:
             continue
-        if allow_time and _time_source(p.name) and p.name not in starts and not _horizon(p):
+        by_position = p.kind is p.POSITIONAL_ONLY or keywordless or (dispatched and index == 0)
+        if allow_time and _time_source(p.name) == "step_size" and times_given and p.name not in starts:
+            comments.setdefault((section, p.name), f"not the step size: the step is given a vector of times, so "
+                                                   f"{p.name} is the integrator's own step")
+        elif allow_time and _time_source(p.name) and p.name not in starts and not _horizon(p):
             if not _time_vector(fn, p):
                 time_args[p.name] = _time_source(p.name)
                 continue
@@ -596,7 +627,13 @@ def _arguments(fn, section, data, comments, skip_self=False, allow_time=True, co
                      "with an input; the epoch plus the simulation time")
             continue
         if _given_constant(starts.get(p.name)):   # --const: a fixed value, not a variable
-            data["model"].setdefault(constants_key, {})[p.name] = _const_entry(starts[p.name])
+            key = str(position) if dispatched and index == 0 else p.name   # a single-dispatch first argument
+            data["model"].setdefault(constants_key, {})[key] = _const_entry(starts[p.name])
+            if key != p.name:
+                comments[("model", f"{constants_key}.{key}")] = (f"--const {p.name}, passed by position: "
+                                                                 "the method dispatches on its type")
+                comments.setdefault(POSITIONAL_STARTS, {})[p.name] = position
+                position += 1
             continue
         if p.name in starts and _split_items(p, starts[p.name], variables, section, comments, arrays):
             continue
@@ -664,7 +701,7 @@ def _arguments(fn, section, data, comments, skip_self=False, allow_time=True, co
             elif converter:
                 variables[p.name]["convert"] = converter
                 comments.setdefault((section, p.name), f"passed as {converter.replace(':', '.')}(...)")
-        if (p.kind is p.POSITIONAL_ONLY or keywordless) and len(variables) > before:
+        if by_position and len(variables) > before:
             variables[p.name]["to"] = f"pos:{position}"
             position += 1
     # not *args/**kwargs' own names: MOMENT's from_pretrained(..., **model_kwargs) takes a model_kwargs keyword
@@ -1368,6 +1405,8 @@ def _array_info(value, with_start=False):
     :return: ``{dimensions, type?, numpy? / convert?, start?}``, else None (also for empty arrays).
     :rtype: dict or None
     """
+    if not isinstance(value, type) and not hasattr(value, "tolist") and hasattr(value, "to_numpy")             and hasattr(value, "dims"):
+        value = value.to_numpy()   # an xarray DataArray (py_wake's WS_eff)
     # not a class: numpy.float64 (a dtype default) has shape and ndim as descriptors
     if (not isinstance(value, type) and hasattr(value, "shape") and hasattr(value, "tolist")
             and getattr(value, "ndim", 0) > 0):
@@ -1401,6 +1440,9 @@ def _array_info(value, with_start=False):
         else:
             return None
         info = {"dimensions": shape}
+        if isinstance(value, tuple) and len(shape) == 1:
+            # passed back as a tuple: models compare or unpack it as one (gplearn's const_range, minigrid's agent_start_pos)
+            info["convert"] = "builtins:tuple"
     else:
         return None
     if 0 in shape:

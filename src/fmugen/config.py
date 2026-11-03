@@ -480,10 +480,6 @@ def normalize(config, entry_obj, module_name, sys_path, model_name=None, author=
         init_sig = None
         call_sig = _signature(entry_obj) if step_call else None
 
-    if step_call and (inspect.isgeneratorfunction(entry_obj) if not is_class
-                      else call and inspect.isgeneratorfunction(getattr(entry_obj, call, None))):
-        raise InterfaceError(f"{model['entry']} is a generator (it uses yield), which fmugen can't step yet; "
-                             "a factory that returns an object with a step method works ([model] call)")
     integrate = _integrate(model, step_call)
     repeat = _repeat(model, step_call, integrate)
     discard_on = _discard_on(model.get("discard_on", []))
@@ -519,7 +515,7 @@ def normalize(config, entry_obj, module_name, sys_path, model_name=None, author=
             if isinstance(value, dict) and "call" in value:   # computed when the FMU initializes
                 from fmugen.templates.fmugen_runtime import parse_call_text
                 try:
-                    parse_call_text(str(value["call"]))
+                    parse_call_text(str(value["call"]), chain=True)
                 except (ValueError, SyntaxError) as e:
                     raise InterfaceError(f"[model] {table}.{name}: {e}") from e
 

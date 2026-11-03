@@ -45,8 +45,10 @@ def test_rendered_config_round_trips(tmp_path):
     output, data = init(tmp_path / "tank.py")
     text = output.read_text()
     assert tomllib.loads(text)["model"] == {"entry": "tank.py:Tank", "call": "step"}
-    # integers stay Integer, as an int scalar default does (layer sizes: torch refuses floats)
-    assert tomllib.loads(text)["parameters"]["limits"] == {"dimensions": [2], "type": "Integer", "start": [0, 5]}
+    # integers stay Integer, as an int scalar default does (layer sizes: torch refuses floats);
+    # a tuple default is passed back as a tuple
+    assert tomllib.loads(text)["parameters"]["limits"] == {"dimensions": [2], "type": "Integer", "start": [0, 5],
+                                                           "convert": "builtins:tuple"}
     assert data["outputs"] == {"y": {"from": "return"}, "overflow": {"type": "Boolean"}}
     assert data["locals"] == {"level": {}}
     assert load_config(output).entry_name == "Tank"
@@ -115,14 +117,15 @@ def test_fmi3_infers_arrays_binary_and_float32(tmp_path):
     '''))
     data, comments = infer(tmp_path / "filt.py", fmi_version=3)
     assert data["model"]["fmi_version"] == 3
-    assert data["parameters"]["weights"] == {"dimensions": [3], "start": [0.5, 0.25, 0.25]}
+    assert data["parameters"]["weights"] == {"dimensions": [3], "start": [0.5, 0.25, 0.25], "convert": "builtins:tuple"}
     assert data["parameters"]["tag"] == {"type": "Binary", "start": "01"}
     assert data["outputs"]["y"] == {"from": "return", "dimensions": [3]}
     assert data["outputs"]["out"] == {"type": "Float32"}
     assert "[clocks.sample]" in render_toml(data, comments)
 
     data2, comments2 = infer(tmp_path / "filt.py")              # FMI 2: arrays, but no Binary or Float32
-    assert data2["parameters"]["weights"] == {"dimensions": [3], "start": [0.5, 0.25, 0.25]}
+    assert data2["parameters"]["weights"] == {"dimensions": [3], "start": [0.5, 0.25, 0.25],
+                                              "convert": "builtins:tuple"}
     assert "tag" not in data2["parameters"] and "--fmi 3" in comments2[("parameters", "#tag")]
     assert data2["outputs"]["out"] == {}
 
@@ -412,12 +415,17 @@ def test_setup_call_takes_calls_as_arguments():
         parse_call("fit(1).predict(2)")
 
 
-def test_call_constant_refuses_text_after_the_call():
-    # "pathlib:Path('x').read_bytes()" (rembg, easyocr) would run only Path(), dropping the rest: refused
+def test_call_constant_chains_attributes_calls_and_indexes(tmp_path):
+    # skyfield's load.timescale().utc(...), orb's pretrained model returned in a tuple, an argument
+    # that is a method of a built object (equilibrator's ComponentContribution().get_compound)
     from fmugen.templates.fmugen_runtime import resolve_constant
-    with pytest.raises(ValueError, match="only one call"):
-        resolve_constant({"call": "pathlib:Path('x.png').read_bytes()"})
-    with pytest.raises(ValueError, match="only one call"):
+    (tmp_path / "x.png").write_bytes(b"png")
+    path = str(tmp_path / "x.png").replace("\\", "/")
+    assert resolve_constant({"call": f"pathlib:Path('{path}').read_bytes()"}) == b"png"
+    assert resolve_constant({"call": "builtins:divmod(7, 2)[1]"}) == 1
+    assert resolve_constant({"call": "datetime:datetime(2024, 1, 2).replace(year=2020).isoformat()"})         == "2020-01-02T00:00:00"
+    assert resolve_constant({"call": "builtins:sorted(builtins.str('ba').upper())"}) == ["A", "B"]
+    with pytest.raises(ValueError, match="may follow the call"):
         resolve_constant({"call": "numpy:zeros(3) + numpy.ones(3)"})
 
 

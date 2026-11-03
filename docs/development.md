@@ -96,7 +96,7 @@ To move to a newer UniFMU:
 - **Python floor:** `requires-python = ">=3.13"` (decided 2026-10-14). The build side would need 3.11 and the runtime inside the FMU 3.10.
 
 ### Model coverage
-- **Generators** (`yield`-based models driven with `next()`/`send()`): `build` refuses them with a hint, since no published generator model was found to design the inputs against. simpy models work through a factory calling `env.run(until=…)`.
+- **Generators driven with `next()`/`send()`** once per step: a step that returns a generator is read whole into a tuple (kokoro's `KPipeline`, piper's `synthesize`), so an endless one fails the step with a hint (after 100 000 items); no published model stepped with `next()` was found to design the inputs against. simpy models work through a factory calling `env.run(until=…)`.
 - **Other model formats:** Jupyter notebooks, scikit-learn (`kind = "sklearn"` calling `predict` with the inputs as features) and standalone ONNX files.
 - **Inference:** a `state` dict passed in and returned (`def step(u, state): …; return y, state`) isn't recognised as a state; it needs `to = "arg:state[key]"` / `next = "return:1.key"` by hand.
 - **modelDescription:** FMI 3 terminals and icons aren't supported.

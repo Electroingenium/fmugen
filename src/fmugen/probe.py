@@ -2404,7 +2404,7 @@ def _outputs_from_return(result, data, comments, default_name, is_class, arrays=
     if wrapped and getattr(result, "size", None) == 1 and hasattr(result, "reshape"):
         result = result.reshape(())[()]   # numbers passed as one-element arrays: a number comes back as one
     parts = set()   # properties of a returned object, which may share a name with an input (ufloat's nominal_value)
-    if isinstance(result, Mapping):
+    if isinstance(result, Mapping) and _table_children(result) is None:   # an xarray Dataset is a Mapping too
         items = [(str(k), v, f"return:{k}") for k, v in result.items()]
     elif _table_children(result) == [] and getattr(result, "size", None) == 1:
         items = [(default_name, result.item(), "return")]   # one value labelled by a date (pyet): read as a number
@@ -2607,18 +2607,22 @@ def _plain_object(value):
 
 
 def _table_children(value):
-    """``[(label, value)]`` for a pandas Series, a DataFrame or an xarray Dataset of single values.
+    """``[(label, value)]`` for a pandas Series, a DataFrame or an xarray Dataset.
 
     A one-row DataFrame gives each column's value; a longer one its numeric columns as arrays
-    (neuralforecast's forecast column, pandapipes' result tables), each read by its label. Recognised
-    by module and class name, so pandas/xarray aren't imported; only string labels.
+    (neuralforecast's forecast column, pandapipes' result tables), each read by its label. A
+    Dataset gives its single values, and its other numeric variables as arrays (py_wake's
+    ``WS_eff`` by turbine, wind direction and speed). Recognised by module and class name,
+    also of a base class (py_wake's ``SimulationResult`` is a Dataset), so pandas/xarray aren't
+    imported; only string labels.
 
     :param value: the value.
     :return: the pairs, or None for anything else.
     :rtype: list[tuple] or None
     """
-    kind = type(value).__name__
-    library = type(value).__module__.split(".")[0]
+    from fmugen.templates.fmugen_runtime import table_library
+    library = table_library(value)
+    kind = next((k.__name__ for k in type(value).__mro__ if k.__module__.split(".")[0] == library), None)
     try:
         if library == "pandas" and kind == "Series":
             pairs = list(value.items())
@@ -2627,7 +2631,8 @@ def _table_children(value):
         elif library == "pandas" and kind == "DataFrame" and len(value) > 1:
             pairs = [(c, value[c].to_numpy()) for c in value.columns if value[c].dtype.kind in "biuf"]
         elif library == "xarray" and kind == "Dataset":
-            pairs = [(k, v.item()) for k, v in value.data_vars.items() if v.size == 1]
+            pairs = [(k, v.item() if v.size == 1 else v.to_numpy()) for k, v in value.data_vars.items()
+                     if v.size == 1 or v.dtype.kind in "biuf"]
         else:
             return None
     except Exception:
@@ -2754,7 +2759,7 @@ def _dynamic_values(obj, arrays=False):
     :rtype: dict
     """
     try:
-        names = set(dir(obj)) - set(dir(type(obj))) - set(getattr(obj, "__dict__", {}))
+        names = set(object_names(obj)) - set(dir(type(obj))) - set(getattr(obj, "__dict__", {}))
     except Exception:
         return {}
     values = {}
@@ -2808,6 +2813,21 @@ def _property_values(obj, arrays=False, everything=False):
         if everything or _fmi_value(value, arrays):
             values[name] = _snapshot(value)
     return values
+
+
+def object_names(obj):
+    """``dir(obj)``, or, when the object's ``__dir__`` fails, the names of its class and ``__dict__``.
+
+    scikit-learn's ``__dir__`` reads every attribute, so one property that raises (scikit-survival's
+    ``feature_importances_``: NotImplementedError) makes ``dir`` raise.
+
+    :param obj: the object.
+    :rtype: list[str]
+    """
+    try:
+        return dir(obj)
+    except Exception:
+        return sorted(set(dir(type(obj))) | set(getattr(obj, "__dict__", None) or {}))
 
 
 def _own_descriptors(obj):
