@@ -566,8 +566,42 @@ def test_a_keyword_named_like_the_kwargs_parameter(tmp_path):
     # a dict can't be an FMU variable: it's a --const, passed through **kwargs
     data, _ = infer(f"{tmp_path / 'kw.py'}:load", starts={"model_kwargs": {"python": "{'task_name': 'r'}"}})
     assert data["model"]["constants"] == {"model_kwargs": {"python": "{'task_name': 'r'}"}}
-    with pytest.raises(InterfaceError, match="give a fixed value with --const model_kwargs"):
-        infer(f"{tmp_path / 'kw.py'}:load", starts={"model_kwargs": {"task_name": "r"}})
+    # the same given with --start: a fixed value too
+    data, comments = infer(f"{tmp_path / 'kw.py'}:load", starts={"model_kwargs": {"task_name": "r"}})
+    assert data["model"]["constants"] == {"model_kwargs": {"python": "{'task_name': 'r'}"}}
+    assert "fixed value" in comments[("constant", "constants.model_kwargs")]
+
+
+def test_an_array_documented_as_ndarray_is_passed_as_numpy(tmp_path):
+    # gym-pybullet-drones' step(action), "action : ndarray | dict[..]", reads action.shape: a list fails
+    (tmp_path / "env.py").write_text(textwrap.dedent('''
+        def step(action, gains):
+            """One step.
+
+            Parameters
+            ----------
+            action : ndarray | dict[..]
+                The action.
+            gains : array_like
+                The gains.
+            """
+            return {"y": float(action.shape[0]) + sum(gains)}
+    '''))
+    data, _ = infer(f"{tmp_path / 'env.py'}:step", fmi_version=3, starts={"action": [1.0, 2.0], "gains": [0.5, 0.5]})
+    assert data["inputs"]["action"]["numpy"] is True and "numpy" not in data["inputs"]["gains"]
+
+
+def test_a_start_that_cant_be_a_variable_is_a_fixed_value(tmp_path):
+    # gliner's predict_entities(text, labels=['person', 'organization']), pycalphad's comps: lists of strings
+    (tmp_path / "ner.py").write_text(textwrap.dedent('''
+        def entities(text, labels, threshold=0.5):
+            return {"n": float(len(labels)), "length": float(len(text))}
+    '''))
+    data, comments = infer(f"{tmp_path / 'ner.py'}:entities", starts={"text": "Ada", "labels": ["person", "org"]})
+    assert data["model"]["constants"] == {"labels": ["person", "org"]}
+    assert "labels" not in data.get("inputs", {}) and data["inputs"]["text"]["start"] == "Ada"
+    with pytest.raises(InterfaceError, match="can't be an FMU variable"):   # not a literal: can't be written
+        infer(f"{tmp_path / 'ner.py'}:entities", starts={"text": "Ada", "labels": [object()]})
 
 
 def test_fmi3_integer_starts_beyond_int32_get_64_bit_types(tmp_path):

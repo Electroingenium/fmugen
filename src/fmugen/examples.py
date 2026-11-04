@@ -516,9 +516,16 @@ def _read(code, source, entry, module):
         target = targets[0].id if len(targets) == 1 and isinstance(targets[0], ast.Name) else None
         if isinstance(value, ast.Call):
             ours, create = snippet.is_entry(value.func)
-            if ours and is_class and obj is None and target:
+            if ours and is_class and obj is None and built is None and target:
                 obj, built = target, (create, value)
                 continue
+            inner = value.func.value if isinstance(value.func, ast.Attribute) else None
+            if is_class and obj is None and built is None and isinstance(inner, ast.Call):
+                ours, create = snippet.is_entry(inner.func)
+                if ours:   # built and used at once: umap's UMAP().fit_transform(data)
+                    built = (create, inner)
+                    calls.append((value.func.attr, value, loops, target is not None))
+                    continue
             if ours and not is_class and built is None:
                 built = (None, value)
                 calls.append((None, value, loops, target is not None))

@@ -141,8 +141,14 @@ def _probe_class(cls, method_name, data, comments, arrays, call_starts, create, 
         rebuilt = _rebuild_made_up_as_zero(build, method_name, data, comments)
         if rebuilt is None:   # options left None build, but the step needs them (reservoirpy's units)
             rebuilt = _rebuild_with_options(build, method_name, data, comments)
+        try:   # a new object: the failed calls may have left this one broken (gym-pybullet-drones' step([[...]]))
+            fresh = _build_set_up(build, data) if rebuilt is None else None
+        except Exception:
+            fresh = None
         if rebuilt is not None:   # the made-up parameters as 0.0 (quantecon's A = 1.0: a singular matrix)
             obj = rebuilt
+        elif fresh is not None and _reset_first(fresh, method_name, data, comments):
+            obj = fresh
         elif _reset_first(obj, method_name, data, comments):
             pass
         else:
@@ -278,25 +284,35 @@ def _reset_first(obj, method_name, data, comments):
     :rtype: bool
     """
     reset = getattr(obj, "reset", None)
-    if "reset" in data["model"].get("setup", []) or method_name == "reset" or not callable(reset):
+    if any(s == "reset" or s.startswith("reset(") for s in data["model"].get("setup", [])) \
+            or method_name == "reset" or not callable(reset):
         return False
     try:
-        required = [p for p in inspect.signature(reset).parameters.values()
-                    if p.default is p.empty and p.kind in (p.POSITIONAL_ONLY, p.POSITIONAL_OR_KEYWORD, p.KEYWORD_ONLY)]
+        params = inspect.signature(reset).parameters
     except (TypeError, ValueError):
         return False
-    if required:
+    if any(p.default is p.empty and p.kind in (p.POSITIONAL_ONLY, p.POSITIONAL_OR_KEYWORD, p.KEYWORD_ONLY)
+           for p in params.values()):
         return False
-    try:
-        reset()
-        # with the made-up inputs' retries: CartPole's step() takes an action from its action space, not 1.0
-        _probe_call(_step_method(obj, method_name, data), data, comments, constants_key="call_constants")
-        reset()   # back to the state the FMU starts from, for the probe's own step
-    except Exception:
-        return False
-    data["model"]["setup"] = [*data["model"].get("setup", []), "reset"]
-    comments[("model", "setup")] = f"reset() before the first step: {method_name}() failed without it in the probe"
-    return True
+    # a seed it takes is given, so the FMU gives the same results every run (gymnasium's reset(seed=None))
+    tries = [({"seed": 0}, "reset(seed=0)")] if "seed" in params and params["seed"].default is None else []
+    for kwargs, call in [*tries, ({}, "reset")]:
+        saved = {n: dict(i) for n, i in data.get("inputs", {}).items()}
+        try:
+            reset(**kwargs)
+            # with the made-up inputs' retries: CartPole's step() takes an action from its action space, not 1.0
+            _probe_call(_step_method(obj, method_name, data), data, comments, constants_key="call_constants")
+            reset(**kwargs)   # back to the state the FMU starts from, for the probe's own step
+        except Exception:
+            if saved:
+                data["inputs"] = saved
+            continue
+        data["model"]["setup"] = [*data["model"].get("setup", []), call]
+        seed = "; seed=0 so each run gives the same results" if kwargs else ""
+        comments[("model", "setup")] = (f"{call if kwargs else 'reset()'} before the first step: {method_name}() "
+                                        f"failed without it in the probe{seed}")
+        return True
+    return False
 
 
 #: An error message asking for a call first: "call compile() first", "Use fit() to train model. Then",
@@ -361,12 +377,16 @@ def _setup_first(build, obj, method_name, error, data, comments):
                 return fitted
             continue
         try:
-            params = [p for p in inspect.signature(getattr(obj, name)).parameters.values()
+            signature = inspect.signature(getattr(obj, name)).parameters
+            params = [p for p in signature.values()
                       if p.default is p.empty and p.kind in (p.POSITIONAL_ONLY, p.POSITIONAL_OR_KEYWORD)]
         except (TypeError, ValueError):
             continue
+        # a seed it takes is given, so the FMU gives the same results every run (gymnasium's reset(seed=None))
+        seeded = "seed" in signature and signature["seed"].default is None
         worked = False
-        for made in _made_up_variants(getattr(obj, name), params):
+        for made in (m for made in _made_up_variants(getattr(obj, name), params)
+                     for m in ([*made, "seed=0"], made)[0 if seeded else 1:]):
             step = f"{name}({', '.join(made)})"
             setup = [*data["model"].get("setup", []), step]
             trial = dict(data, model=dict(data["model"], setup=setup))
@@ -393,8 +413,9 @@ def _setup_first(build, obj, method_name, error, data, comments):
             continue
         data["model"]["setup"] = setup
         made_up = f", its arguments made up ({', '.join(made)}): check them" if params else ""
+        seed = "; seed=0 so each run gives the same results" if "seed=0" in made else ""
         comments[("model", "setup")] = (f"{name}() before the first step: {method_name}() failed without it in the "
-                                        f"probe{made_up}")
+                                        f"probe{made_up}{seed}")
         return fresh
     candidates = [m for m in candidates if m not in unhelpful]
     if not candidates:

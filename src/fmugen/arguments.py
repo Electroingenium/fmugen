@@ -690,12 +690,13 @@ def _arguments(fn, section, data, comments, skip_self=False, allow_time=True, co
         elif arrays and _array_info(default):
             variables[p.name] = _array_info(default, with_start=True)
         elif p.name in starts:   # --start with a value that can't be an FMU variable
-            raise InterfaceError(f"--start {p.name}: {default!r} can't be an FMU variable (a number, string, bool "
-                                 f"or array); give a fixed value with --const {p.name}=...")
+            if not _fixed_start(p.name, default, data, comments, constants_key):
+                raise InterfaceError(f"--start {p.name}: {default!r} can't be an FMU variable (a number, string, "
+                                     f"bool or array); give a fixed value with --const {p.name}=...")
         else:
             comments[("model", f"{constants_key}.{p.name}")] = _constant(default)
         if len(variables) > before and "dimensions" in variables[p.name]:
-            converter = _converter(p.annotation)
+            converter = _converter(p.annotation) or ("numpy" if _documented_ndarray(fn, p.name) else None)
             if converter == "numpy":
                 variables[p.name]["numpy"] = True
             elif converter:
@@ -732,7 +733,8 @@ def _arguments(fn, section, data, comments, skip_self=False, allow_time=True, co
             if computed:
                 data["model"].setdefault(constants_key, {})[name] = _const_entry(starts[name])
                 comments[("model", f"{constants_key}.{name}")] = "--const, passed through **kwargs"
-            else:
+            elif isinstance(starts[name], SCALARS) or (arrays and _array_info(starts[name])) \
+                    or not _fixed_start(name, starts[name], data, comments, constants_key):
                 variables[name] = _extra_info(name, starts[name], arrays)
                 comments[(section, name)] = "start from --start (passed through **kwargs)"
     if time_args and allow_time:
@@ -756,6 +758,48 @@ def _unwrap_descriptor(p):
             or not hasattr(type(default), "__get__") or not hasattr(default, "default"):
         return p
     return p.replace(default=default.default)
+
+
+def _documented_ndarray(fn, name):
+    """Whether ``fn``'s numpydoc docstring types argument ``name`` as an ndarray (gym-pybullet-drones'
+    ``action : ndarray | dict[..]``), not as array_like: then a list won't do.
+
+    :param fn: the function or method.
+    :param name: the argument.
+    :type name: str
+    :rtype: bool
+    """
+    doc = inspect.getdoc(fn) or ""
+    line = re.search(rf"^{re.escape(name)}\s*:\s*(.+)$", doc, re.M)
+    return bool(line) and re.search(r"\b(?:np\.|numpy\.)?ndarray\b", line.group(1)) is not None
+
+
+def _fixed_start(name, value, data, comments, constants_key):
+    """Write a ``--start`` value that can't be an FMU variable as a fixed value, as ``--const`` would: a list of
+    strings (gliner's ``labels=['person', 'organization']``), a tuple of mixed values, a dict of lists.
+
+    :param name: the argument.
+    :type name: str
+    :param value: the ``--start`` value.
+    :param data: the config being inferred; updated in place.
+    :type data: dict
+    :param comments: ``(section, key) -> text``; updated in place.
+    :type comments: dict
+    :param constants_key: ``"constants"`` or ``"call_constants"``.
+    :type constants_key: str
+    :return: False when it isn't a Python literal (then it can't be written either).
+    :rtype: bool
+    """
+    text = repr(value)
+    try:
+        if ast.literal_eval(text) != value:
+            return False
+    except (ValueError, TypeError, SyntaxError, MemoryError, RecursionError):
+        return False
+    data["model"].setdefault(constants_key, {})[name] = _const_entry({"python": text})
+    comments[("constant", f"{constants_key}.{name}")] = ("from --start: not a number, string, bool or array, so a "
+                                                         "fixed value, not an FMU variable")
+    return True
 
 
 def _extra_info(name, value, arrays):

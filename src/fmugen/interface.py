@@ -1977,7 +1977,8 @@ def _pick_method(cls, starts=None, constructor=None):
     """The step method of a class: the first of :data:`CALL_NAMES` it has (``update`` only when it has no
     :data:`STEP_LIKE` method: osqp's ``update`` changes settings, ``solve`` runs it), else ``__next__`` for an
     iterator, else the only method the ``--start`` names fit (:func:`_methods_taking`), else the one they point
-    at (:func:`_method_from_starts`), else its only public method, else the best of
+    at (:func:`_method_from_starts`), else the only public method the class defines (unless it inherits a
+    :data:`STEP_LIKE` one), else the best of
     :func:`_rank_methods`: asked at a prompt in a terminal (:func:`_ask_method`), else picked with a warning
     listing the candidates.
 
@@ -1996,6 +1997,19 @@ def _pick_method(cls, starts=None, constructor=None):
     has_step = any(callable(getattr(cls, m, None)) for m in STEP_LIKE)
     left = _leftover_starts(constructor, starts)
     fitting = _methods_taking(cls, left) if left else []
+    if not left and starts and constructor is not None:   # it takes **kwargs: names it doesn't declare that a
+        undeclared = _undeclared_starts(constructor, starts)   # method does are the step's (transformers'
+        if undeclared and _methods_taking(cls, undeclared):    # from_pretrained(name, **kwargs), forward(pixel_values))
+            left, fitting = undeclared, _methods_taking(cls, undeclared)
+    if _ase_calculator(cls) and (not left or _fits(cls.get_potential_energy, left)):
+        return "get_potential_energy", (f"get_potential_energy(): {cls.__name__} is an ASE calculator, whose "
+                                        "calculate() only fills its results (pass --call METHOD to choose another)")
+    forward = getattr(cls, "forward", None)
+    if left and callable(forward) and _only_varargs(forward) and _only_varargs(getattr(cls, "__call__", None)) \
+            and all("forward" in m for m in fitting):
+        # a torch module whose forward(*args) dispatches (spikingjelly's single_step_forward / multi_step_forward;
+        # not gliner's, whose predict_entities(text, labels) the names fit)
+        return "forward", f"forward(): {cls.__name__}() runs it, and it takes any arguments"
     for name in CALL_NAMES:
         if name == "update" and has_step:
             continue
@@ -2016,7 +2030,9 @@ def _pick_method(cls, starts=None, constructor=None):
     picked = _method_from_starts(cls, starts, constructor)
     if picked:
         return picked
-    if len(public) == 1:
+    # pygam's LinearGAM defines only prediction_intervals, predict is inherited; botorch's SingleTaskGP only
+    # forward, and X is posterior's
+    if len(public) == 1 and (not has_step or public[0] in STEP_LIKE) and (not fitting or public[0] in fitting):
         return public[0], None
     ranked = _rank_methods(cls, starts, constructor, fitting)
     if not ranked:
@@ -2030,6 +2046,18 @@ def _pick_method(cls, starts=None, constructor=None):
                      f"{ranked[0]}() (candidates, best first: {shown}); pass --call METHOD to choose another\n")
     return ranked[0], (f"{ranked[0]}() guessed: it's not clear which method runs a step (candidates, best first: "
                        f"{shown}); pass --call METHOD to choose another")
+
+
+def _ase_calculator(cls):
+    """Whether ``cls`` follows ASE's calculator interface (orb's ORBCalculator, SevenNet's, mace's): its
+    ``calculate(atoms, properties, system_changes)`` returns nothing, ``get_potential_energy(atoms)`` the energy.
+
+    :param cls: the class.
+    :type cls: type
+    :rtype: bool
+    """
+    return all(callable(getattr(cls, m, None)) for m in ("calculate", "get_potential_energy", "get_property")) \
+        and any(k.__name__ in ("Calculator", "BaseCalculator") and k.__module__.startswith("ase.") for k in cls.__mro__)
 
 
 def _ask_method(cls, ranked):
@@ -2071,7 +2099,7 @@ def _ask_method(cls, ranked):
 
 #: Method names that usually run a model, best first: picked when nothing else tells the step method
 #: (the --call of the tested models: sklearn-like predict, solve, run, forecast, ...).
-STEP_LIKE = ("predict", "forecast", "simulate", "solve", "run", "run_steps", "compute", "propagate", "forward",
+STEP_LIKE = ("predict", "forecast", "simulate", "solve", "run", "run_steps", "compute", "propagate", "integrate", "forward",
              "evaluate", "transcribe", "encode", "calculate", "process", "apply")
 #: Method names (or prefixes, ending in _) that set a model up when the class also has a :data:`STEP_LIKE`
 #: method (sklearn's fit before predict, osqp's update before solve); without one, fit and train run the
@@ -2121,7 +2149,8 @@ def _rank_methods(cls, starts, constructor, fitting=()):
             tier = 0 if mine and covered else 1 if mine else 2
         except (TypeError, ValueError):   # a C method: may take anything
             taken, covered, tier = 0, True, 1
-        not_step = _named(m, NOT_STEP) or has_step and _named(m, SETUP_IF_STEP)
+        not_step = _named(m, NOT_STEP) or has_step and _named(m, SETUP_IF_STEP) \
+            or m.lower().startswith("internal")   # libroadrunner's internalOneStep, beside oneStep
         first = m.split("_")[0]
         place = (STEP_LIKE.index(m) if m in STEP_LIKE else STEP_LIKE.index(first) + 0.5 if first in STEP_LIKE
                  else len(STEP_LIKE) if m in ("fit", "train") else len(STEP_LIKE) + 1)
@@ -2397,13 +2426,22 @@ def _pick_create(cls, starts):
         except (TypeError, ValueError):
             continue
         for_steps |= {n for n in names if n.startswith(f"{m.strip('_')}_")}
+    # ...unless a classmethod requires it: transformers' from_pretrained(pretrained_model_name_or_path), which
+    # load_custom_generate also takes, optionally
+    for m in dir(cls):
+        if not m.startswith("_") and _builds(cls, m):
+            try:
+                for_steps -= {n for n, p in inspect.signature(getattr(cls, m)).parameters.items()
+                              if p.default is p.empty and p.kind not in (p.VAR_POSITIONAL, p.VAR_KEYWORD)}
+            except (TypeError, ValueError):
+                continue
     blocked = set() if takes_any else names - declared - for_steps
     missing = {n for n in declared if init[n].default is init[n].empty} - names
     if not blocked and not missing:
         return None, None
     fits = []
     for m in dir(cls):
-        if m.startswith("_") or not isinstance(inspect.getattr_static(cls, m, None), classmethod):
+        if m.startswith("_") or not _builds(cls, m):
             continue
         try:
             params = inspect.signature(getattr(cls, m)).parameters.values()
@@ -2413,12 +2451,37 @@ def _pick_create(cls, starts):
         kwargs = any(p.kind is p.VAR_KEYWORD for p in params)
         required = {p.name for p in params if p.kind not in (p.VAR_POSITIONAL, p.VAR_KEYWORD) and p.default is p.empty}
         if required <= names and (names & own or kwargs) and (not blocked or blocked & own or kwargs):
-            fits.append(m)
+            fits.append((m, bool(names & own)))
+    # those naming one of them, before those only taking **kwargs (transformers' from_pretrained before
+    # from_encoder_decoder_pretrained, for pretrained_model_name_or_path)
+    fits = [m for m, named in fits if named] or [m for m, _ in fits]
     if len(fits) == 1:
         why = (f"{', '.join(sorted(blocked))} not arguments of {cls.__name__}()" if blocked
                else f"{cls.__name__}() requires {', '.join(sorted(missing))}")
         return fits[0], f"{cls.__name__}.{fits[0]}(...) builds it: {why}, and it's the only classmethod that fits"
     return None, None
+
+
+def _builds(cls, name):
+    """Whether ``cls.name`` builds an object of the class: a classmethod, or a staticmethod annotated to return
+    the class (piper's ``PiperVoice.load(model_path) -> 'PiperVoice'``).
+
+    :param cls: the class.
+    :type cls: type
+    :param name: the attribute.
+    :type name: str
+    :rtype: bool
+    """
+    raw = inspect.getattr_static(cls, name, None)
+    if isinstance(raw, classmethod):
+        return True
+    if not isinstance(raw, staticmethod):
+        return False
+    try:
+        returned = inspect.signature(raw.__func__).return_annotation
+    except (TypeError, ValueError):
+        return False
+    return returned is cls or (isinstance(returned, str) and returned.strip("'\"").split(".")[-1] == cls.__name__)
 
 
 def _method_from_starts(cls, starts, constructor):
@@ -2539,12 +2602,54 @@ def _fits(fn, names):
     try:
         params = [p for p in inspect.signature(fn).parameters.values()
                   if p.name != "self" and p.kind not in (p.VAR_POSITIONAL, p.VAR_KEYWORD)]
+        declared = {p.name for p in params}
+        required = {p.name for p in params if p.default is p.empty}
     except (TypeError, ValueError):
-        return False
-    declared = {p.name for p in params}
-    required = {p.name for p in params if p.default is p.empty}
+        documented = _doc_signature(fn)
+        if documented is None:
+            return False
+        declared, required = documented
     wanted = {n.partition(".")[0] for n in names}
     return wanted <= declared and required <= wanted
+
+
+#: A pybind11 / nanobind docstring's first line: ``get_Ar00(self: teqp.AbstractModel, T: float, ...) -> float``.
+_DOC_SIGNATURE = re.compile(r"^\s*(\w+)\((.*)\)\s*(?:->.*)?$")
+
+
+def _doc_signature(fn):
+    """The arguments a C method's docstring declares in its first line, as pybind11 and nanobind write it, when
+    it has no readable signature (teqp's ``get_Ar00(self, T, rho, molefrac)``).
+
+    :param fn: a function or method.
+    :return: ``(declared names, required names)``, or None: no such line, or ``*args`` / ``arg0`` names
+        (then the names aren't the real ones).
+    :rtype: tuple[set, set] or None
+    """
+    doc = getattr(fn, "__doc__", None) or ""
+    match = _DOC_SIGNATURE.match(doc.strip().splitlines()[0]) if doc.strip() else None
+    if not match or match.group(1) != getattr(fn, "__name__", None):
+        return None
+    parts, depth, current = [], 0, ""
+    for ch in match.group(2):   # split on the commas outside brackets: ndarray[float64[m, 1]]
+        depth += (ch in "([{") - (ch in ")]}")
+        if ch == "," and depth == 0:
+            parts.append(current)
+            current = ""
+        else:
+            current += ch
+    parts.append(current)
+    declared, required = set(), set()
+    for part in (p.strip() for p in parts if p.strip()):
+        name = re.split(r"[:=]", part, maxsplit=1)[0].strip()
+        if name in ("self", "/", "*") or name.startswith("*"):
+            continue
+        if not name.isidentifier() or re.fullmatch(r"arg\d+", name):
+            return None
+        declared.add(name)
+        if "=" not in part:
+            required.add(name)
+    return declared, required
 
 
 def _methods_taking(cls, names):
@@ -2590,6 +2695,8 @@ def _returned_method(fn, data, starts):
                                                                       types.ModuleType, *SCALARS)):
         return None
     cls = type(model)
+    if _ase_calculator(cls) and _fits(cls.get_potential_energy, left):
+        return "get_potential_energy", left, "the energy of an ASE calculator, whose calculate() only fills its results"
     fitting = _methods_taking(cls, left)
     if len(fitting) == 1:
         return fitting[0], left, "the only method they fit"

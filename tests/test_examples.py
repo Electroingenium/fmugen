@@ -330,7 +330,7 @@ def test_an_environment_steps_with_an_action_from_its_space_after_reset(tmp_path
                 return {"x": self.state}
     """)
     data, text = run(f"{path}:Env", tmp_path, probe=True)
-    assert data["model"]["setup"] == ["reset"] and data["inputs"]["action"]["start"] == 0
+    assert data["model"]["setup"] == ["reset(seed=0)"] and data["inputs"]["action"]["start"] == 0
     assert "from the model's action or observation space" in text
 
 
@@ -557,6 +557,36 @@ def test_a_readme_showing_several_queries_leads_with_the_step(tmp_path):
     """)
     data, _ = run(f"{path}:Option", tmp_path, probe=True)
     assert data["model"]["call"] == "price" and "setup" not in data["model"]
+
+
+def test_a_class_built_and_used_at_once_gives_the_step(tmp_path):
+    # like umap's README: embedding = umap.UMAP().fit_transform(digits.data)
+    path = write(tmp_path, "embed.py", """
+        class Embedder:
+            def __init__(self, k):
+                self.k = k
+
+            def fit(self, X):
+                self.mean = sum(X) / len(X)
+                return self
+
+            def update(self, X):
+                self.mean = (self.mean + sum(X) / len(X)) / 2
+
+            def fit_transform(self, X):
+                self.fit(X)
+                return [x - self.mean for x in X]
+    """)
+    write(tmp_path, "README.md", """
+        ```python
+        import embed
+        data = [1.0, 2.0, 3.0]
+        result = embed.Embedder(k=3).fit_transform(data)
+        ```
+    """)
+    data, _ = run(f"{path}:Embedder", tmp_path, starts={"X": [1.0, 2.0, 3.0]})
+    assert data["model"]["call"] == "fit_transform"
+    assert data["parameters"]["k"]["start"] == 3
 
 
 def test_a_method_iterated_in_a_loop_header_is_the_step(tmp_path):
