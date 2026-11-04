@@ -48,8 +48,9 @@ Columns: **`init` / `init --probe`**: given only the model and `--start` values 
 | `init` writes a config | 262 |
 | `init --probe` writes a config | 268 |
 | **Simulates with useful results** (a config from `init` or `init --probe`) | **261** |
-| …of which given only the model and `--start` values | **115** |
-| …of which given other options (`--call`, `--const`, `--setup`, …) | **146** |
+| …of which given only the model and `--start` values | **118** |
+| …of which given only `--call` besides them | **40** |
+| …of which given other options (`--const`, `--setup`, `--create`, …) | **103** |
 | …or with a hand-written config | **280** |
 | Fails | **11**: 3 need a wrapper; 8 of those tested on 2026-11-03 (below) |
 | **Compiled FMU simulates** | **267**; py-pde and 3 of those tested on 2026-11-03 (pysr, SevenNet, JSBSim) simulate uncompiled only; orb, piper, skyfield, kokoro and the 6 fixed later on 2026-11-04 (below), which work since then, weren't compiled |
@@ -83,9 +84,10 @@ How far each step gets:
 | Config | Models | Success |
 |---|---|---|
 | `init` (code only), given other options where needed | 59 of 291 | 20 % |
-| `init --probe` (or `init`, when it already works), given only the model and `--start` values | 108 of 291 | 37 % |
-| `init --probe` (or `init`), given other options where needed (`--call`, `--const`, `--setup`, …) | 247 of 291 | 85 % |
-| `init --probe` + a hand-written config | 270 of 291 | 93 % |
+| `init --probe` (or `init`, when it already works), given only the model and `--start` values | 118 of 291 | 41 % |
+| `init --probe` (or `init`), given also `--call` where needed, no other option | 158 of 291 | 54 % |
+| `init --probe` (or `init`), given other options where needed (`--call`, `--const`, `--setup`, …) | 261 of 291 | 90 % |
+| `init --probe` + a hand-written config | 280 of 291 | 96 % |
 
 
 The `init` config fails mostly on models that return arrays, tuples, strings or objects, which only `--probe` types correctly; the error message points to it. Of the 67 `init` configs of the first group that simulate, 23 only output parameters, settings or constants. GEKKO models keep their results in GEKKO variables, which only `--probe` finds. The hand configs add `PropsSI`, cantera, PyTCI and the kalman example ([Hand configs](#hand-configs)), pandapower, seirsplus, tellurium, the GEKKO model OpenHENS, sgp4 and pybamm ([configs](match-testing-rerun/configs/)).
