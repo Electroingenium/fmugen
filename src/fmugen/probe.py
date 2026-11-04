@@ -29,6 +29,54 @@ from fmugen.arguments import (
 #: Step size (and end time) passed to a probe call's time arguments.
 PROBE_STEP_SIZE = 1.0
 
+#: ``init --read``: ``{output name: "attr:<path>" or "return[:<path>]"}``, set by
+#: :func:`fmugen.interface.infer_config` while it runs.
+REQUESTED_READS = {}
+#: Why reading a requested output failed in the latest probe: ``{name: text}``.
+READ_ERRORS = {}
+
+
+def _requested_outputs(data, comments, arrays, obj=None, result=None):
+    """Add the ``init --read`` outputs, typed by what their path gives after the probe's step.
+
+    A path that fails, or gives no FMI value, is recorded in :data:`READ_ERRORS` instead; the
+    caller of the probe reports it if no later attempt reads it.
+
+    :param data: the config being inferred; updated in place.
+    :type data: dict
+    :param comments: ``(section, key) -> text`` for :func:`render_toml`; updated in place.
+    :type comments: dict
+    :param arrays: whether arrays may be FMU variables (FMI 3).
+    :type arrays: bool
+    :param obj: the model object after the step (classes), or None.
+    :param result: what the step returned.
+    """
+    from fmugen.templates.fmugen_runtime import get_path
+    for name, source in REQUESTED_READS.items():
+        where, _, path = source.partition(":")
+        try:
+            if where == "attr" and obj is None:
+                raise InterfaceError("attr: reads the model object, and this model is called as a function: "
+                                     "read its result with return:...")
+            start = obj if where == "attr" else result
+            value = get_path(start, path) if path else start
+        except InterfaceError as e:
+            READ_ERRORS[name] = str(e)
+            continue
+        except Exception as e:
+            READ_ERRORS[name] = f"reading it failed after the probe's step: {type(e).__name__}: {e}"
+            continue
+        if not _fmi_value(value, arrays):
+            READ_ERRORS[name] = (f"it gives {type(value).__name__}, not a number, bool or string"
+                                 + ("" if arrays else " (arrays and bytes need --fmi 3)"))
+            continue
+        READ_ERRORS.pop(name, None)
+        for section in ("outputs", "locals"):
+            data.get(section, {}).pop(name, None)
+        data.setdefault("outputs", {})[name] = _typed({"from": source}, value, arrays)
+        shown = repr(_scalar_of(value))
+        comments[("outputs", name)] = f"--read; {shown if len(shown) <= 40 else shown[:37] + '...'} in the probe"
+
 def _run_setup(data, obj=None):
     """Run ``[model] setup`` steps for the probe: functions before construction, methods after.
 
@@ -262,6 +310,7 @@ def _probe_class(cls, method_name, data, comments, arrays, call_starts, create, 
         for attr in data["outputs"]:
             comments[("outputs", attr)] = f"changed by {method_name}(); an output, since the probe found no other"
             comments.pop(("locals", attr), None)
+    _requested_outputs(data, comments, arrays, obj=obj, result=result)
     _check_sizes(obj, method_name, data, comments)
     _check_tunable(obj, method_name, data, comments, arrays)
     return obj, returned, set(getattr(obj, "__dict__", {})) | set(_property_values(obj, arrays)) | unfit

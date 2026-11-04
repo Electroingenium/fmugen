@@ -644,7 +644,7 @@ NO_OUTPUTS = "no outputs found: add [outputs] by hand (e.g. attributes or proper
 
 
 def init(target, output=None, call=None, force=False, fmi_version=None, starts=None, setup=None, kind=None,
-         create=None, probe=False, converts=None):
+         create=None, probe=False, converts=None, reads=None):
     """Write the inferred config for a model (``fmugen init``).
 
     Warnings about assumptions are printed to stderr.
@@ -671,6 +671,8 @@ def init(target, output=None, call=None, force=False, fmi_version=None, starts=N
     :type probe: bool or float
     :param converts: ``--convert`` options.
     :type converts: dict or None
+    :param reads: ``--read`` options: ``{output name: "attr:..." or "return[:...]"}``.
+    :type reads: dict or None
     :return: ``(written path or None when printed, config dict)``.
     :rtype: tuple
     :raises FileExistsError: the config exists and ``force`` is false.
@@ -684,7 +686,7 @@ def init(target, output=None, call=None, force=False, fmi_version=None, starts=N
     with isolated_imports():
         data, comments = infer_config(target, call=call, config_dir=output.parent, fmi_version=fmi_version,
                                       starts=starts, setup=setup, kind=kind, create=create, probe=probe,
-                                      converts=converts)
+                                      converts=converts, reads=reads)
     warnings = _init_warnings(data, comments, probe)
     if model_path and model_path.stem in RESERVED_MODULES:
         warnings.insert(0, f"{model_path.name} clashes with a UniFMU backend module, so build will refuse it; "

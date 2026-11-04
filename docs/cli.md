@@ -24,7 +24,7 @@ Imports the model, reads its signatures and **its source code**, and writes a co
 ```
 fmugen init MODEL [-o OUTPUT] [--call METHOD] [--fmi {2,3}]
                   [--start NAME=VALUE ...] [--const NAME=VALUE ...] [--setup CALL ...] [--kind function] [--create CLASSMETHOD]
-                  [--probe [--probe-timeout SECONDS]] [--convert NAME=module:function ...]
+                  [--probe [--probe-timeout SECONDS]] [--convert NAME=module:function ...] [--read NAME=PATH ...]
                   [--force] [--debug]
 ```
 
@@ -41,6 +41,7 @@ fmugen init MODEL [-o OUTPUT] [--call METHOD] [--fmi {2,3}]
 | `--create CLASSMETHOD` | none | Classes built by a factory: the classmethod that creates the object, e.g. `from_pretrained`. Its arguments become parameters (writes `[model] create`). |
 | `--probe` | off | Also **call the model once**: run the setup calls, build the object, call the step with the start values (retrying array inputs as numpy arrays, then tensors, and number inputs as one-element numpy arrays, `convert = "numpy:atleast_1d"`, for libraries that take only arrays), and try to pickle the object. Time arguments from `[time]` get `1.0` for `step_size` and `end_time`, `0.0` otherwise. Finds what the code doesn't show: array sizes, exact types, results built at runtime, unannotated properties, and `save_state`. Results the code shows but the probe didn't reach are added too. When an argument that looks like the model's data (an image, audio, a signal, a table, a file) wasn't given, it warns and suggests the `--const` or `--start` that gives it ([init.md](init.md#with---probe)). Without `--probe`, the model is never called. |
 | `--convert NAME=module:function` | none | How an argument is passed to the model, e.g. `x=torch:tensor`, `x=numpy` for a numpy array, or `x=pint` for a pint quantity (needs a `unit` on the variable); writes `convert` / `numpy`. Repeatable. Not needed when the argument is annotated (`torch.Tensor`, `np.ndarray`). For a step method argument the constructor also has, `<method>_NAME` names the method's one, as with `--start`, and NAME then only the constructor's. |
+| `--read NAME=PATH` | none | An output at a path the probe doesn't search: `attr:PATH` on the object after a step (classes), `return` or `return:PATH` in what the step returns; written as `NAME = { from = "PATH" }`. The path is read as in [config.md](config.md) (keys, indexes, `-1`, method calls with `()`), e.g. a private attribute (`tac=attr:_best_solns.0.case.TAC`), a method chain (`h=attr:get_model().output.head().get_data()`) or a key on an object that isn't a dict (`V='return:Voltage [V].entries.-1'`). With `--probe`, the path is read after the probe's step and its type and size written; init stops if it fails or gives no FMI value. Without it, the output is written as a number, unchecked. Repeatable. |
 | `--force` | off | Overwrite an existing config. |
 | `--probe-timeout SECONDS` | no limit | With `--probe`: stop (exit code 2) if the probe hasn't finished by then, e.g. a model waiting for a device. The model's code can't be interrupted, so `fmugen` exits. |
 | `--debug` | off | Show the full traceback of an unexpected error instead of a one-line message. |

@@ -10,11 +10,37 @@
     fmugen build path/to/fmugen.toml -o out/model.fmu --distributed  # proxy FMU + out/model_private/
 """
 import argparse
+import re
 import sys
 
 from fmugen.builder import FORMATS, build, init
 from fmugen.config import InterfaceError
 from fmugen.distribute import COMPILERS
+
+
+#: An output name for ``--read``: dotted names are allowed, as the probe writes them.
+_OUTPUT_NAME = re.compile(r"[A-Za-z_]\w*(\.\w+)*")
+
+
+def _parse_reads(items):
+    """Parse ``--read`` options.
+
+    :param items: ``NAME=attr:<path>`` or ``NAME=return[:<path>]`` strings.
+    :type items: list[str]
+    :return: ``{NAME: path}``.
+    :rtype: dict
+    :raises InterfaceError: a malformed option.
+    """
+    reads = {}
+    for item in items:
+        name, sep, source = item.partition("=")
+        name, source = name.strip(), source.strip()
+        if not sep or not _OUTPUT_NAME.fullmatch(name) or not (
+                source == "return" or source.startswith(("return:", "attr:")) and source.partition(":")[2]):
+            raise InterfaceError(f"--read {item!r}: expected NAME=attr:PATH or NAME=return[:PATH] "
+                                 "(e.g. h=attr:get_model().output.head().get_data())")
+        reads[name] = source
+    return reads
 
 
 def _parse_converts(items):
@@ -193,6 +219,10 @@ def main(argv=None):
                    help="also call the model once (setup, construction, one step) with the start values, to find "
                         "what the code doesn't show: array sizes, exact types, results built at runtime, whether "
                         "its state can be saved. Without it, the model is never called")
+    i.add_argument("--read", action="append", default=[], metavar="NAME=PATH",
+                   help="an output at a path the probe doesn't search: attr:PATH on the object after a step, "
+                        "return[:PATH] in what it returns, e.g. V='return:Voltage [V].entries.-1'; with --probe "
+                        "its type is read and the path checked; repeatable")
     i.add_argument("--convert", action="append", default=[], metavar="NAME=module:function",
                    help="how an argument is passed to the model, e.g. x=torch:tensor or x=numpy; repeatable")
 
@@ -249,7 +279,8 @@ def main(argv=None):
             output, _data = init(args.model, args.output, args.call, args.force, args.fmi,
                                 _starts_and_consts(_parse_starts(args.start), _parse_consts(args.const),
                                                    list(dict.fromkeys(args.value_order))),
-                                args.setup, args.kind, args.create, args.probe, _parse_converts(args.convert))
+                                args.setup, args.kind, args.create, args.probe, _parse_converts(args.convert),
+                                _parse_reads(args.read))
             if output:
                 print(f"Wrote {output.resolve()}; review it, then run: fmugen build {output}")
             return

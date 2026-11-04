@@ -38,6 +38,7 @@ from fmugen.probe import (
     ConstantError, _run_setup, _probe_call, _probe_class, _forwarded,
     _outputs_from_return, _add_returned, _add_attributes, _detect_states,
     _taken, _split_varargs, _varargs_by_keyword, MADE_UP_TEXT, object_names,
+    _requested_outputs, REQUESTED_READS, READ_ERRORS,
 )
 
 #: Step method names tried in order when a class is given without ``--call``.
@@ -119,7 +120,7 @@ def parse_target(target):
 
 
 def infer_config(target, call=None, config_dir=None, fmi_version=None, starts=None, setup=None, kind=None,
-                 create=None, probe=False, converts=None):
+                 create=None, probe=False, converts=None, reads=None):
     """Infer a config for a model target (``fmugen init``, and ``fmugen build model.py``).
 
     With fmi_version=3, list/tuple/numpy values become array variables and bytes become Binary.
@@ -148,6 +149,9 @@ def infer_config(target, call=None, config_dir=None, fmi_version=None, starts=No
     :type probe: bool or float
     :param converts: ``{argument: "module:function" or "numpy"}``: how arguments are passed in.
     :type converts: dict or None
+    :param reads: ``{output name: "attr:<path>" or "return[:<path>]"}`` (``--read``): outputs at
+        paths the probe doesn't search, typed by what they give in the probe.
+    :type reads: dict or None
     :return: ``(config dict, {(section, name): comment})``.
     :rtype: tuple[dict, dict]
     :raises InterfaceError: the model can't be imported, the target is ambiguous, or the options
@@ -163,23 +167,54 @@ def infer_config(target, call=None, config_dir=None, fmi_version=None, starts=No
     if path:
         target = f"{path.resolve()}" + (f":{name}" if name else "")
     _factory_models.clear()
-    with contextlib.chdir(config_dir), _source_reads() as reads:
-        if probe is True or not probe:
-            data, comments = _infer_config(target, call, config_dir, fmi_version, starts, setup, kind, create, probe,
-                                           converts)
-        else:
-            data, comments = _with_timeout(float(probe), _infer_config, target, call, config_dir, fmi_version, starts,
-                                           setup, kind, create, True, converts)
-        missing = _missing_data(data, comments, starts or {})
-        if missing:
-            comments[("init", "data_arguments")] = missing
-    _factory_models.clear()
+    REQUESTED_READS.clear()
+    REQUESTED_READS.update(reads or {})
+    READ_ERRORS.clear()
+    try:
+        with contextlib.chdir(config_dir), _source_reads() as reads:
+            if probe is True or not probe:
+                data, comments = _infer_config(target, call, config_dir, fmi_version, starts, setup, kind, create,
+                                               probe, converts)
+            else:
+                data, comments = _with_timeout(float(probe), _infer_config, target, call, config_dir, fmi_version,
+                                               starts, setup, kind, create, True, converts)
+            missing = _missing_data(data, comments, starts or {})
+            if missing:
+                comments[("init", "data_arguments")] = missing
+        _unread_requests(data, comments, probe)
+    finally:
+        _factory_models.clear()
+        REQUESTED_READS.clear()
+        READ_ERRORS.clear()
     if reads:
         shown = ", ".join(sorted(reads)[:3]) + (f" and {len(reads) - 3} more" if len(reads) > 3 else "")
         comments[("model", "#compile")] = (f"--compile won't work: the model's libraries read their own source files "
                                            f"by path ({shown}), and a compiled FMU has none; build without --compile, "
                                            "or with --vendor")
     return data, comments
+
+
+def _unread_requests(data, comments, probe):
+    """Add the ``--read`` outputs the probe didn't add, or stop on one it couldn't read.
+
+    :param data: the inferred config; updated in place.
+    :type data: dict
+    :param comments: ``(section, key) -> text``; updated in place.
+    :type comments: dict
+    :param probe: whether ``--probe`` was given.
+    :raises InterfaceError: the probe's step worked, and a requested path failed or gave no FMI value.
+    """
+    for name, source in REQUESTED_READS.items():
+        if data.get("outputs", {}).get(name, {}).get("from") == source and ("outputs", name) in comments:
+            continue
+        if name in READ_ERRORS and comments.get(PROBED):
+            raise InterfaceError(f"--read {name}={source}: {READ_ERRORS[name]}")
+        for section in ("outputs", "locals"):
+            data.get(section, {}).pop(name, None)
+        data.setdefault("outputs", {})[name] = {"from": source}
+        comments[("outputs", name)] = ("--read; not checked, since the probe's step didn't run" if probe else
+                                       "--read; type not checked: a number unless you say otherwise, "
+                                       "or run init --probe")
 
 
 @contextlib.contextmanager
@@ -1741,6 +1776,8 @@ def _infer_function(fn, data, comments, arrays=False, starts=None, probe=False, 
         else:
             comments[PROBED] = True
             seen = _outputs_from_return(result, data, comments, default_name="y", is_class=False, arrays=arrays)
+            _requested_outputs(data, comments, arrays, result=result)
+            seen |= {n for n in REQUESTED_READS if n in data.get("outputs", {})}
             returned_names |= seen
             if result is None:
                 _suggest_object_step(data, comments)
