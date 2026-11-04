@@ -162,6 +162,7 @@ def infer_config(target, call=None, config_dir=None, fmi_version=None, starts=No
             f"(not {config_dir})")
     if path:
         target = f"{path.resolve()}" + (f":{name}" if name else "")
+    _factory_models.clear()
     with contextlib.chdir(config_dir), _source_reads() as reads:
         if probe is True or not probe:
             data, comments = _infer_config(target, call, config_dir, fmi_version, starts, setup, kind, create, probe,
@@ -169,6 +170,10 @@ def infer_config(target, call=None, config_dir=None, fmi_version=None, starts=No
         else:
             data, comments = _with_timeout(float(probe), _infer_config, target, call, config_dir, fmi_version, starts,
                                            setup, kind, create, True, converts)
+        missing = _missing_data(data, comments, starts or {})
+        if missing:
+            comments[("init", "data_arguments")] = missing
+    _factory_models.clear()
     if reads:
         shown = ", ".join(sorted(reads)[:3]) + (f" and {len(reads) - 3} more" if len(reads) > 3 else "")
         comments[("model", "#compile")] = (f"--compile won't work: the model's libraries read their own source files "
@@ -3006,6 +3011,191 @@ def _factory_run(fn, data, comments, starts, options):
     return None
 
 
+#: Factory function -> the callable model it returned in the probe (:func:`_returns_callable`), for one inference.
+_factory_models = {}
+#: Words of argument names that are the data a model runs on (``pixel_values``, ``audio``, ``signal``, ``X``).
+DATA_WORDS = {"image", "images", "img", "imgs", "pixel", "pixels", "picture", "photo", "frame", "frames", "video",
+              "audio", "sound", "speech", "wav", "waveform", "waveforms", "signal", "signals", "ecg", "eeg", "emg",
+              "series", "data", "x", "inputs", "input", "samples", "sample", "observations", "text", "texts",
+              "sentence", "sentences", "document", "documents", "docs", "tokens", "file", "filename", "path",
+              "sbml", "uri", "df", "table", "pages", "point", "points", "cloud", "mesh"}
+#: Last words of argument names that are settings about the data, not the data (``sampling_rate``, ``data_format``).
+SETTING_WORDS = {"rate", "format", "type", "dir", "dirs", "size", "sizes", "shape", "mode", "kind", "name", "names",
+                 "dtype", "len", "length", "count", "column", "columns", "key", "keys", "range", "freq", "level",
+                 "scale", "dim", "dims", "index", "id", "ids", "fn", "func", "function", "kwargs", "options",
+                 "config", "processor", "loader", "mask", "unit", "units"}
+#: Annotation or docstring types that are data: tensors, images, tables, audio bytes (not arrays: parameters and
+#: geometry are arrays too, pastas' p and ccblade's chord).
+DATA_TYPES = re.compile(r"\b(?:Tensor|Image|DataFrame|bytes|PathLike)\b")
+
+
+def _qualified(fn):
+    """``(module, qualified name)`` of a function: the same for a model file imported again by path."""
+    return getattr(fn, "__module__", None), getattr(fn, "__qualname__", None)
+
+
+def _looks_like_data(name, annotation=""):
+    """Whether argument ``name`` (with its annotation or docstring type) is the data the model runs on: named
+    like :data:`DATA_WORDS` (not ending in a :data:`SETTING_WORDS` one), or typed like :data:`DATA_TYPES`.
+
+    :param name: the argument.
+    :type name: str
+    :param annotation: its annotation or docstring type, as text.
+    :type annotation: str
+    :rtype: bool
+    """
+    words = [w for w in re.split(r"_|(?<=[a-z])(?=[A-Z])", name) if w]
+    lower = [w.lower() for w in words]
+    if not lower or lower[-1] in SETTING_WORDS:
+        return False
+    return bool(set(lower) & DATA_WORDS) or name in ("X", "y_true") or bool(DATA_TYPES.search(annotation or ""))
+
+
+def _data_template(name, annotation, torch_model):
+    """A ``--const`` / ``--start`` line giving argument ``name`` from a file, for :func:`_missing_data`.
+
+    :param name: the argument.
+    :type name: str
+    :param annotation: its annotation or docstring type, as text.
+    :type annotation: str
+    :param torch_model: whether the model is a torch module (its inputs are tensors).
+    :type torch_model: bool
+    :rtype: str
+    """
+    words = {w.lower() for w in re.split(r"_|(?<=[a-z])(?=[A-Z])", name) if w}
+    if words & {"file", "filename", "path", "uri", "sbml"} or "PathLike" in annotation:
+        return f"--start {name}=path/to/file"
+    if torch_model or "Tensor" in annotation:   # a torch module's text is token ids too
+        return f"--const \"{name}=call:torch:load('{name}.pt')\""
+    if words & {"text", "texts", "sentence", "sentences", "document", "documents", "docs"}:
+        return f'--start "{name}=your text"'
+    if "Image" in annotation and "ndarray" not in annotation:
+        return f"--const \"{name}=call:PIL.Image:open('{name}.png')\""
+    if "DataFrame" in annotation or words & {"df", "table"}:
+        return f"--const \"{name}=call:pandas:read_csv('{name}.csv')\""
+    if "bytes" in annotation:
+        return f"--const \"{name}=call:pathlib:Path('{name}.raw').read_bytes()\""
+    if words & {"image", "images", "img", "imgs", "pixel", "pixels", "picture", "photo", "frame", "frames", "video",
+                "audio", "sound", "speech", "wav", "waveform", "waveforms"}:
+        return f"--const \"{name}=call:numpy:load('{name}.npy')\""
+    return f"--const \"{name}=call:numpy:loadtxt('{name}.txt')\""
+
+
+def _missing_data(data, comments, starts):
+    """Warnings for arguments that look like the data the model runs on (:func:`_looks_like_data`) and weren't
+    given: left out as a None default, made up by init, or not passed at all to the model a factory returns
+    (open_clip's ``create_model(...)``, a CLIP model taking ``image``). Each says how to give it.
+
+    :param data: the inferred config.
+    :type data: dict
+    :param comments: its comments.
+    :type comments: dict
+    :param starts: the ``--start`` / ``--const`` values given.
+    :type starts: dict
+    :return: warning lines.
+    :rtype: list[str]
+    """
+    given = {n.partition(".")[0] for n in starts}
+    entry = _entry_object(data["model"].get("entry", ""))
+    step = data["model"].get("call")
+    fn = getattr(entry, step, None) if inspect.isclass(entry) and step and ":" not in step else entry
+    factory = None if inspect.isclass(entry) else _factory_models.get(_qualified(entry))
+    try:
+        signature = inspect.signature(fn).parameters if callable(fn) else {}
+    except (TypeError, ValueError):
+        signature = {}
+    docs = {}
+    for obj in (fn, getattr(entry, "__init__", None) if inspect.isclass(entry) else None):
+        try:
+            docs.update({n: t for n, t in _documented_types(obj).items() if n not in docs})
+        except Exception:
+            pass
+    torch_model = any(k.__module__.startswith("torch.") for k in type(factory).__mro__) if factory is not None else (
+        inspect.isclass(entry) and any(k.__module__.startswith("torch.") for k in entry.__mro__))
+
+    def annotation(name, params=signature):
+        p = params.get(name)
+        shown = "" if p is None or p.annotation is p.empty else (
+            p.annotation if isinstance(p.annotation, str) else getattr(p.annotation, "__name__", str(p.annotation)))
+        return f"{shown} {docs.get(name, '')}".strip()
+
+    error = str(comments.get(("outputs", None), ""))
+    failed = error.startswith(("probe call failed", "probe construction failed"))
+    error_words = set(re.findall(r"[a-z]+", error.lower())) - SETTING_WORDS if failed else set()
+
+    def named_in_error(name):
+        return failed and (name in error or bool({w.lower() for w in name.split("_")} & error_words))
+
+    # a first argument left None is the data, unless other data was given (TrOCR's generate(inputs=None, **kwargs)
+    # given pixel_values)
+    first = None if any(_looks_like_data(n) for n in given) else next(
+        (n for n in signature if n not in ("self", "cls")), None)
+    found = {}   # name -> how it stands
+    for key, value in comments.items():
+        if key[0] == "model" and isinstance(key[1], str) and value == {"python": "None"}:
+            table, _, name = key[1].partition(".")
+            # an optional argument is the data when it comes first (biosppy's ecg(signal=None, ...)) or the
+            # probe's error asks for it: not every None path or embedding (decoder_inputs_embeds)
+            if table in ("constants", "call_constants") and name and name not in given \
+                    and (name == first or named_in_error(name)):
+                found.setdefault(name, "left out: its default is None")
+    for section in ("parameters", "inputs"):
+        for name, info in data.get(section, {}).items():
+            note = str(comments.get((section, name), ""))
+            if name not in given and ("made up" in note or "no default in the code" in note) and (
+                    "dimensions" in info or not isinstance(info.get("start"), (int, float, bool))
+                    or DATA_TYPES.search(annotation(name))):   # a number made up for x is a number, not data
+                found.setdefault(name, f"made up as {_shown_start(info)}")
+    for table in ("constants", "call_constants"):
+        for name, value in data["model"].get(table, {}).items():
+            note = str(comments.get(("constant", f"{table}.{name}"), comments.get((table, name), "")))
+            if name not in given and "made up" in note:
+                found.setdefault(name, f"made up as {value.get('call', value.get('python', value)) if isinstance(value, dict) else value}")
+    if factory is not None and not data["model"].get("call"):
+        # the model a factory returns, which the FMU never calls: its forward's (or __call__'s) data arguments
+        method = getattr(type(factory), "forward", None) or getattr(type(factory), "__call__", None)
+        try:
+            params = inspect.signature(method).parameters
+        except (TypeError, ValueError):
+            params = {}
+        for name, p in params.items():   # the first one (CLIP's forward(image=None, text=None): image)
+            if name != "self" and p.kind not in (p.VAR_POSITIONAL, p.VAR_KEYWORD) and name not in given \
+                    and _looks_like_data(name, annotation(name, params)):
+                found.setdefault(name, f"not passed: {entry.__name__}() returns a {type(factory).__name__}, whose "
+                                       f"{method.__name__}() takes it, so the FMU only reads the model's settings")
+                signature = {**signature, name: p}
+                break
+    lines = []
+    for name, how in found.items():
+        if not _looks_like_data(name, annotation(name)):
+            continue
+        if named_in_error(name):
+            how += f"; the probe failed without it ({FAILURE_MESSAGE.search(error).group(1) if FAILURE_MESSAGE.search(error) else error})"
+        lines.append(f"{name}: looks like data the model runs on, and none was given ({how}); give your own, e.g. "
+                     f"{_data_template(name, annotation(name), torch_model)}")
+    return lines
+
+
+def _shown_start(info):
+    """A variable's start value as the warning shows it: short, with an array's shape."""
+    start, dims = info.get("start"), info.get("dimensions")
+    if dims:
+        return f"an array of shape {tuple(dims)}"
+    text = repr(start)
+    return text if len(text) <= 40 else text[:37] + "..."
+
+
+def _documented_types(fn):
+    """Argument name -> the type its docstring gives (numpydoc ``name : type``, Google ``name (type):``)."""
+    doc = inspect.getdoc(fn) if fn is not None else None
+    found = {}
+    for line in (doc or "").splitlines():
+        match = re.match(r"^\s*(\w+)\s*:\s*(\S.*)$", line) or re.match(r"^\s*(\w+)\s*\(([^)]*)\)\s*:", line)
+        if match and match.group(1) not in found:
+            found[match.group(1)] = match.group(2)
+    return found
+
+
 def _returns_callable(fn, data, starts):
     """Whether ``fn`` is a factory of a callable model: the ``--start`` names it doesn't take fit the
     ``__call__`` of what it returns (silero's ``load_silero_vad()(x, sr)``).
@@ -3029,6 +3219,7 @@ def _returns_callable(fn, data, starts):
         return None
     if inspect.isclass(model) or not callable(model):
         return None
+    _factory_models[_qualified(fn)] = model   # for _missing_data: the arguments of the model it returns
     function = isinstance(model, (types.FunctionType, types.MethodType))
     if not left:   # nothing left for it: only a function it makes (lambdify), not any callable object it returns
         return [] if function and model is not fn else None

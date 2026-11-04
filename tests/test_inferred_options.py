@@ -197,3 +197,66 @@ def test_a_generative_model_steps_with_generate_when_forward_fails(tmp_path):
     data, text = run(f"{path}:Model", tmp_path, starts={"name": "trocr", "pixel_values": [0.5, 0.25]}, probe=True)
     assert data["model"]["create"] == "from_pretrained" and data["model"]["call"] == "generate"
     assert "pixel_values" in data["inputs"]
+
+
+def test_a_data_argument_left_out_is_warned_about(tmp_path, capsys):
+    # like biosppy's ecg(signal=None, sampling_rate=1000.0): the probe fails without the signal
+    path = write(tmp_path, "ecg.py", '''
+        def ecg(signal=None, sampling_rate=1000.0, show=True):
+            if signal is None:
+                raise TypeError("Please specify an input signal.")
+            return {"heart_rate": sum(signal) / sampling_rate}
+    ''')
+    run(f"{path}:ecg", tmp_path, starts={"sampling_rate": 1000.0}, probe=True)
+    err = capsys.readouterr().err
+    assert "signal: looks like data the model runs on, and none was given (left out: its default is None" in err
+    assert "the probe failed without it (Please specify an input signal.)" in err
+    assert "--const \"signal=call:numpy:loadtxt('signal.txt')\"" in err
+    assert "sampling_rate: looks like data" not in err
+
+
+def test_data_given_or_a_made_up_number_is_not_warned_about(tmp_path, capsys):
+    path = write(tmp_path, "ecg.py", '''
+        def ecg(signal=None, sampling_rate=1000.0):
+            return {"n": len(signal)}
+
+
+        def square(x):
+            return x * x
+    ''')
+    run(f"{path}:ecg", tmp_path, starts={"signal": [1.0, 2.0, 3.0]}, probe=True)
+    run(f"{path}:square", tmp_path, probe=True)
+    assert "looks like data" not in capsys.readouterr().err
+
+
+def test_the_data_of_a_model_a_factory_returns_is_warned_about(tmp_path, capsys):
+    # like open_clip's create_model(...): the CLIP model it returns takes the image, which the FMU never passes
+    path = write(tmp_path, "clip.py", '''
+        class Clip:
+            def __init__(self):
+                self.context_length = 77
+
+            def __call__(self, image=None):
+                return [0.5 * v for v in image]
+
+
+        def create_model(model_name):
+            return Clip()
+    ''')
+    run(f"{path}:create_model", tmp_path, starts={"model_name": "ViT-B-32"}, probe=True)
+    err = capsys.readouterr().err
+    assert "image: looks like data the model runs on, and none was given (not passed: create_model() returns a " \
+           "Clip, whose __call__() takes it" in err
+    assert "--const \"image=call:numpy:load('image.npy')\"" in err
+
+
+def test_data_templates_follow_the_type():
+    from fmugen.interface import _data_template, _looks_like_data
+    assert _data_template("pixel_values", "", True) == "--const \"pixel_values=call:torch:load('pixel_values.pt')\""
+    assert _data_template("img", "PIL.Image.Image", False) == "--const \"img=call:PIL.Image:open('img.png')\""
+    assert _data_template("df", "pandas.DataFrame", False) == "--const \"df=call:pandas:read_csv('df.csv')\""
+    assert _data_template("audio_path", "", False) == "--start audio_path=path/to/file"
+    assert _data_template("text", "str", False) == '--start "text=your text"'
+    assert _looks_like_data("pixel_values") and _looks_like_data("inputFrame") and _looks_like_data("q", "torch.Tensor")
+    assert not _looks_like_data("sampling_rate") and not _looks_like_data("data_format") and not _looks_like_data("tol")
+    assert not _looks_like_data("p", "array_like")   # pastas' parameters

@@ -119,6 +119,14 @@ The probe only works if the model accepts the start values, so give realistic on
 
 If the probe call still fails, `init` writes the config with what the code shows and says why in a comment.
 
+**Data you didn't give.** The data a model runs on (an image, audio, a signal, a table, a file) can't be made up usefully, so `init` warns when an argument that looks like data wasn't given: named like it (`image`, `pixel_values`, `audio`, `signal`, `X`, `data`, `text`, `path`, …, not `sampling_rate` or `data_format`) or typed like it (a tensor, `Image`, `DataFrame`, `bytes`; not an array alone, since parameters are arrays too). That covers an argument left out as a `None` default when it comes first or the probe's error asks for it, one made up as an array or an object, and the first data argument of a model a factory returns that the FMU never calls (open_clip's `create_model(...)`: the CLIP model takes `image`). The warning says how to give it, by its type:
+
+```
+warning: signal: looks like data the model runs on, and none was given (left out: its default is None; the probe failed without it (Please specify an input signal.)); give your own, e.g. --const "signal=call:numpy:loadtxt('signal.txt')"
+```
+
+The suggestion is `torch:load` for a torch model's inputs, `PIL.Image:open` for an image, `pandas:read_csv` for a table, `numpy:load` or `numpy:loadtxt` for arrays and signals, and `--start` for a path or a text: replace the file name with yours.
+
 ---
 
 ## 3. A first look: a function

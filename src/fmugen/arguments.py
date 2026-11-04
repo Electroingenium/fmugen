@@ -1459,7 +1459,10 @@ def _array_info(value, with_start=False):
     if (not isinstance(value, type) and hasattr(value, "shape") and hasattr(value, "tolist")
             and getattr(value, "ndim", 0) > 0):
         from fmugen.templates.fmugen_runtime import flatten
-        shape, flat = [int(n) for n in value.shape], flatten(value.tolist())
+        try:
+            shape, flat = [int(n) for n in value.shape], flatten(value.tolist())
+        except Exception:   # a tensor without data: torch's meta device (whisper's alignment_heads before loading)
+            return None
         fmi_type = NUMPY_TYPES.get(str(value.dtype).rpartition(".")[2])   # "float32", "torch.float32", ...
         if str(value.dtype) == "object" and flat and all(
                 isinstance(x, (int, float)) and not isinstance(x, bool) for x in flat):

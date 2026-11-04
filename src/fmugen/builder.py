@@ -711,7 +711,7 @@ def _init_warnings(data, comments, probe):
     :type probe: bool
     :rtype: list[str]
     """
-    warnings = assumptions(comments)
+    warnings = assumptions(comments) + list(comments.get(("init", "data_arguments"), []))
     outputs = data.get("outputs", {})
     if not outputs:
         warnings.append(NO_OUTPUTS)
