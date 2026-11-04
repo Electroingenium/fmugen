@@ -9,9 +9,12 @@ fmugen has been tried on **291 unmodified Python models**: about 187 PyPI librar
 | `init` (code only), given other options where needed | 59 | 20 % |
 | `init --probe`, given only the model and `--start` values | 123 | 42 % |
 | …given also `--call` where needed, no other option | 164 | 56 % |
+| …given also `--const` only for the data it runs on or the assets it loads | 211 | 73 % |
 | …given other options where needed (`--const`, `--setup`, `--create`, …) | 262 | 90 % |
 | …or with a hand-written config | 280 | 96 % |
 | **Compiled FMU (PyInstaller) simulates** | 267 | 92 % |
+
+The data-and-assets row adds 47 models whose only other flag is a `--const` giving their input (an image, audio, a signal, a data file, a series) or what they load (pretrained weights, a saved agent, a model name, a TLE, a CRS); `init --probe` warns about missing data and suggests the `--const`. Not counted there: `--const` objects that define the system (atoms, a potential, a network, an estimator, a problem), a choice of function, and values `init` should make up itself (CFTOC's arrays, onnxruntime's `input_feed`).
 
 A model counts only if its FMU simulates **and** outputs the model's results, with FMI 2 or FMI 3; an FMU that only outputs parameters or constants is a failure. Every FMU was compared value by value with the model run directly, and every compiled FMU with its uncompiled one: all matching configs are identical ([report](match-testing-rerun/report.md), [compiled](match-testing-compile-rest/report.md)).
 
