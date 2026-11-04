@@ -166,6 +166,44 @@ def test_state_of_selected_attributes(tmp_path, make_fmu, adapter):
     assert fmu.fmi2DoStep(1.0, 1.0, False) == OK and fmu.get("total") == 2.0   # rolled back, then redone
 
 
+def test_default_save_state_falls_back_to_attributes_that_can_be_pickled(tmp_path, make_fmu, adapter):
+    # a config written without --probe keeps save_state = true; the lock makes the whole object unpicklable
+    write(tmp_path, "res.py", '''
+        import threading
+
+        class Accumulator:
+            def __init__(self):
+                self.lock = threading.Lock()
+                self.total = 0.0
+
+            def step(self, u=1.0):
+                with self.lock:
+                    self.total += u
+                return {"total": self.total}
+    ''', '''
+        [model]
+        entry = "res.py:Accumulator"
+        call = "step"
+        [inputs]
+        u = { start = 1.0 }
+        [outputs]
+        total = { from = "return:total" }
+    ''')
+    fmu = adapter(make_fmu(tmp_path))
+    fmu.initialize()
+    assert fmu.fmi2DoStep(0.0, 1.0, False) == OK and fmu.get("total") == 1.0
+    status, state = fmu.fmi2SerializeFmuState()
+    assert status == OK
+    assert any("kept as they are on restore: lock" in m for _s, _c, m in fmu.logs)
+    lock = fmu.engine.obj.lock
+    assert fmu.fmi2DoStep(1.0, 1.0, False) == OK and fmu.get("total") == 2.0
+    assert fmu.fmi2DeserializeFmuState(state) == OK
+    assert fmu.engine.obj.lock is lock
+    assert fmu.fmi2DoStep(1.0, 1.0, False) == OK and fmu.get("total") == 2.0   # rolled back, then redone
+    fmu.fmi2SerializeFmuState()
+    assert sum("kept as they are on restore" in m for _s, _c, m in fmu.logs) == 1   # warned once
+
+
 def test_unpicklable_attribute_that_changes_is_flagged(tmp_path):
     # a generator advances on every step: saving only `count` would restore it wrongly, so init
     # names the attribute it leaves out and asks to check it (or set save_state = false)

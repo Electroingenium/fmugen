@@ -1005,7 +1005,9 @@ class Engine:
         the states of the global random number generators (so a rolled-back step draws the same
         numbers) and literal constants. With ``save_state = [attributes]`` only those attribute
         paths of the model object are saved; the rest (e.g. an ONNX session or a device handle)
-        stays as it is. Pickled with pickle, cloudpickle or dill (:func:`dump_state`). Also used
+        stays as it is. With ``save_state = true`` and an object that can't be pickled whole, its
+        attributes that can be are saved instead (:meth:`_picklable_attributes`). Pickled with
+        pickle, cloudpickle or dill (:func:`dump_state`). Also used
         internally by :meth:`do_step` to undo discarded steps.
 
         :return: ``(status, bytes)``; ``Status.error`` and ``b""`` when the state can't be pickled.
@@ -1026,8 +1028,45 @@ class Engine:
         try:
             return Status.ok, dump_state(state)
         except Exception as e:
-            self.log(f"cannot serialize FMU state: {e!r}", Status.error, "logStatusError")
-            return Status.error, b""
+            error = e
+        partial = self._picklable_attributes() if save is True else None
+        if partial is not None:
+            state["obj"], state["partial"] = partial, True
+            try:
+                return Status.ok, dump_state(state)
+            except Exception as e:
+                error = e
+        self.log(f"cannot serialize FMU state: {error!r}", Status.error, "logStatusError")
+        return Status.error, b""
+
+    def _picklable_attributes(self):
+        """The model object's attributes that can be pickled, when the whole object can't be.
+
+        Logs once which attributes are left out: on restore they keep their current values.
+
+        :return: ``{name: value}``, or None when the object has no attributes or none can be pickled.
+        :rtype: dict or None
+        """
+        try:
+            attrs = vars(self.obj)
+        except TypeError:
+            return None
+        saved, skipped = {}, []
+        for name, value in attrs.items():
+            try:
+                dump_state(value)
+            except Exception:
+                skipped.append(name)
+            else:
+                saved[name] = value
+        if not saved:
+            return None
+        if skipped and not getattr(self, "_partial_state_logged", False):
+            self._partial_state_logged = True
+            self.log(f"the model object can't be pickled whole, so the FMU state saves only its other attributes; "
+                     f"not saved, kept as they are on restore: {', '.join(skipped)}. Set [model] save_state to "
+                     "a list of attributes to choose, or to false", Status.warning, "logStatusWarning")
+        return saved
 
     def deserialize(self, data):
         """Restore a state made by :meth:`serialize` (``fmi2/3SetFMUstate`` + ``DeSerializeFMUstate``).
@@ -1050,6 +1089,8 @@ class Engine:
             if self.obj is not None and state["obj"] is not None:
                 for path, value in state["obj"].items():
                     set_path(self.obj, path, value)
+        elif state.get("partial"):   # the attributes that could be pickled (see _picklable_attributes)
+            vars(self.obj).update(state["obj"])
         else:
             self.obj = state["obj"]
         self.time, self.mode = state["time"], state["mode"]
