@@ -7,9 +7,9 @@ fmugen has been tried on **291 unmodified Python models**: about 187 PyPI librar
 | Config | Models | Success |
 |---|---|---|
 | `init` (code only), given other options where needed | 59 | 20 % |
-| `init --probe`, given only the model and `--start` values | 118 | 41 % |
-| …given also `--call` where needed, no other option | 158 | 54 % |
-| …given other options where needed (`--const`, `--setup`, `--create`, …) | 261 | 90 % |
+| `init --probe`, given only the model and `--start` values | 122 | 42 % |
+| …given also `--call` where needed, no other option | 160 | 55 % |
+| …given other options where needed (`--const`, `--setup`, `--create`, …) | 262 | 90 % |
 | …or with a hand-written config | 280 | 96 % |
 | **Compiled FMU (PyInstaller) simulates** | 267 | 92 % |
 
@@ -17,7 +17,7 @@ A model counts only if its FMU simulates **and** outputs the model's results, wi
 
 **11 fail:** 3 libraries have no function or class that is the model (PVWatts, Wav2Vec2, Moirai: they need a wrapper), and 8 fail for the reasons in their notes. Not compiled or not compiling: py-pde, pysr, SevenNet and JSBSim simulate uncompiled only; 10 models (orb, piper, skyfield, kokoro, spaCy, KeyBERT, faster-whisper, equilibrator, depth estimation, flopy) have not been compiled.
 
-**Still open:** 13 models need options no rule infers (mapie, open_clip, TrOCR, pylife, geopy, rrmpg, skyfield, jsbsim, openmdao, thermopack, equilibrator, flopy, cobra); results reached only through methods or keys (openmdao, jsbsim, vosk) need hand configs; JSBSim's data folder isn't found in a compiled FMU. Users' workarounds are in [troubleshooting.md](../troubleshooting.md#known-problems); tool limitations in [limitations/unifmu.md](../limitations/unifmu.md) and [limitations/fmpy.md](../limitations/fmpy.md).
+**Still open:** what the other models need is mostly their own data or the model they run, given as `--const` (open_clip's and TrOCR's image tensors, rrmpg's forcing data, skyfield's Time, vosk's audio and acoustic model, openmdao's Group); mapie's interval bounds need `--call predict_interval` (without it, `init` steps `predict`). Results reached only by name need a hand config or one added line (openmdao's `prob['y1']`, JSBSim's property tree, flopy's heads); JSBSim also needs `--const root_dir`, two `--setup` and `--call`, and its data folder isn't found in a compiled FMU. Since 2026-11-04 `init` infers what geopy, thermopack, cobra, pylife, vosk, flopy and the others needed by hand: see their notes. Users' workarounds are in [troubleshooting.md](../troubleshooting.md#known-problems); tool limitations in [limitations/unifmu.md](../limitations/unifmu.md) and [limitations/fmpy.md](../limitations/fmpy.md).
 
 ## Per-model results
 

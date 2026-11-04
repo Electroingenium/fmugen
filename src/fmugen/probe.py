@@ -204,6 +204,11 @@ def _probe_class(cls, method_name, data, comments, arrays, call_starts, create, 
             taken.add(attr)
         _getter_outputs(obj, data, comments, arrays, taken)
         taken |= set(data.get("outputs", {}))
+    elif isinstance(result, bool) or type(result).__name__ == "bool_" or type(result) is int and result in (0, 1):
+        # the step returns only a status: its results come from getters (vosk's AcceptWaveform() says whether an
+        # utterance ended, as 0 or 1; FinalResult() gives the text)
+        _getter_outputs(obj, data, comments, arrays, taken, results=True)
+        taken |= set(data.get("outputs", {}))
     needs_call = sorted(set(unread_before) & set(data.get("outputs", {})))
     if needs_call and not data["model"].get("init_call"):
         data["model"]["init_call"] = True
@@ -2964,14 +2969,18 @@ def _unreadable(obj):
 
 #: Getter method names: ``get_quaternion``, ``getQuat6D`` (not ``getattr``-like lower-case words).
 GETTER = re.compile(r"get(_[a-z0-9]\w*|[A-Z0-9]\w*)")
+#: Method names that give a result, read after a step that returns only a status: vosk's ``FinalResult``,
+#: ``result``, ``final_result``, ``partial_results``.
+RESULT_GETTER = re.compile(r"(?:[Ff]inal|[Pp]artial|[Ll]ast)?_?[Rr]esults?")
 
 
-def _getter_outputs(obj, data, comments, arrays, taken):
+def _getter_outputs(obj, data, comments, arrays, taken, results=False):
     """Outputs read through getter methods called without arguments (``get:``), for a step that returns nothing.
 
     Methods named like ``get_farm_power`` or ``getQuat6D``, from the model's own package, that take
     no required argument (or whose signature can't be read, as for C built-ins) are called once;
-    those returning an FMI value become outputs named without the ``get`` prefix.
+    those returning an FMI value become outputs named without the ``get`` prefix. With ``results``, for a step
+    that returns only a status, also those named like a result (:data:`RESULT_GETTER`: vosk's ``FinalResult``).
 
     :param obj: the model object, after the probe's step.
     :param data: the config being inferred; updated in place.
@@ -2985,7 +2994,7 @@ def _getter_outputs(obj, data, comments, arrays, taken):
     """
     package = type(obj).__module__.split(".")[0]
     for name in dir(type(obj)):
-        if not GETTER.fullmatch(name):
+        if not GETTER.fullmatch(name) and not (results and RESULT_GETTER.fullmatch(name)):
             continue
         member = inspect.getattr_static(type(obj), name, None)
         owner = getattr(member, "__objclass__", None) or next(
@@ -3008,7 +3017,8 @@ def _getter_outputs(obj, data, comments, arrays, taken):
             continue
         if not _fmi_value(value, arrays):
             continue
-        output = name[4:] if name.startswith("get_") else name[3].lower() + name[4:]
+        output = name if not GETTER.fullmatch(name) else name[4:] if name.startswith("get_") \
+            else name[3].lower() + name[4:]
         if output in taken or not output.isidentifier():
             output = name
         if output in taken:
