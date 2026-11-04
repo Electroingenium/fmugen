@@ -260,3 +260,257 @@ def test_data_templates_follow_the_type():
     assert _looks_like_data("pixel_values") and _looks_like_data("inputFrame") and _looks_like_data("q", "torch.Tensor")
     assert not _looks_like_data("sampling_rate") and not _looks_like_data("data_format") and not _looks_like_data("tol")
     assert not _looks_like_data("p", "array_like")   # pastas' parameters
+
+
+def test_a_class_whose_step_gives_no_number_is_built_every_step(tmp_path):
+    # like iapws' IAPWS97(T=..., P=...): __call__(**kwargs) recomputes and returns nothing; h, rho are attributes
+    path = write(tmp_path, "steam.py", '''
+        class Steam:
+            def __init__(self, **kwargs):
+                self.status = "ok"
+                self.__call__(**kwargs)
+
+            def __call__(self, **kwargs):
+                if "T" in kwargs and "P" in kwargs:
+                    self.h = 4.18 * kwargs["T"]
+                    self.rho = 1000.0 / (1.0 + kwargs["P"])
+    ''')
+    data, text = run(f"{path}:Steam", tmp_path, starts={"T": 400.0, "P": 1.0}, probe=True)
+    assert data["model"]["kind"] == "function" and {"h", "rho"} <= set(data["outputs"])
+    assert "stepping it gives no numeric result" in text
+
+
+def test_the_classmethod_requiring_the_most_names_builds_it(tmp_path):
+    # like hapsira's Orbit: from_classical(attractor, a, ecc, ...) before heliosynchronous(attractor, a=None, ...)
+    path = write(tmp_path, "orbit.py", '''
+        class Orbit:
+            def __init__(self, state, epoch):
+                self.a = state
+
+            @classmethod
+            def from_classical(cls, attractor, a, ecc, epoch=0.0):
+                return cls(a * (1 - ecc), epoch)
+
+            @classmethod
+            def heliosynchronous(cls, attractor, a=None, ecc=None):
+                return cls(7000.0, 0.0)
+
+            @classmethod
+            def stationary(cls, attractor):
+                return cls(42164.0, 0.0)
+
+            def propagate(self, value):
+                return {"r": self.a + value}
+    ''')
+    data, _ = run(f"{path}:Orbit", tmp_path, starts={"attractor": "Earth", "a": 7000.0, "ecc": 0.01, "value": 1.0},
+                  probe=True)
+    assert data["model"]["create"] == "from_classical" and data["model"]["call"] == "propagate"
+
+
+def test_a_name_kwargs_would_swallow_goes_to_the_classmethod_that_requires_it(tmp_path):
+    # like timesfm's TimesFM_2p5_200M_torch(torch_compile=True, config=None, **kwargs) and from_pretrained(repo id)
+    path = write(tmp_path, "fm.py", '''
+        class Forecaster:
+            def __init__(self, torch_compile=True, config=None, **kwargs):
+                self.scale = 1.0
+
+            @classmethod
+            def from_pretrained(cls, pretrained_model_name_or_path, *, force_download=False, **model_kwargs):
+                model = cls()
+                model.scale = float(len(pretrained_model_name_or_path))
+                return model
+
+            def forecast(self, horizon, inputs):
+                return [self.scale * x for x in inputs[:horizon]]
+    ''')
+    data, _ = run(f"{path}:Forecaster", tmp_path,
+                  starts={"pretrained_model_name_or_path": "org/model", "horizon": 2, "inputs": [1.0, 2.0, 3.0]},
+                  probe=True)
+    assert data["model"]["create"] == "from_pretrained"
+
+
+def test_an_environment_is_reset_before_its_first_step(tmp_path):
+    # like a gym distillation column whose step() works without reset(), from a state that isn't the start
+    path = write(tmp_path, "env.py", '''
+        class Space:
+            pass
+
+
+        class Column:
+            action_space = Space()
+            observation_space = Space()
+
+            def __init__(self):
+                self.level = 0.0
+
+            def reset(self, seed=None):
+                self.level = 1.0
+                self.purity = 0.5
+                return self.level, {}
+
+            def step(self, action):
+                self.level += action
+                return self.level, 0.0, False, {}
+    ''')
+    data, text = run(f"{path}:Column", tmp_path, starts={"action": 0.1}, probe=True)
+    assert data["model"]["setup"] == ["reset(seed=0)"] and "it's an environment" in text
+
+
+def test_an_onnx_session_feed_is_made_up_from_its_inputs(tmp_path):
+    # like onnxruntime's InferenceSession.run(output_names, input_feed): the inputs it declares, as zeros
+    path = write(tmp_path, "session.py", '''
+        import numpy
+
+
+        class NodeArg:
+            name, shape, type = "Input3", ["N", 1, 2, 2], "tensor(float)"
+
+
+        class Session:
+            def __init__(self, path_or_bytes):
+                self.path = path_or_bytes
+
+            def get_inputs(self):
+                return [NodeArg()]
+
+            def get_outputs(self):
+                return []
+
+            def run(self, output_names, input_feed, run_options=None):
+                return [numpy.asarray(input_feed["Input3"]).sum(axis=(2, 3)) + 1.0]
+    ''')
+    data, text = run(f"{path}:Session", tmp_path, starts={"path_or_bytes": "m.onnx"}, call="run", probe=True)
+    assert data["model"]["call_constants"]["input_feed"] == \
+        {"call": "builtins:dict({'Input3': numpy.zeros((1, 1, 2, 2), dtype='float32')})"}
+    assert "made up from the session's inputs" in text and data["outputs"]
+
+
+def test_a_multi_agent_environment_gets_one_action_input_per_agent(tmp_path):
+    # like PettingZoo's parallel_env: step(actions), a dict of one action per agent
+    path = write(tmp_path, "agents.py", '''
+        class Discrete:
+            def __init__(self, n):
+                self.n, self.start = n, 0
+
+
+        class Env:
+            possible_agents = ["agent_0", "agent_1"]
+
+            def action_space(self, agent):
+                return Discrete(5)
+
+            def step(self, actions):
+                return {agent: float(a) for agent, a in actions.items()}
+    ''')
+    data, _ = run(f"{path}:Env", tmp_path, call="step", probe=True)
+    assert data["inputs"]["agent_0"]["to"] == "arg:actions[agent_0]" and "agent_1" in data["inputs"]
+
+
+def test_an_unannotated_argument_is_built_from_the_record_class_it_is_named_after(tmp_path):
+    # like simglucose's T1DPatient.step(action), whose module defines Action = namedtuple(...)
+    path = write(tmp_path, "patient.py", '''
+        from collections import namedtuple
+
+        Action = namedtuple("patient_action", ["CHO", "insulin"])
+
+
+        class Patient:
+            def __init__(self):
+                self.glucose = 150.0
+
+            def step(self, action):
+                self.glucose += action.CHO - 10.0 * action.insulin
+    ''')
+    data, _ = run(f"{path}:Patient", tmp_path, starts={"action.CHO": 0.0, "action.insulin": 0.02}, probe=True)
+    assert data["inputs"]["action_CHO"]["to"] == "arg:action.CHO" and "action_insulin" in data["inputs"]
+
+
+def test_the_runtime_rebuilds_the_record_class_an_argument_is_named_after(tmp_path, monkeypatch):
+    import importlib
+    import sys
+    from fmugen.templates.fmugen_runtime._helpers import build_object
+    write(tmp_path, "patient_rt.py", '''
+        from collections import namedtuple
+
+        Action = namedtuple("patient_action", ["CHO", "insulin"])
+
+
+        def step(action):
+            return action.CHO
+    ''')
+    monkeypatch.syspath_prepend(str(tmp_path))
+    module = importlib.import_module("patient_rt")
+    try:
+        built = build_object(module.step, "action", {"CHO": 1.0, "insulin": 0.5})
+        assert isinstance(built, module.Action) and built.insulin == 0.5
+    finally:
+        sys.modules.pop("patient_rt", None)
+
+
+def test_an_attribute_held_outside_the_object_dict_as_an_array_is_not_a_scalar_local(tmp_path):
+    # like botorch's SingleTaskGP: train_targets, a tensor torch keeps as a buffer, not in __dict__
+    path = write(tmp_path, "gp.py", '''
+        import numpy
+
+
+        class Model:
+            def __init__(self, train_y):
+                object.__setattr__(self, "_buffers", {})
+                self.train_targets = numpy.asarray(train_y, dtype=float)
+
+            def __setattr__(self, name, value):
+                if isinstance(value, numpy.ndarray):
+                    self._buffers[name] = value
+                else:
+                    object.__setattr__(self, name, value)
+
+            def __getattr__(self, name):
+                buffers = object.__getattribute__(self, "_buffers")
+                if name in buffers:
+                    return buffers[name]
+                raise AttributeError(name)
+
+            def posterior(self, x):
+                return {"mean": float(self.train_targets.mean()) * x}
+    ''')
+    data, _ = run(f"{path}:Model", tmp_path, starts={"train_y": [1.0, 2.0, 3.0], "x": 2.0}, call="posterior",
+                  probe=True)
+    assert "train_targets" not in data.get("locals", {}) and "mean" in data["outputs"]
+
+
+def test_properties_a_model_adds_to_its_class_at_run_time_are_outputs(tmp_path):
+    # like roadrunner, which adds a property per species (rr.S1) to its class when it loads a model
+    path = write(tmp_path, "rr.py", '''
+        class Runner:
+            def __init__(self, model):
+                self._values = {"S1": 10.0, "S2": 0.0}
+                for name in self._values:
+                    setattr(Runner, name, property(lambda self, n=name: self._values[n]))
+
+            def oneStep(self, currentTime, stepSize):
+                moved = 0.1 * stepSize * self._values["S1"]
+                self._values["S1"] -= moved
+                self._values["S2"] += moved
+                return currentTime + stepSize
+    ''')
+    data, _ = run(f"{path}:Runner", tmp_path, starts={"model": "S1 -> S2", "currentTime": 0.0, "stepSize": 0.1},
+                  call="oneStep", probe=True)
+    assert {"S1", "S2"} <= set(data["outputs"])
+
+
+def test_the_runtime_file_keeps_every_import_made_inside_a_function(tmp_path):
+    # an optional import (numpy) inside a function of one runtime module isn't redundant with the same line in a
+    # function of another: dropping it broke every numpy = true array input
+    import ast
+    from fmugen.builder import RUNTIME_SOURCES, _concatenate_runtime
+
+    def local_imports(text):
+        tree = ast.parse(text)
+        top = {id(n) for n in tree.body}
+        return sum(isinstance(n, (ast.Import, ast.ImportFrom)) and id(n) not in top
+                   and not (isinstance(n, ast.ImportFrom) and (n.module or "").startswith("fmugen."))
+                   for n in ast.walk(tree))
+
+    _concatenate_runtime(tmp_path / "fmugen_runtime.py")
+    expected = sum(local_imports(p.read_text(encoding="utf-8")) for p in RUNTIME_SOURCES)
+    assert local_imports((tmp_path / "fmugen_runtime.py").read_text(encoding="utf-8")) == expected

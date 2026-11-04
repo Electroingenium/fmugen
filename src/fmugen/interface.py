@@ -1089,7 +1089,14 @@ def _infer_config_once(target, call, config_dir, fmi_version, starts, setup, kin
                     f"{entry.__name__}(...) built with the inputs every step: its methods all need arguments not "
                     "given, and the object it builds has the results (pass --call METHOD to step a method instead)")
     if inspect.isclass(entry) and kind != "function":
+        before = copy.deepcopy((data, comments, options))
         _infer_class(entry, call, data, comments, create=create, **options)
+        if probe and not call and not create and not _probe_failed(comments) and _no_numeric_results(data) \
+                and (built := _built_each_step(entry, *before)) is not None:
+            # stepping the object finds no numeric result, but the object built with the inputs has them as
+            # attributes (iapws' IAPWS97(T=..., P=...): h, s, rho, ...; its __call__(**kwargs) returns nothing)
+            data, comments = built
+            kind = "function"
     elif call and kind != "function":
         # a function with --call is a factory: called once, --call runs on what it returns
         if create:
@@ -1884,6 +1891,29 @@ def _generates(cls):
         return False
 
 
+def _no_numeric_results(data):
+    """Whether a config's outputs hold no number (only strings and booleans, or none)."""
+    return not any(info.get("type", "Real") not in ("String", "Boolean")
+                   for info in data.get("outputs", {}).values())
+
+
+def _built_each_step(cls, data, comments, options):
+    """The config of ``cls`` built with the inputs every step (``kind = "function"``), when that probe works and
+    finds numeric results; else None."""
+    tried = copy.deepcopy((data, comments))
+    tried[0]["model"]["kind"] = "function"
+    try:
+        _infer_function(cls, *tried, **copy.deepcopy(options))
+    except InterfaceError:
+        return None
+    if not _works(tried) or _no_numeric_results(tried[0]):
+        return None
+    tried[1][("model", "kind")] = (
+        f"{cls.__name__}(...) built with the inputs every step: stepping it gives no numeric result, while the "
+        "object built has them (pass --call METHOD to step a method instead)")
+    return tried
+
+
 def _works(result):
     """Whether a probe's config has outputs and its step worked."""
     data, comments = result
@@ -2053,7 +2083,7 @@ def _infer_class_once(cls, call, data, comments, arrays=False, starts=None, crea
         read = static.Returned()
     _add_returned(read, data, comments, is_class=True, arrays=arrays, probe=probe, seen=seen_returns)
     if cls is not None:
-        _add_attributes(cls, method_name, data, comments, arrays, probe, seen_attrs)
+        _add_attributes(cls, method_name, data, comments, arrays, probe, seen_attrs, obj=obj)
     attrs = set(seen_attrs) | (set(object_names(obj)) if obj is not None else set())
     if cls is not None:
         attrs |= set(static.assigned_attributes(cls, method_name)) | set(static.assigned_attributes(cls, "__init__"))
@@ -2583,6 +2613,20 @@ def _methods_need_more(cls, starts):
     return seen
 
 
+def _required_by_builders(cls):
+    """The names the public classmethods that build ``cls`` require (no default)."""
+    out = set()
+    for m in dir(cls):
+        if m.startswith("_") or not _builds(cls, m):
+            continue
+        try:
+            out |= {n for n, p in inspect.signature(getattr(cls, m)).parameters.items()
+                    if p.default is p.empty and p.kind not in (p.VAR_POSITIONAL, p.VAR_KEYWORD)}
+        except (TypeError, ValueError):
+            continue
+    return out
+
+
 def _pick_create(cls, starts):
     """The classmethod that builds the object, when the constructor can't take the ``--start`` / ``--const`` names.
 
@@ -2628,7 +2672,12 @@ def _pick_create(cls, starts):
                               if p.default is p.empty and p.kind not in (p.VAR_POSITIONAL, p.VAR_KEYWORD)}
             except (TypeError, ValueError):
                 continue
-    blocked = set() if takes_any else names - declared - for_steps
+    blocked = names - declared - for_steps
+    if takes_any:
+        # **kwargs takes any name, except one a classmethod requires by name: timesfm's
+        # TimesFM_2p5_200M_torch(torch_compile=True, config=None, **kwargs) ignores pretrained_model_name_or_path,
+        # which from_pretrained(pretrained_model_name_or_path) loads the weights from
+        blocked &= _required_by_builders(cls)
     missing = {n for n in declared if init[n].default is init[n].empty} - names
     if not blocked and not missing:
         return _pick_loader(cls, starts)
@@ -2644,10 +2693,16 @@ def _pick_create(cls, starts):
         kwargs = any(p.kind is p.VAR_KEYWORD for p in params)
         required = {p.name for p in params if p.kind not in (p.VAR_POSITIONAL, p.VAR_KEYWORD) and p.default is p.empty}
         if required <= names and (names & own or kwargs) and (not blocked or blocked & own or kwargs):
-            fits.append((m, bool(names & own)))
+            fits.append((m, bool(names & own), len(required)))
     # those naming one of them, before those only taking **kwargs (transformers' from_pretrained before
     # from_encoder_decoder_pretrained, for pretrained_model_name_or_path)
-    fits = [m for m, named in fits if named] or [m for m, _ in fits]
+    fits = [f for f in fits if f[1]] or fits
+    # then the one requiring the most of them, when only one does: hapsira's Orbit.from_classical(attractor, a,
+    # ecc, inc, raan, argp, nu) before heliosynchronous(attractor, a=None, ...) and stationary(attractor)
+    most = max((f[2] for f in fits), default=0)
+    if len(fits) > 1 and most > 1 and sum(f[2] == most for f in fits) == 1:
+        fits = [f for f in fits if f[2] == most]
+    fits = [f[0] for f in fits]
     if len(fits) == 1:
         why = (f"{', '.join(sorted(blocked))} not arguments of {cls.__name__}()" if blocked
                else f"{cls.__name__}() requires {', '.join(sorted(missing))}")

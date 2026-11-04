@@ -72,21 +72,21 @@ def _concatenate_runtime(destination):
         text = _INTERNAL_IMPORT.sub("", text)
         sections.append(text)
     first, *rest = sections
+    # only module-level imports: one inside a function (``import numpy`` where numpy is optional) is that
+    # function's own, and the same line in another function doesn't make it redundant
     seen_imports = set()
     for line in first.splitlines():
-        stripped = line.strip()
-        if stripped.startswith(("import ", "from ")):
-            seen_imports.add(stripped)
+        if line.startswith(("import ", "from ")):
+            seen_imports.add(line.strip())
     cleaned_rest = []
     for section in rest:
         section = re.sub(r'\A\s*""".*?"""\s*\n', "", section, count=1, flags=re.DOTALL)
         lines = []
         for line in section.splitlines(keepends=True):
-            stripped = line.strip()
-            if stripped in seen_imports:
-                continue
-            if stripped.startswith(("import ", "from ")):
-                seen_imports.add(stripped)
+            if line.startswith(("import ", "from ")):
+                if line.strip() in seen_imports:
+                    continue
+                seen_imports.add(line.strip())
             lines.append(line)
         cleaned_rest.append("".join(lines))
     content = first + "\n" + "\n".join(cleaned_rest)

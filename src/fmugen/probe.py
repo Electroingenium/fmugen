@@ -117,6 +117,9 @@ def _probe_class(cls, method_name, data, comments, arrays, call_starts, create, 
         if _writable_attribute(obj, name) and _same(getattr(obj, name), data["parameters"][name].get("start")):
             comments.setdefault(("parameters", name), "kept as an attribute: add variability = \"tunable\" if the step reads it")
 
+    if not object_step:
+        _made_up_feed(obj, method_name, call_starts, comments)
+        _made_up_actions(obj, method_name, call_starts, comments)
     if object_step:
         if call_starts:
             raise InterfaceError(f"--start {', '.join(call_starts)}: {method_name} takes its arguments in the call "
@@ -127,6 +130,15 @@ def _probe_class(cls, method_name, data, comments, arrays, call_starts, create, 
                    constants_key="call_constants",
                    arrays=arrays, starts=call_starts, probe=True)
     _apply_converts(data, converts)
+    if method_name == "step" and _environment(obj):
+        # the Gym API resets an environment before its first step; some step without it, from a state that
+        # isn't the episode's start (a gym distillation column: its outputs are left unset)
+        if _reset_first(obj, method_name, data, comments,
+                        why="it's an environment (an action and an observation space), which starts with reset()"):
+            try:   # a new one: the probe's trial step may have set attributes that reset() leaves
+                obj = _build_set_up(build, data)
+            except Exception:
+                pass
     before, state_before = _numeric_attributes(obj, arrays), _state_bytes(obj)
     dynamic_before = _dynamic_values(obj, arrays)
     descriptors_before = _descriptor_values(obj, arrays)
@@ -274,7 +286,80 @@ def _forwarded(method, method_name, owner):
     return method
 
 
-def _reset_first(obj, method_name, data, comments):
+#: ONNX element types (``tensor(float)``) as numpy dtypes.
+ONNX_TYPES = {"float": "float32", "double": "float64", "float16": "float16", "int64": "int64", "int32": "int32",
+              "int16": "int16", "int8": "int8", "uint8": "uint8", "uint16": "uint16", "bool": "bool"}
+
+
+def _made_up_feed(obj, method_name, call_starts, comments):
+    """An ONNX session's ``run(output_names, input_feed)``: ``input_feed`` not given is made up from the
+    session's own inputs (``get_inputs()``: name, shape, element type) as zeros, a symbolic dimension as 1;
+    ``output_names`` not given is None (all outputs). Updates ``call_starts`` in place.
+    """
+    if method_name != "run" or "input_feed" in call_starts or importlib.util.find_spec("numpy") is None:
+        return
+    try:
+        params = inspect.signature(getattr(obj, "run")).parameters
+        specs = list(obj.get_inputs())
+        feed = {}
+        for spec in specs:
+            kind = re.fullmatch(r"tensor\((\w+)\)", spec.type)
+            if kind is None or kind.group(1) not in ONNX_TYPES or not isinstance(spec.name, str):
+                return
+            shape = tuple(d if isinstance(d, int) and d > 0 else 1 for d in spec.shape)
+            feed[spec.name] = f"numpy.zeros({shape!r}, dtype={ONNX_TYPES[kind.group(1)]!r})"
+    except Exception:
+        return
+    if "input_feed" not in params or not feed:
+        return
+    call_starts["input_feed"] = {"call": "builtins:dict({" + ", ".join(f"{k!r}: {v}" for k, v in feed.items()) + "})"}
+    comments[("constant", "call_constants.input_feed")] = (
+        f"made up from the session's inputs ({', '.join(feed)}), as zeros: give your data with --const")
+    if "output_names" in params and "output_names" not in call_starts:
+        call_starts["output_names"] = None
+
+
+def _made_up_actions(obj, method_name, call_starts, comments):
+    """A multi-agent environment's ``step(actions)`` (PettingZoo's parallel API): ``actions`` not given is made
+    up as a dict of one action per agent (``possible_agents``), each the first of its ``action_space(agent)``:
+    a discrete space's ``start``, a box's zeros clipped to its bounds. A dict start, so each agent's action
+    is an FMU input (``actions[agent_0]``). Updates ``call_starts`` in place."""
+    if method_name != "step" or "actions" in call_starts:
+        return
+    try:
+        if "actions" not in inspect.signature(getattr(obj, "step")).parameters:
+            return
+        agents = list(getattr(obj, "possible_agents", None) or getattr(obj, "agents", None) or [])
+        actions = {}
+        for agent in agents:
+            space = obj.action_space(agent)
+            if not isinstance(agent, str) or not agent.isidentifier():
+                return
+            if type(space).__name__ == "Discrete":
+                actions[agent] = int(space.start)
+            elif type(space).__name__ == "Box" and len(space.shape) <= 1:
+                import numpy
+                actions[agent] = [float(v) for v in numpy.atleast_1d(numpy.clip(0.0, space.low, space.high))]
+            else:
+                return
+    except Exception:
+        return
+    if actions:
+        call_starts["actions"] = actions
+        comments[("inputs", "actions")] = ("made up: one action per agent (possible_agents), the first of each "
+                                          "action_space(agent); give yours with --start")
+
+
+def _environment(obj):
+    """Whether ``obj`` is a Gym-style environment: ``reset`` and ``step`` methods, an action and an observation
+    space."""
+    try:
+        return all(getattr(obj, n, None) is not None for n in ("action_space", "observation_space"))             and callable(getattr(obj, "reset", None)) and callable(getattr(obj, "step", None))
+    except Exception:
+        return False
+
+
+def _reset_first(obj, method_name, data, comments, why=None):
     """After a failed probe step: if the object has a ``reset()`` taking no required argument, and the step
     works after it, run it in ``[model] setup`` (gymnasium's environments refuse ``step()`` before ``reset()``).
 
@@ -285,6 +370,8 @@ def _reset_first(obj, method_name, data, comments):
     :type data: dict
     :param comments: ``(section, key) -> text`` for :func:`render_toml`; updated in place.
     :type comments: dict
+    :param why: the reason in the comment, when the step didn't fail.
+    :type why: str or None
     :return: whether ``reset`` was added (the object is then reset; the step itself isn't run here).
     :rtype: bool
     """
@@ -314,8 +401,8 @@ def _reset_first(obj, method_name, data, comments):
             continue
         data["model"]["setup"] = [*data["model"].get("setup", []), call]
         seed = "; seed=0 so each run gives the same results" if kwargs else ""
-        comments[("model", "setup")] = (f"{call if kwargs else 'reset()'} before the first step: {method_name}() "
-                                        f"failed without it in the probe{seed}")
+        comments[("model", "setup")] = (f"{call if kwargs else 'reset()'} before the first step: "
+                                        f"{why or f'{method_name}() failed without it in the probe'}{seed}")
         return True
     return False
 
@@ -938,7 +1025,7 @@ def _add_returned(read, data, comments, is_class, arrays, probe, seen):
             comments[("outputs", name)] = "the code can also return None, which fails the step: check it, or run init --probe"
 
 
-def _add_attributes(cls, method_name, data, comments, arrays, probe, seen):
+def _add_attributes(cls, method_name, data, comments, arrays, probe, seen, obj=None):
     """Outputs and locals from the attributes the step method assigns, and the object's own properties.
 
     Attributes also set in ``__init__`` become locals (they exist before the first step), the
@@ -958,6 +1045,7 @@ def _add_attributes(cls, method_name, data, comments, arrays, probe, seen):
     :type probe: bool
     :param seen: names the probe already handled.
     :type seen: set[str]
+    :param obj: the probed object, or None.
     """
     in_step, in_init = static.class_attributes(cls, method_name)
     taken = _taken(data) | set(seen)
@@ -972,6 +1060,10 @@ def _add_attributes(cls, method_name, data, comments, arrays, probe, seen):
                                                    f"{method_name}(): set its dimensions and uncomment, or run init --probe")
             continue
         if kind == "other":
+            continue
+        if obj is not None and not _scalar_or_unset(obj, attr):
+            # not among the attributes the probe reads, but not a single value either (botorch's train_targets,
+            # a tensor kept as a torch buffer): typed as one, it would fail the FMU
             continue
         if comments.get(PROBED) and section == "outputs":   # the probe's step worked, and didn't set it
             _unfit(comments, "outputs", attr, f"not set by {method_name}() in the probe; reading it fails the step "
@@ -993,6 +1085,17 @@ def _add_attributes(cls, method_name, data, comments, arrays, probe, seen):
         elif not probe:   # without an annotation its value could be anything: reading it would run code
             comments[("outputs", f"#{name}")] = (f"{name} = {{}}  # a property of the object (type unknown): "
                                                  "uncomment if it is a number, or run init --probe")
+
+def _scalar_or_unset(obj, attr):
+    """Whether ``obj.attr`` is a single FMI value, None or missing (not an array or another object)."""
+    try:
+        value = getattr(obj, attr, None)
+    except Exception:
+        return True
+    if value is None or isinstance(value, (bool, int, float, str)):
+        return True
+    return type(value).__module__ == "numpy" and getattr(value, "ndim", None) == 0
+
 
 #: Converters tried in order when a probe call fails with list inputs.
 ARRAY_RETRIES = ("numpy", "torch:tensor")
@@ -2835,6 +2938,11 @@ def _dynamic_values(obj, arrays=False):
     """
     try:
         names = set(object_names(obj)) - set(dir(type(obj))) - set(getattr(obj, "__dict__", {}))
+        # properties made at run time for this model, by a function (closures): roadrunner adds one per
+        # species and parameter to its class when it loads a model (RoadRunner._makeProperties)
+        names |= {n for n in dir(type(obj))
+                  if isinstance(prop := inspect.getattr_static(type(obj), n, None), property)
+                  and "<locals>" in getattr(prop.fget, "__qualname__", "")}
     except Exception:
         return {}
     values = {}

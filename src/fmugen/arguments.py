@@ -959,6 +959,11 @@ def _split_fields(fn, p, variables, section, comments, starts, arrays):
     except Exception:
         cls = p.annotation if isinstance(p.annotation, type) else None
     cls = type(default) if default is not None else static.unwrap_optional(cls)
+    if cls is None and default is None and p.annotation is p.empty \
+            and any(name.startswith(f"{p.name}.") for name in starts):
+        # the fields given: the class it's named after (simglucose's step(action), its module's Action)
+        from fmugen.templates.fmugen_runtime._helpers import named_class
+        cls = named_class(inspect.unwrap(fn), p.name)
     fields = _object_fields(cls)
     if not fields:
         return False

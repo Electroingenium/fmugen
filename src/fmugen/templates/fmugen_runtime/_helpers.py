@@ -294,6 +294,25 @@ def assemble_items(bound, fn=None):
 _OBJECT_ARGS = {}
 
 
+def named_class(fn, name):
+    """The record class an unannotated argument is named after, in its function's module: ``action`` ->
+    ``Action``, ``patient_action`` -> ``PatientAction`` (simglucose's ``T1DPatient.step(action)``, whose module
+    defines ``Action = namedtuple(...)``). Only a namedtuple, dataclass, attrs or pydantic class; else None.
+
+    :param fn: the function or method.
+    :param name: the argument name.
+    :type name: str
+    :rtype: type or None
+    """
+    module = sys.modules.get(getattr(fn, "__module__", None) or "")
+    cls = getattr(module, "".join(part[:1].upper() + part[1:] for part in name.split("_")), None)
+    if not isinstance(cls, type):
+        return None
+    if (issubclass(cls, tuple) and hasattr(cls, "_fields")) or dataclasses.is_dataclass(cls)             or hasattr(cls, "__attrs_attrs__") or isinstance(getattr(cls, "model_fields", None), dict):
+        return cls
+    return None
+
+
 def object_argument(fn, name):
     """The default instance and the annotated class of ``fn``'s argument ``name``.
 
@@ -322,6 +341,8 @@ def object_argument(fn, name):
         if typing.get_origin(cls) in (typing.Union, types.UnionType):   # Optional[Inputs]
             rest = [a for a in typing.get_args(cls) if a is not type(None)]
             cls = rest[0] if len(rest) == 1 else None
+        if cls is None and default is None and param is not None and param.annotation is inspect.Parameter.empty:
+            cls = named_class(target, name)
         _OBJECT_ARGS[key] = default, cls if isinstance(cls, type) else None
     return _OBJECT_ARGS[key]
 
