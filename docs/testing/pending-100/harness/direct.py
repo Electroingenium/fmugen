@@ -230,6 +230,8 @@ def start_value(spec, section):
 # ---------------------------------------------------------------- reading results
 
 def step_path(obj, part):
+    if part.endswith("()") and part[:-2].isidentifier():   # config.md: a part ending in () calls that method
+        return getattr(obj, part[:-2])()
     if isinstance(obj, dict):
         if part in obj:
             return obj[part]
