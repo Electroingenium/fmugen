@@ -55,8 +55,8 @@ Every config error names the section and key, e.g. `[inputs] x: unknown key(s) [
 - **PyInstaller stops on xgboost** unless hypothesis is installed: it imports every xgboost submodule, and `xgboost.testing` needs hypothesis.
 - **Windows long paths:** some packages (cantera, pybamm) fail to import from a venv in a deeply nested folder, and PyInstaller can miss deep data files. Keep build folders short.
 - **Module-level scripts can't be models:** a script that solves at import time has nothing to call. Wrap its code in a function or class.
-- **Results that aren't values aren't outputs:** a spaCy `Doc`, a list of (keyword, score) tuples (KeyBERT), a dict of an image and a tensor (transformers' depth-estimation pipeline), or results written to files and read back through objects (flopy). `init --probe` finds no outputs in them. Write the outputs by hand with `return:`, `attr:` or `get:` paths where they reach, or wrap the model in a function that returns numbers.
+- **Results read back from files** (flopy writes its heads, and reads them through `sim.get_model().output.head().get_data()`) aren't found by `init --probe`: the step returns only whether it ran. Add the output by hand with a path that calls the methods: `heads = { from = "attr:get_model().output.head().get_data()", dimensions = [1, 1, 10] }`.
+- **Large arrays need FMI 3:** in FMI 2 every element is a variable of its own, so an image-sized result (a 1080 × 810 depth map) makes a model description of hundreds of MB that importers can't load in reasonable time. Use `--fmi 3`, where an array is one variable.
 - **C functions without a signature** (CoolProp's `PropsSI`) give no variables: write the config by hand.
-- **An argument the model object must make itself** (equilibrator's `Reaction`, parsed by the `ComponentContribution` the step runs on) can't be a `call:` value, which runs before and apart from the model. Wrap the model in a class that makes it.
 
 Problems in UniFMU and FMPy themselves are in [limitations/unifmu.md](limitations/unifmu.md) and [limitations/fmpy.md](limitations/fmpy.md).

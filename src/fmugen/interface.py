@@ -1135,7 +1135,7 @@ def _with_usage(entry, module, path, call, create, setup, starts, probe):
     :rtype: tuple or None
     """
     from fmugen import examples
-    from fmugen.templates.fmugen_runtime import resolve_constant
+    from fmugen.templates.fmugen_runtime import resolve_constant, uses_self
     try:
         usage = examples.find_usage(entry, module, Path(path).resolve() if path else None)
         values = examples.find_values(entry, module, Path(path).resolve() if path else None)
@@ -1165,6 +1165,8 @@ def _with_usage(entry, module, path, call, create, setup, starts, probe):
                 value = _computed(value["expr"]) if probe else None
                 if value is None:
                     continue
+            elif uses_self(value):   # made by the model object (equilibrator's cc.parse_reaction_formula(...))
+                pass
             elif isinstance(value, dict):
                 if not probe:
                     continue

@@ -389,7 +389,21 @@ def is_literal_constant(value):
     return not (isinstance(value, dict) and len(value) == 1 and ("call" in value or "ref" in value))
 
 
-def resolve_constant(value):
+def uses_self(value):
+    """Whether a constant is computed from the model object: ``{ call = "self.parse_reaction_formula('...')" }``.
+
+    Such a ``call_constants`` value is an argument the object itself makes (equilibrator's
+    ``Reaction``, parsed by the ``ComponentContribution`` the step runs on), so it is computed
+    after the object is built.
+
+    :param value: the constant as written in ``interface.json``.
+    :rtype: bool
+    """
+    text = value.get("call") if isinstance(value, dict) and len(value) == 1 else None
+    return isinstance(text, str) and (text.strip() == "self" or text.strip().startswith(("self.", "self[")))
+
+
+def resolve_constant(value, obj=None):
     """The Python value of a constant from ``interface.json``.
 
     ``{ python = "..." }`` is evaluated with :func:`ast.literal_eval` (literals only, never
@@ -397,6 +411,7 @@ def resolve_constant(value):
     ``{ call = ... }`` is called (:func:`call_reference`); anything else is the value itself.
 
     :param value: the constant as written in ``interface.json``.
+    :param obj: the model object, for a call starting with ``self`` (:func:`uses_self`).
     :return: its value.
     """
     if isinstance(value, dict) and len(value) == 1:
@@ -405,7 +420,7 @@ def resolve_constant(value):
         if "ref" in value:
             return resolve_reference(value["ref"])
         if "call" in value:
-            return call_reference(value["call"])
+            return call_reference(value["call"], obj)
     return value
 
 
@@ -454,19 +469,27 @@ def parse_call_text(text, chain=False):
     return parsed + ((None if expression is node else expression,) if chain else ())
 
 
-def call_reference(text):
+def call_reference(text, obj=None):
     """Call ``"module:function(args)"`` and return the result.
 
     E.g. ``load_from_hub(repo_id="sb3/x", filename="m.zip")``. Without parentheses,
     ``"module:attr.path"`` is the object itself, not called (a function to pass, an enum member).
     Attributes, method calls and indexing may follow the call
     (``"skyfield.api:load.timescale().utc(2024, 1, 1, 12)"``; ``"m:load()[0]"`` for the first
-    item of a returned tuple). Arguments: see :func:`call_argument`.
+    item of a returned tuple). Arguments: see :func:`call_argument`. A text starting with ``self``
+    is evaluated on the model object ``obj``: ``"self.parse_reaction_formula('kegg:C00002 = ...')"``.
 
     :param text: the call text.
     :type text: str
+    :param obj: the model object, for a text starting with ``self``.
     :return: what the call returned (or the object).
+    :raises ValueError: a text starting with ``self`` without a model object.
     """
+    if uses_self({"call": text}):
+        if obj is None:
+            raise ValueError(f"{text!r}: self is the model object, so only a class's call_constants can use it")
+        parse_call_text(text, chain=True)   # the same checks as any call text
+        return call_argument(ast.parse(text.strip(), mode="eval").body, {"self": obj})
     target, paren, _ = text.partition("(")
     if not paren:
         return resolve_reference(target.strip())
@@ -597,12 +620,15 @@ def results_of(result):
 
     A generator (nashpy's ``support_enumeration``, the audio chunks of kokoro's ``KPipeline`` or
     piper's ``synthesize``) can only be read once; as a tuple, several outputs can read it and it
-    can be saved with the FMU state. Anything else is returned unchanged.
+    can be saved with the FMU state. So is one in a returned tuple or list (faster-whisper's
+    ``transcribe``: the segments' generator and an info object). Anything else is returned unchanged.
 
     :param result: what the model returned.
     :return: ``tuple(result)`` for a generator, else ``result``.
     :raises ValueError: a generator that doesn't stop (a model driven with ``next()`` once per step).
     """
+    if type(result) in (tuple, list) and any(isinstance(r, types.GeneratorType) for r in result):
+        return type(result)(results_of(r) for r in result)
     if not isinstance(result, types.GeneratorType):
         return result
     items = tuple(itertools.islice(result, GENERATOR_LIMIT + 1))
@@ -612,12 +638,32 @@ def results_of(result):
     return items
 
 
+def image_pixels(value):
+    """The pixels of a PIL image as a numpy array (transformers' depth-estimation pipeline), or None.
+
+    Only PIL's own images: other objects with numpy's array interface keep their parts (spatialmath's
+    ``SE3`` pose: ``t``, ``R``, ...). None also when numpy isn't installed.
+
+    :param value: any value.
+    :rtype: numpy.ndarray or None
+    """
+    if isinstance(value, type) or type(value).__module__.split(".")[0] != "PIL" \
+            or not hasattr(value, "__array_interface__"):
+        return None
+    try:
+        import numpy
+    except ImportError:
+        return None
+    return numpy.asarray(value)
+
+
 def plain_number(value, unit=None):
     """A quantity or one-value pandas/xarray object as a plain number.
 
     A pint quantity (anything with ``.magnitude`` and ``.units``) or an astropy one becomes its
-    magnitude, in ``unit`` when given; a one-value pandas/xarray column becomes its value.
-    Anything else is returned unchanged.
+    magnitude, in ``unit`` when given; a one-value pandas/xarray column becomes its value; an
+    image with numpy's array interface (PIL) becomes the array of its pixels. Anything else is
+    returned unchanged.
 
     :param value: what the model returned.
     :param unit: the variable's unit, to convert to.
@@ -626,6 +672,9 @@ def plain_number(value, unit=None):
     """
     if table_library(value) and getattr(value, "size", None) == 1:
         value = value.item()
+    pixels = image_pixels(value)
+    if pixels is not None:
+        return pixels
     if hasattr(value, "magnitude") and hasattr(value, "units"):
         return value.m_as(unit) if unit and hasattr(value, "m_as") else value.magnitude
     if hasattr(value, "unit") and hasattr(value, "to_value"):   # an astropy Quantity
@@ -700,7 +749,9 @@ def get_path(obj, path):
     mapping a part is a key, unless it's only an attribute (``"options.update"``: the method).
     A number on any other iterable without indexing (``"bodies.0"`` on a ``dict_keys`` view)
     picks that element, and on an object that takes keys (``obj["Voltage [V]"]``) a part is
-    then tried as a key, but both only where there's no such attribute.
+    then tried as a key, but both only where there's no such attribute. A part ending in ``()``
+    calls that method with no arguments: ``"to_json().ents.0.label"`` (a spaCy ``Doc``),
+    ``"get_model().output.head().get_data()"`` (flopy's heads, read from its output files).
 
     :param obj: the start object (usually the model object or a call result).
     :param path: the dotted path.
@@ -709,7 +760,9 @@ def get_path(obj, path):
     :raises AttributeError: a missing attribute (or KeyError / IndexError).
     """
     for part in path.split("."):
-        if isinstance(obj, Mapping) and (part in obj or not hasattr(obj, part)) or _labelled(obj) and part in obj:   # "options.update": the method
+        if part.endswith("()") and part[:-2].isidentifier():
+            obj = getattr(obj, part[:-2])()
+        elif isinstance(obj, Mapping) and (part in obj or not hasattr(obj, part)) or _labelled(obj) and part in obj:   # "options.update": the method
             obj = obj[part]
         elif part.lstrip("-").isdigit() and part.count("-") <= 1 and _indexable(obj):
             try:

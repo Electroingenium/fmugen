@@ -993,7 +993,7 @@ def _add_attributes(cls, method_name, data, comments, arrays, probe, seen):
 ARRAY_RETRIES = ("numpy", "torch:tensor")
 
 
-def _probe_constants(data, table, positional=False):
+def _probe_constants(data, table, positional=False, obj=None):
     """Constants set in the config (e.g. computed by a call), resolved as the FMU would.
 
     :param data: the config being inferred.
@@ -1003,6 +1003,7 @@ def _probe_constants(data, table, positional=False):
     :param positional: return ``{position: value}`` of those named ``"0"``, ``"1"``, ... (passed to
         ``*args``) instead of the keyword ones.
     :type positional: bool
+    :param obj: the model object, for ``call_constants`` computed from it (``self.…``).
     :return: name (or position) -> value.
     :rtype: dict
     :raises ConstantError: a constant fails to compute.
@@ -1013,11 +1014,21 @@ def _probe_constants(data, table, positional=False):
         if k.isdigit() != positional:
             continue
         try:
-            values[int(k) if positional else k] = resolve_constant(v)
+            values[int(k) if positional else k] = resolve_constant(v, obj)
         except Exception as e:
             what = f"call:{v['call']}" if isinstance(v, dict) and "call" in v else _value(v)
             raise ConstantError(f"[model] {table}.{k} = {what} fails: {type(e).__name__}: {e}") from e
     return values
+
+
+def _owner(fn, constants_key):
+    """The model object a step method is bound to, for ``call_constants`` computed from it, or None.
+
+    :param fn: the step (a bound method) or function.
+    :param constants_key: the constants table passed with the call.
+    :type constants_key: str or None
+    """
+    return getattr(fn, "__self__", None) if constants_key == "call_constants" else None
 
 
 class ConstantError(InterfaceError):
@@ -1138,7 +1149,7 @@ def _call_with_probe_inputs(fn, data, constants_key):
     """
     args, kwargs = _probe_args(data, ("inputs",), fn, constants_key)
     kwargs.update(_time_kwargs(data.get("time", {})))
-    kwargs.update(_probe_constants(data, constants_key))
+    kwargs.update(_probe_constants(data, constants_key, obj=_owner(fn, constants_key)))
     from fmugen.templates.fmugen_runtime import results_of
     return results_of(fn(*args, **kwargs))
 
@@ -2333,7 +2344,7 @@ def _probe_args(data, sections, fn=None, constants_key=None):
     ]
     by_position = {i: values.pop(name) for i, name in positional}
     if constants_key:
-        by_position.update(_probe_constants(data, constants_key, positional=True))
+        by_position.update(_probe_constants(data, constants_key, positional=True, obj=_owner(fn, constants_key)))
     args = [by_position[i] for i in sorted(by_position)]
     from fmugen.templates.fmugen_runtime import assemble_items
     targets = {name: str(info["to"]).partition(":")[2] for section in sections
@@ -2442,6 +2453,10 @@ def _outputs_from_return(result, data, comments, default_name, is_class, arrays=
     elif _fmi_value(result, arrays and isinstance(result, bytes)) or (result is not None and _misfit(result)):
         # bytes (an image, rembg's remove()) are a Binary output in FMI 3
         items = [(default_name, result, "return")]
+    elif result is not None and not hasattr(result, "__dict__") and (serialized := _serialized(result)) is not None:
+        # an extension type (spaCy's Doc): its properties are internals (array_head, tensor); to_json() is its result
+        method, mapping = serialized
+        items = [(k, v, f"return:{method}().{k}") for k, v in mapping.items() if isinstance(k, str)]
     elif result is not None and (hasattr(result, "__dict__") or _public_properties(result, arrays=True)):
         # an object: its public attributes and properties, e.g. uncertainties' nominal_value, std_dev
         public = {k: v for k, v in getattr(result, "__dict__", {}).items() if not k.startswith("_")}
@@ -2450,6 +2465,10 @@ def _outputs_from_return(result, data, comments, default_name, is_class, arrays=
         parts = set(public) - set(getattr(result, "__dict__", {}))   # computed, not a stored copy of an input
     else:
         items = []
+    if not items and result is not None and (serialized := _serialized(result)) is not None:
+        # an object with nothing readable: what its own to_dict()/to_json() gives
+        method, mapping = serialized
+        items = [(k, v, f"return:{method}().{k}") for k, v in mapping.items() if isinstance(k, str)]
     looked_at = {name for name, _, _ in items}
     items = [leaf for name, value, source in items for leaf in _nested(name, value, source, arrays)]
     items = [part for item in items for part in _complex_parts(*item)]
@@ -2583,8 +2602,9 @@ def _children(value):
         return [(f.name, getattr(value, f.name)) for f in dataclasses.fields(value)]
     if isinstance(value, types.SimpleNamespace):
         return list(vars(value).items())
-    if type(value) in (list, tuple) and 0 < len(value) <= MAX_ITEMS and all(_plain_object(v) for v in value):
-        return [(str(i), v) for i, v in enumerate(value)]
+    if type(value) in (list, tuple) and 0 < len(value) <= MAX_ITEMS \
+            and all(_plain_object(v) or isinstance(v, Mapping) for v in value):
+        return [(str(i), v) for i, v in enumerate(value)]   # also dicts: spaCy's entities, {start, end, label}
     if _plain_object(value):
         public = {k: v for k, v in vars(value).items() if not k.startswith("_") and v is not None}
         public.update({k: v for k, v in _public_properties(value, arrays=True).items() if k not in public})
@@ -2595,6 +2615,35 @@ def _children(value):
 
 #: How many items of a list of objects are split into outputs (ultralytics' one Results per image).
 MAX_ITEMS = 8
+
+#: Methods an object serializes itself with, tried in order when nothing else of it can be read: to_json first,
+#: as spaCy's Doc.to_dict() is its binary form (array_head, tensor), to_json() its result (a string elsewhere: skipped).
+SERIALIZERS = ("to_json", "to_dict", "as_dict", "model_dump")
+
+
+def _serialized(value):
+    """``(method, mapping)`` of an object read through its own serializer (:data:`SERIALIZERS`), or None.
+
+    For results whose state isn't readable as attributes or properties: spaCy's ``Doc`` (a Cython
+    type) gives ``to_json()``, ``{"text", "ents": [{"start", "end", "label"}], "tokens": [...]}``. The
+    first of them that takes no arguments and returns a non-empty mapping.
+
+    :param value: the result.
+    :rtype: tuple or None
+    """
+    if isinstance(value, (type, str, bytes, Mapping, list, tuple)) or _table_children(value) is not None:
+        return None
+    for name in SERIALIZERS:
+        method = getattr(value, name, None)
+        if not callable(method):
+            continue
+        try:
+            mapping = method()
+        except Exception:   # it needs arguments, or fails here
+            continue
+        if isinstance(mapping, Mapping) and mapping:
+            return name, mapping
+    return None
 
 #: Arrays inside a returned object larger than this aren't made outputs (an input image kept on it).
 MAX_NESTED_SIZE = 10_000

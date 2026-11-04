@@ -1451,6 +1451,10 @@ def _array_info(value, with_start=False):
     """
     if not isinstance(value, type) and not hasattr(value, "tolist") and hasattr(value, "to_numpy")             and hasattr(value, "dims"):
         value = value.to_numpy()   # an xarray DataArray (py_wake's WS_eff)
+    from fmugen.templates.fmugen_runtime import image_pixels
+    pixels = image_pixels(value)
+    if pixels is not None:
+        value = pixels   # a PIL image (a depth map): its pixels, as the runtime reads it
     # not a class: numpy.float64 (a dtype default) has shape and ndim as descriptors
     if (not isinstance(value, type) and hasattr(value, "shape") and hasattr(value, "tolist")
             and getattr(value, "ndim", 0) > 0):

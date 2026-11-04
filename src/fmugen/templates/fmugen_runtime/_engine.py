@@ -25,7 +25,7 @@ from fmugen.templates.fmugen_runtime._helpers import (
     flatten, get_path, is_literal_constant, keyword_constants,
     load_entry, load_state, object_call, outside_bundle, pick, plain_number, reshape,
     resolve_constant, resolve_reference, results_of, rng_states, set_path,
-    set_rng_states, split_global,
+    set_rng_states, split_global, uses_self,
 )
 
 
@@ -364,6 +364,7 @@ class Engine:
                 self.obj = self._invoke(getattr(self.entry, create) if create else self.entry,
                                         *self._positional(kind="initpos"), **kwargs)
                 self._run_setup(after_construction=True)
+                self._resolve_constants(of_object=True)
                 self._setter_last, self._setter_fresh, self._setter_called = {}, set(), set()
                 self._apply_attributes(clock=None, initial=True)
                 for name in self.clocks:
@@ -1349,21 +1350,35 @@ class Engine:
                         f"dimensions = {list(shape)} (FMI 3) or read one element (from = \"...:0\"); "
                         "fmugen init --probe finds them")
 
-    def _resolve_constants(self):
+    def _resolve_constants(self, of_object=False):
         """Compute ``[model] constants`` and ``call_constants`` as Python values, once.
 
         Runs at initialization (from ``initialize``), not at instantiation, so a ``{ call = ... }``
         that downloads or computes reports failures to the importer. Literal values are deep-copied
-        because the model may change a list or dict constant in place.
+        because the model may change a list or dict constant in place. Those computed from the model
+        object (``self.…``, :func:`uses_self`) are left out, and computed with ``of_object`` once the
+        object is built and set up, again for each new object.
 
+        :param of_object: compute only the ``call_constants`` that use the model object.
+        :type of_object: bool
         :raises RuntimeError: a constant that can't be resolved, naming it.
         """
+        if of_object:
+            for name, value in self.interface.get("call_constants", {}).items():
+                if uses_self(value):
+                    try:
+                        self.call_constants[name] = resolve_constant(value, self.obj)
+                    except Exception as e:
+                        raise RuntimeError(f"[model] call_constants.{name} = {value['call']!r} failed: {e!r}") from e
+            return
         if self.constants is not None:
             return
         resolved = {}
         for table in ("constants", "call_constants"):
             resolved[table] = {}
             for name, value in self.interface.get(table, {}).items():
+                if uses_self(value):
+                    continue
                 try:
                     # a copy: the model may change a list or dict constant in place
                     resolved[table][name] = resolve_constant(copy.deepcopy(value))

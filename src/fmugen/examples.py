@@ -8,6 +8,7 @@ arguments. :func:`find_usage` reads them with :mod:`ast` (nothing in them is run
 """
 
 import ast
+import builtins
 import doctest
 import importlib.metadata
 import importlib.util
@@ -331,6 +332,7 @@ class _Snippet:
         self.top = (getattr(module, "__name__", "") or "").partition(".")[0]
         self.aliases = {}   # name -> full dotted name, from imports
         self.values = {}    # name -> expression (names in it already resolved)
+        self.obj = None     # the name the model object is bound to, once built
 
     def resolve(self, dotted):
         """The full dotted name of ``dotted`` through the imports, or None when its root isn't imported."""
@@ -371,6 +373,8 @@ class _Snippet:
         if any(isinstance(n, (ast.Lambda, ast.ListComp, ast.DictComp, ast.SetComp, ast.GeneratorExp, ast.Await,
                               ast.NamedExpr, ast.Starred)) for n in ast.walk(node)):
             return None
+        if self.obj and _root(node) == self.obj:
+            return self._of_object(node)
         names = [n.id for n in ast.walk(node) if isinstance(n, ast.Name)]
         if not names or any(not _importable(n) for n in set(names)):
             return None
@@ -391,8 +395,36 @@ class _Snippet:
             return {"expr": text} if all(_module_prefix(d) or _importable(d) for d in _roots(node)) else None
         return {"call": f"{module}:{text[len(module) + 1:]}"}
 
+    def _of_object(self, node):
+        """``{"call": "self.method(...)"}`` for a value the model object makes (equilibrator's
+        ``cc.parse_reaction_formula("kegg:C00002 + ...")``), or None when its arguments aren't literals or
+        imports, or it doesn't call a method."""
+        renamed = _Rename(self.obj, "self").visit(_copy(node))
+        others = {n.id for n in ast.walk(renamed) if isinstance(n, ast.Name)} - {"self"}
+        if not any(isinstance(n, ast.Call) for n in ast.walk(renamed)) \
+                or any(not (_importable(n) or hasattr(builtins, n)) for n in others):
+            return None
+        return {"call": ast.unparse(renamed)}
+
 
 _FAIL = object()
+
+
+def _root(node):
+    """The name an attribute, call or index chain starts from (``cc`` of ``cc.parse(x)[0]``), or None."""
+    while isinstance(node, (ast.Attribute, ast.Call, ast.Subscript)):
+        node = node.func if isinstance(node, ast.Call) else node.value
+    return node.id if isinstance(node, ast.Name) else None
+
+
+class _Rename(ast.NodeTransformer):
+    """Rename one name (the example's object to ``self``)."""
+
+    def __init__(self, old, new):
+        self.old, self.new = old, new
+
+    def visit_Name(self, node):
+        return ast.Name(self.new, node.ctx) if node.id == self.old else node
 
 
 def _roots(node):
@@ -507,6 +539,7 @@ def _read(code, source, entry, module):
     snippet = _Snippet(entry, module)
     is_class = inspect.isclass(entry)
     obj, built, calls = None, None, []   # calls: (name, call node, loops, result used)
+    made = {}   # name -> the call on the object whose result it was assigned (rxn = cc.parse_reaction_formula(...))
     for node, loops in _statements(tree.body):
         if isinstance(node, (ast.Import, ast.ImportFrom)):
             _add_import(snippet, node)
@@ -518,6 +551,7 @@ def _read(code, source, entry, module):
             ours, create = snippet.is_entry(value.func)
             if ours and is_class and obj is None and built is None and target:
                 obj, built = target, (create, value)
+                snippet.obj = target
                 continue
             inner = value.func.value if isinstance(value.func, ast.Attribute) else None
             if is_class and obj is None and built is None and isinstance(inner, ast.Call):
@@ -534,12 +568,19 @@ def _read(code, source, entry, module):
             for call in _method_calls(node, obj):
                 used = not (isinstance(node, ast.Expr) and node.value is call)
                 calls.append((call.func.attr, call, loops, used))
+                if target and value is call:
+                    made[target] = call
             if target == obj:   # rebound: later calls are on something else
                 break
         if target and value is not None and target != obj:
             snippet.values[target] = _Inline(snippet).visit(_copy(value))
     if built is None:
         return None
+    # calls making an argument of another call on the object: neither the step nor a set-up, a value
+    # (equilibrator's README: rxn = cc.parse_reaction_formula(...); cc.standard_dg_prime(rxn))
+    feeding = {id(call) for name, call in made.items()
+               if any(c[1] is not call and name in _names_in(c[1]) for c in calls)}
+    calls = [c for c in calls if id(c[1]) not in feeding]
     usage = Usage(source)
     create, ctor_call = built
     if is_class:
@@ -577,6 +618,12 @@ def _read(code, source, entry, module):
     else:
         _take(usage.init, snippet, _bound(entry, ctor_call.args, ctor_call.keywords, skip_self=False))
     return usage
+
+
+def _names_in(call):
+    """The names a call's arguments use."""
+    return {n.id for a in [*call.args, *(k.value for k in call.keywords)] for n in ast.walk(a)
+            if isinstance(n, ast.Name)}
 
 
 def _named(name, names):

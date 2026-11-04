@@ -137,7 +137,9 @@ def bundle_hf_models(interface, base_dir, resources):
     :rtype: list[str]
     """
     ids = hf_models(interface, base_dir)
-    calls = [value["call"] for value in _constants(interface) if isinstance(value, dict) and "call" in value]
+    from fmugen.templates.fmugen_runtime import uses_self
+    calls = [value["call"] for value in _constants(interface)
+             if isinstance(value, dict) and "call" in value and not uses_self(value)]
     if not ids and not calls:
         return []
     try:
@@ -470,8 +472,10 @@ def _modules(interface):
                 refs.append(value["ref"])
             elif isinstance(value, dict) and isinstance(value.get("call"), str):
                 # "module:fn(numpy.linspace(...))": the module, and the dotted names in the arguments
+                # ("self.parse(...)": a method of the model object, no module)
                 call = value["call"]
-                refs += [call.partition("(")[0], *_dotted_names(call.partition("(")[2])]
+                refs += [*([] if call.strip().startswith("self") else [call.partition("(")[0]]),
+                         *(name for name in _dotted_names(call.partition("(")[2]) if name.split(".")[0] != "self")]
     for step in interface.get("setup", []):
         refs += [a["ref"] for a in [*step.get("args", []), *step.get("kwargs", {}).values()]
                  if isinstance(a, dict) and "ref" in a]

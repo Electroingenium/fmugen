@@ -513,11 +513,14 @@ def normalize(config, entry_obj, module_name, sys_path, model_name=None, author=
     for table, values in (("constants", constants), ("call_constants", call_constants)):
         for name, value in values.items():
             if isinstance(value, dict) and "call" in value:   # computed when the FMU initializes
-                from fmugen.templates.fmugen_runtime import parse_call_text
+                from fmugen.templates.fmugen_runtime import parse_call_text, uses_self
                 try:
                     parse_call_text(str(value["call"]), chain=True)
                 except (ValueError, SyntaxError) as e:
                     raise InterfaceError(f"[model] {table}.{name}: {e}") from e
+                if uses_self(value) and (table == "constants" or not is_class):
+                    raise InterfaceError(f"[model] {table}.{name} = {{ call = {value['call']!r} }}: self is the "
+                                         "model object, so only a class's call_constants can use it")
 
     time_args, time_epochs = {}, {}
     for arg, source in config.data.get("time", {}).items():
