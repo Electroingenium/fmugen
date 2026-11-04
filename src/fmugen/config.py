@@ -871,7 +871,7 @@ def parse_call(text):
     :type text: str
     :return: ``{"call": target, "args": [...], "kwargs": {...}}``.
     :rtype: dict
-    :raises InterfaceError: a syntax error, a missing ``)``, ``**kwargs``, or an argument that is
+    :raises InterfaceError: a syntax error, a missing ``)``, ``**`` other than a dict literal, or an argument that is
         neither a literal, a name nor a call of a name.
     """
     import ast
@@ -908,9 +908,17 @@ def parse_call(text):
             raise InterfaceError(f"[model] setup {text!r}: only one call is supported, nothing after its ')'")
         args = [argument(node) for node in parsed.args]
         for keyword in parsed.keywords:
-            if keyword.arg is None:
-                raise InterfaceError(f"[model] setup {text!r}: **kwargs is not supported")
-            kwargs[keyword.arg] = argument(keyword.value)
+            if keyword.arg is not None:
+                kwargs[keyword.arg] = argument(keyword.value)
+                continue
+            # **{"key": value, ...}: keys that aren't valid names (e.g. "max-iter") can be given this way
+            mapping = keyword.value
+            if not (isinstance(mapping, ast.Dict) and all(
+                    isinstance(k, ast.Constant) and isinstance(k.value, str) for k in mapping.keys)):
+                raise InterfaceError(f"[model] setup {text!r}: ** takes only a dict literal with string keys, "
+                                     "e.g. **{'max-iter': 10}")
+            for key, value in zip(mapping.keys, mapping.values):
+                kwargs[key.value] = argument(value)
     return {"call": call.strip(), "args": args, "kwargs": kwargs}
 
 

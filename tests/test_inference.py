@@ -398,8 +398,13 @@ def test_setup_call_keeps_keyword_arguments():
     assert parse_call("reset(seed=0)") == {"call": "reset", "args": [], "kwargs": {"seed": 0}}
     assert parse_call("psychrolib:SetUnitSystem(psychrolib.SI, strict=True)") == {
         "call": "psychrolib:SetUnitSystem", "args": [{"ref": "psychrolib.SI"}], "kwargs": {"strict": True}}
-    with pytest.raises(InterfaceError, match=r"\*\*kwargs"):
+    with pytest.raises(InterfaceError, match=r"dict literal"):
         parse_call("reset(**opts)")
+    with pytest.raises(InterfaceError, match=r"dict literal"):
+        parse_call("reset(**{1: 2})")
+    # **{...} gives keys that aren't valid Python names
+    assert parse_call("fit(1, **{'max-iter': 10, 'x': psychrolib.SI}, seed=0)") == {
+        "call": "fit", "args": [1], "kwargs": {"max-iter": 10, "x": {"ref": "psychrolib.SI"}, "seed": 0}}
 
 
 def test_setup_call_takes_calls_as_arguments():

@@ -448,6 +448,19 @@ def resolve_constant(value, obj=None):
 CALLED = "_fmugen_called"   # the name of the called target in a parsed call chain
 
 
+def reject_star_arguments(call, text):
+    """Raise if a call node has ``*args`` or ``**kwargs`` arguments.
+
+    :param call: a call node.
+    :type call: ast.Call
+    :param text: what the error names (the call text the user wrote).
+    :type text: str
+    :raises ValueError: ``*`` or ``**`` arguments.
+    """
+    if any(k.arg is None for k in call.keywords) or any(isinstance(a, ast.Starred) for a in call.args):
+        raise ValueError(f"{text!r}: * and ** arguments are not supported")
+
+
 def parse_call_text(text, chain=False):
     """Parse ``"module:function(arg, key=arg, ...)"`` without calling anything.
 
@@ -483,9 +496,8 @@ def parse_call_text(text, chain=False):
                              f"{text!r}: only .attribute, .method(...) and [index] may follow the call")
         node = node.func if isinstance(node, ast.Call) else node.value
     for call in ast.walk(expression):
-        if isinstance(call, ast.Call) and (any(k.arg is None for k in call.keywords)
-                                           or any(isinstance(a, ast.Starred) for a in call.args)):
-            raise ValueError(f"{text!r}: * and ** arguments are not supported")
+        if isinstance(call, ast.Call):
+            reject_star_arguments(call, text)
     parsed = target.strip(), list(node.args), {k.arg: k.value for k in node.keywords}
     return parsed + ((None if expression is node else expression,) if chain else ())
 
@@ -566,8 +578,7 @@ def call_argument(node, bound=None):
     if isinstance(node, ast.Subscript):
         return call_argument(node.value, bound)[call_argument(node.slice, bound)]
     if isinstance(node, ast.Call) and isinstance(node.func, (ast.Name, ast.Attribute, ast.Call, ast.Subscript)):
-        if any(k.arg is None for k in node.keywords) or any(isinstance(a, ast.Starred) for a in node.args):
-            raise ValueError(f"{ast.unparse(node)!r}: * and ** arguments are not supported")
+        reject_star_arguments(node, ast.unparse(node))
         return call_argument(node.func, bound)(*[call_argument(a, bound) for a in node.args],
                                                **{k.arg: call_argument(k.value, bound) for k in node.keywords})
     if isinstance(node, (ast.List, ast.Tuple, ast.Set)):

@@ -1422,3 +1422,33 @@ def test_a_path_can_call_methods(tmp_path, make_fmu, adapter):
     fmu.initialize()
     assert fmu.fmi2DoStep(0.0, 1.0, False) == OK, fmu.logs
     assert fmu.get("h1", "h2") == [10.5, 9.5]
+
+
+def _local_imports(tree):
+    """``{function name: set of its own import lines}`` for every function in ``tree``."""
+    import ast
+    found = {}
+    for func in ast.walk(tree):
+        if isinstance(func, (ast.FunctionDef, ast.AsyncFunctionDef)):
+            lines = {ast.unparse(n) for n in ast.walk(func) if isinstance(n, (ast.Import, ast.ImportFrom))}
+            if lines:
+                found.setdefault(func.name, set()).update(lines)
+    return found
+
+
+def test_concatenated_runtime_keeps_function_local_imports(tmp_path):
+    # 6906318: an indented ``import numpy`` was dropped when the same line had appeared earlier
+    import ast
+
+    from fmugen.builder import RUNTIME_SOURCES, _concatenate_runtime
+
+    out = tmp_path / "fmugen_runtime.py"
+    _concatenate_runtime(out)
+    text = out.read_text(encoding="utf-8")
+    compile(text, str(out), "exec")
+    kept = _local_imports(ast.parse(text))
+    for source in RUNTIME_SOURCES:
+        for name, lines in _local_imports(ast.parse(source.read_text(encoding="utf-8"))).items():
+            internal = {line for line in lines if "fmugen.templates.fmugen_runtime" in line}
+            missing = lines - internal - kept.get(name, set())
+            assert not missing, f"{source.name}:{name} lost {missing}"
