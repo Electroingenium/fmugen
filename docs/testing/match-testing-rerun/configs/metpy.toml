@@ -1,4 +1,4 @@
-# docs/testing/tested-models.md "Hand configs / metpy": the published [inputs] and [outputs]; [model]
+# docs/testing/hand-configs.md "metpy": the published [inputs] and [outputs]; [model]
 # entry added (the docs show only the two tables)
 [model]
 entry = "metpy.calc:dewpoint_from_relative_humidity"

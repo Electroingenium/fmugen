@@ -196,7 +196,7 @@ MODELS = [
     ("ex_sampled_pid_repo3", "ex", None, {"repo": "sampled_pid", "fmi3": True, "dists": ["simple-pid"]}),
 ]
 
-# GEKKO models: docs/testing/tested-models.md "GEKKO models", entry and `init` options as the table gives
+# GEKKO models: docs/testing/results-gekko.md, entry and `init` options as the table gives
 # them. <gk> = the work copies made by gekko/prepare.sh (renames, wrappers and synthetic data
 # are there; the published repositories are only copied).
 GK_SOLVERS = "/home/pc-simulacion2/cmp/gk/solvers"
@@ -245,6 +245,6 @@ GEKKO_MODELS = [
                                  "--start", "log_level=30"],
      {"dists": ["gekko"], "cwd": "<gk>/openhens",
       "env": {"PATH": GK_SOLVERS, "LD_LIBRARY_PATH": f"{GK_LIBS}:{GK_LIBS}/lapack:{GK_LIBS}/blas:{GK_SOLVERS}"},
-      "hand_outputs": "TAC = { from = \"attr:_best_solns.0.case.TAC\" }   # added by hand, as in docs/testing/tested-models.md\n"}),
+      "hand_outputs": "TAC = { from = \"attr:_best_solns.0.case.TAC\" }   # added by hand, as in docs/testing/results-gekko.md\n"}),
 ]
 MODELS += GEKKO_MODELS

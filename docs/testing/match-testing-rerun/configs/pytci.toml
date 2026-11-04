@@ -1,4 +1,4 @@
-# docs/testing/tested-models.md "Hand configs / PyTCI", as published
+# docs/testing/hand-configs.md "PyTCI", as published
 [model]
 entry = "PyTCI.models.propofol:Marsh"
 fmi_version = 2

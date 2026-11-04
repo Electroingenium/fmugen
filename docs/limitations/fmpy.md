@@ -21,7 +21,7 @@ Effects:
 - The orphaned backend holds the importer's stdout/stderr. Anything that reads them through a pipe (`subprocess.run(capture_output=True)`, `fmpy simulate x.fmu | grep …`) waits forever.
 - The orphans pile up: 31 pairs in the first round-2 run, 14 in its rerun, 2 in two nashpy runs on 2026-10-13. One held a lock on the FMU's work folder until killed.
 
-Found while [testing published models](../testing/tested-models.md#known-problems); the cause was found on 2026-10-13. Not reported upstream yet.
+Found while [testing published models](../troubleshooting.md#known-problems); the cause was found on 2026-10-13. Not reported upstream yet.
 
 **Workaround:** instantiate the FMU yourself and free it in a `finally`: either with `FMU2Slave` / `FMU3Slave`, or by passing `fmu_instance=` to `simulate_fmu`, which then leaves the free to the caller:
 
@@ -43,6 +43,6 @@ With `fmpy simulate`, send the output to a file, not a pipe, and kill leftover `
 
 `simulate_fmu` records only numbers and Booleans (FMI 2: Real, Integer, Boolean; FMI 3: the float, int and Boolean types), so String outputs (timezonefinder's `Europe/Madrid`, mendeleev's `cas`) don't appear in the result, nor do Binary ones in FMI 3.
 
-Found in [tested models](../testing/tested-models.md#python-libraries) (timezonefinder).
+Found in [tested models](../testing/results-libraries.md) (timezonefinder).
 
 **Workaround:** read them with `fmu.getString([value_reference])` on an instance you drive yourself, or use another importer.

@@ -1,5 +1,5 @@
 # The JOS3 hand config below, reading one element of the t_core array with `attr:t_core.0`.
-# docs/testing/tested-models.md "Hand configs / JOS3" (described in prose there): inputs bound to
+# docs/testing/hand-configs.md "JOS3" (described in prose there): inputs bound to
 # attributes (to = "attr:tdb", ...), setup = options.update({'limit_dshiv/dt': True}), and the
 # `globals` init writes for PRE_SHIV; environment at 10 degC as in the docs' check.
 [model]

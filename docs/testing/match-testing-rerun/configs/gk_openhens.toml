@@ -20,5 +20,5 @@ best_solns_to_save = { start = 10 }  # start from --start (passed through **kwar
 log_level = { start = 30 }  # start from --start (passed through **kwargs)
 
 [outputs]
-TAC = { from = "attr:_best_solns.0.case.TAC" }   # added by hand, as in docs/testing/tested-models.md
+TAC = { from = "attr:_best_solns.0.case.TAC" }   # added by hand, as in docs/testing/results-gekko.md
 # no outputs found: add [outputs] by hand (e.g. attributes or properties of the model object)

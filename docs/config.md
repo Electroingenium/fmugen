@@ -263,7 +263,7 @@ The model itself is not run: errors in the model show up when the FMU runs, or e
 
 ## Complete example
 
-An FMI 3 config that uses most sections. It is illustrative: `plant.py` is not part of the repository. For real configs, see the hand configs linked from [tested-models.md](testing/tested-models.md).
+An FMI 3 config that uses most sections. It is illustrative: `plant.py` is not part of the repository. For real configs, see [testing/hand-configs.md](testing/hand-configs.md) and the per-model results it links to.
 
 ```toml
 [model]
