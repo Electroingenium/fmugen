@@ -1,0 +1,17 @@
+# galpy: Orbit.integrate(t, pot) takes t and pot by position only, and its `dt` is the integrator's
+# own step, not the FMU's (init maps it to the step size). integrate returns nothing: the orbit is
+# read with getOrbit() (101 times x 6 phase-space coordinates), so FMI 3.
+[model]
+entry = "galpy.orbit:Orbit"
+call = "integrate"
+fmi_version = 3
+
+[model.call_constants]
+0 = { call = "numpy:linspace(0.0, 10.0, 101)" }
+1 = { call = "galpy.potential:MWPotential2014" }
+
+[parameters]
+vxvv = { dimensions = [6], start = [1.0, 0.1, 1.1, 0.0, 0.1, 0.0] }
+
+[outputs]
+orbit = { dimensions = [101, 6], from = "get:getOrbit" }

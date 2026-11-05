@@ -136,9 +136,7 @@ def build_model_description(interface, model_name=None, author=None):
 
     model_variables = ET.SubElement(root, "ModelVariables")
     index_of = {}   # name -> indexes of its ScalarVariables (several for an array)
-    index = 0
-    for var, element, name in _scalars(variables):
-        index += 1
+    for index, (var, element, name) in enumerate(_scalars(variables), start=1):
         index_of.setdefault(var["name"], []).append(index)
         attrs = {
             "name": name,

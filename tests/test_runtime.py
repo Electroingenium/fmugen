@@ -166,6 +166,44 @@ def test_state_of_selected_attributes(tmp_path, make_fmu, adapter):
     assert fmu.fmi2DoStep(1.0, 1.0, False) == OK and fmu.get("total") == 2.0   # rolled back, then redone
 
 
+def test_default_save_state_falls_back_to_attributes_that_can_be_pickled(tmp_path, make_fmu, adapter):
+    # a config written without --probe keeps save_state = true; the lock makes the whole object unpicklable
+    write(tmp_path, "res.py", '''
+        import threading
+
+        class Accumulator:
+            def __init__(self):
+                self.lock = threading.Lock()
+                self.total = 0.0
+
+            def step(self, u=1.0):
+                with self.lock:
+                    self.total += u
+                return {"total": self.total}
+    ''', '''
+        [model]
+        entry = "res.py:Accumulator"
+        call = "step"
+        [inputs]
+        u = { start = 1.0 }
+        [outputs]
+        total = { from = "return:total" }
+    ''')
+    fmu = adapter(make_fmu(tmp_path))
+    fmu.initialize()
+    assert fmu.fmi2DoStep(0.0, 1.0, False) == OK and fmu.get("total") == 1.0
+    status, state = fmu.fmi2SerializeFmuState()
+    assert status == OK
+    assert any("kept as they are on restore: lock" in m for _s, _c, m in fmu.logs)
+    lock = fmu.engine.obj.lock
+    assert fmu.fmi2DoStep(1.0, 1.0, False) == OK and fmu.get("total") == 2.0
+    assert fmu.fmi2DeserializeFmuState(state) == OK
+    assert fmu.engine.obj.lock is lock
+    assert fmu.fmi2DoStep(1.0, 1.0, False) == OK and fmu.get("total") == 2.0   # rolled back, then redone
+    fmu.fmi2SerializeFmuState()
+    assert sum("kept as they are on restore" in m for _s, _c, m in fmu.logs) == 1   # warned once
+
+
 def test_unpicklable_attribute_that_changes_is_flagged(tmp_path):
     # a generator advances on every step: saving only `count` would restore it wrongly, so init
     # names the attribute it leaves out and asks to check it (or set save_state = false)
@@ -586,7 +624,7 @@ def test_dotted_path_reads_items_of_objects_with_getitem():
     from fmugen.templates.fmugen_runtime import get_path
 
     class Solution:   # like pybamm's Solution: not a mapping, variables built on demand by key
-        t = [0.0, 100.0]
+        t = (0.0, 100.0)
 
         def __getitem__(self, key):
             if key != "Voltage [V]":
@@ -1228,3 +1266,227 @@ def test_a_tunable_parameter_changed_between_steps_reaches_the_model(tmp_path, m
         assert fmu.engine.obj.auto_mode is False and fmu.get("output") == first
     else:
         assert fmu.get("output") == pytest.approx(expected)
+
+
+THERMO = """
+    class Reaction:
+        def __init__(self, energies):
+            self.energies = energies
+
+    class Calculator:
+        def __init__(self, scale=1.0):
+            self.table = {"A": 1.0 * scale, "B": 3.5 * scale}
+
+        def parse_formula(self, text):
+            left, right = text.split(" = ")
+            return Reaction((self.table[left], self.table[right]))
+
+        def standard_dg(self, reaction):
+            return reaction.energies[1] - reaction.energies[0]
+"""
+
+
+def test_an_argument_the_model_object_makes_is_computed_from_it(tmp_path, make_fmu, adapter):
+    # like equilibrator's README: rxn = cc.parse_reaction_formula("..."); cc.standard_dg_prime(rxn)
+    write(tmp_path, "thermo.py", THERMO)
+    write(tmp_path, "README.md", """
+        ```python
+        from thermo import Calculator
+        calc = Calculator()
+        rxn = calc.parse_formula("A = B")
+        print(calc.standard_dg(rxn))
+        ```
+    """)
+    output, data = init(f"{tmp_path / 'thermo.py'}:Calculator", probe=True)
+    assert data["model"]["call"] == "standard_dg" and "setup" not in data["model"]
+    assert data["model"]["call_constants"] == {"reaction": {"call": "self.parse_formula('A = B')"}}
+    assert data["outputs"]["y"] == {"from": "return"}
+    fmu = adapter(make_fmu(output))
+    fmu.initialize()
+    assert fmu.fmi2DoStep(0.0, 1.0, False) == OK, fmu.logs
+    assert fmu.get("y") == 2.5
+    assert fmu.fmi2Reset() == OK   # a new object: the value is made again from it
+    fmu.initialize()
+    assert fmu.fmi2DoStep(0.0, 1.0, False) == OK, fmu.logs
+    assert fmu.get("y") == 2.5
+
+
+def test_self_is_only_the_model_object_of_a_step(tmp_path):
+    write(tmp_path, "thermo.py", THERMO)
+    output, data = init(f"{tmp_path / 'thermo.py'}:Calculator", call="standard_dg", probe=True,
+                        starts={"reaction": {"call": "self.parse_formula('A = B')"}})
+    assert data["model"]["call_constants"] == {"reaction": {"call": "self.parse_formula('A = B')"}}
+    assert data["outputs"]["y"] == {"from": "return"}
+    text = output.read_text().replace("[model.call_constants]", "[model.constants]") \
+        .replace("reaction = {", "scale = {")
+    (tmp_path / "bad.toml").write_text(text)
+    from fmugen.builder import build
+    with pytest.raises(InterfaceError, match="only a class's call_constants"):
+        build(tmp_path / "bad.toml", tmp_path / "out", output_format="folder")
+
+
+def test_a_result_read_through_its_serializer(tmp_path, make_fmu, adapter):
+    # like spaCy's Doc: a C type with no attributes to read, but to_json()
+    write(tmp_path, "nlp.py", """
+        class Doc:
+            __slots__ = ("text",)
+
+            def __init__(self, text):
+                self.text = text
+
+            @property
+            def has_unknown_spaces(self):   # an internal, not the result
+                return False
+
+            def to_json(self):
+                words = self.text.split()
+                return {"text": self.text,
+                        "ents": [{"start": 0, "end": len(words[0]), "label": "ORG"}],
+                        "n": len(words)}
+
+        class Pipeline:
+            def __init__(self, name):
+                self.name = name
+
+            def __call__(self, text):
+                return Doc(text)
+    """)
+    output, data = init(f"{tmp_path / 'nlp.py'}:Pipeline", call="__call__", probe=True,
+                        starts={"name": "en", "text": "Apple buys a startup"})
+    outputs = data["outputs"]
+    assert outputs["ents._0.label"] == {"from": "return:to_json().ents.0.label", "type": "String"}
+    assert outputs["ents._0.end"]["from"] == "return:to_json().ents.0.end"
+    assert outputs["n"]["from"] == "return:to_json().n"
+    fmu = adapter(make_fmu(output))
+    fmu.initialize()
+    assert fmu.fmi2DoStep(0.0, 1.0, False) == OK, fmu.logs
+    assert fmu.get("ents._0.label") == "ORG" and fmu.get("ents._0.end") == 5 and fmu.get("n") == 4
+
+
+def test_a_generator_in_a_returned_tuple_is_read_whole(tmp_path, make_fmu, adapter):
+    # like faster-whisper's transcribe: (a generator of segments, an info object)
+    write(tmp_path, "asr.py", """
+        from dataclasses import dataclass
+
+        @dataclass
+        class Segment:
+            start: float
+            end: float
+            text: str
+
+        @dataclass
+        class Info:
+            duration: float
+
+        def transcribe(audio):
+            words = audio.split()
+            segments = (Segment(i * 1.0, i + 1.0, w) for i, w in enumerate(words))
+            return segments, Info(float(len(words)))
+    """)
+    output, data = init(f"{tmp_path / 'asr.py'}:transcribe", probe=True, starts={"audio": "hello world"})
+    outputs = data["outputs"]
+    assert outputs["y0_1.text"] == {"from": "return:0.1.text", "type": "String"}
+    assert outputs["y1.duration"] == {"from": "return:1.duration"}
+    fmu = adapter(make_fmu(output))
+    fmu.initialize()
+    assert fmu.fmi2DoStep(0.0, 1.0, False) == OK, fmu.logs
+    assert fmu.get("y0_1.text") == "world" and fmu.get("y1.duration") == 2.0
+
+
+def test_an_image_result_is_read_as_its_pixels(tmp_path, make_fmu, adapter):
+    # like transformers' depth-estimation pipeline: {"predicted_depth": tensor, "depth": PIL image}
+    pytest.importorskip("PIL")
+    write(tmp_path, "depth.py", """
+        import numpy
+        from PIL import Image
+
+        def estimate(scale):
+            pixels = numpy.array([[0, 1 * scale], [2 * scale, 3 * scale]], dtype="uint8")
+            return {"depth": Image.fromarray(pixels)}
+    """)
+    output, data = init(f"{tmp_path / 'depth.py'}:estimate", probe=True, starts={"scale": 2})
+    assert data["outputs"]["depth"] == {"dimensions": [2, 2], "type": "Integer"}
+    fmu = adapter(make_fmu(output))
+    fmu.initialize()
+    assert fmu.fmi2DoStep(0.0, 1.0, False) == OK, fmu.logs
+    assert fmu.engine.values["depth"] == [0, 2, 4, 6]
+
+
+def test_a_path_can_call_methods(tmp_path, make_fmu, adapter):
+    # like flopy: run_simulation() writes the heads to a file; get_model().output.head().get_data() reads them
+    write(tmp_path, "sim.py", """
+        class HeadFile:
+            def __init__(self, heads):
+                self.heads = heads
+
+            def get_data(self):
+                return list(self.heads)
+
+        class Output:
+            def __init__(self, model):
+                self.model = model
+
+            def head(self):
+                return HeadFile(self.model.heads)
+
+        class Model:
+            def __init__(self):
+                self.heads = [0.0, 0.0]
+                self.output = Output(self)
+
+        class Simulation:
+            def __init__(self, recharge):
+                self.recharge, self.model = recharge, Model()
+
+            def get_model(self):
+                return self.model
+
+            def run_simulation(self):
+                self.model.heads = [10.0 + self.recharge, 9.0 + self.recharge]
+                return True, ["normal termination"]
+    """, config="""
+        [model]
+        entry = "sim.py:Simulation"
+        call = "run_simulation"
+
+        [parameters]
+        recharge = { start = 0.5 }
+
+        [outputs]
+        h1 = { from = "attr:get_model().output.head().get_data().0" }
+        h2 = { from = "attr:get_model().output.head().get_data().1" }
+    """)
+    fmu = adapter(make_fmu(tmp_path / "fmugen.toml"))
+    fmu.initialize()
+    assert fmu.fmi2DoStep(0.0, 1.0, False) == OK, fmu.logs
+    assert fmu.get("h1", "h2") == [10.5, 9.5]
+
+
+def _local_imports(tree):
+    """``{function name: set of its own import lines}`` for every function in ``tree``."""
+    import ast
+    found = {}
+    for func in ast.walk(tree):
+        if isinstance(func, (ast.FunctionDef, ast.AsyncFunctionDef)):
+            lines = {ast.unparse(n) for n in ast.walk(func) if isinstance(n, (ast.Import, ast.ImportFrom))}
+            if lines:
+                found.setdefault(func.name, set()).update(lines)
+    return found
+
+
+def test_concatenated_runtime_keeps_function_local_imports(tmp_path):
+    # 6906318: an indented ``import numpy`` was dropped when the same line had appeared earlier
+    import ast
+
+    from fmugen.builder import RUNTIME_SOURCES, _concatenate_runtime
+
+    out = tmp_path / "fmugen_runtime.py"
+    _concatenate_runtime(out)
+    text = out.read_text(encoding="utf-8")
+    compile(text, str(out), "exec")
+    kept = _local_imports(ast.parse(text))
+    for source in RUNTIME_SOURCES:
+        for name, lines in _local_imports(ast.parse(source.read_text(encoding="utf-8"))).items():
+            internal = {line for line in lines if "fmugen.templates.fmugen_runtime" in line}
+            missing = lines - internal - kept.get(name, set())
+            assert not missing, f"{source.name}:{name} lost {missing}"

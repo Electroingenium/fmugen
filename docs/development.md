@@ -55,7 +55,7 @@ The published models fmugen was tried on, and how, are in [testing/tested-models
 | `src/fmugen/static.py` | Reading the model's source code to find its results, without running it |
 | `src/fmugen/examples.py` | Reading usage examples (doctests, README, `examples/`) for `init` |
 | `src/fmugen/arguments.py` | Argument processing and type/value utilities used by inference |
-| `src/fmugen/probe.py` | `init --probe`: calling the model once, output and state detection |
+| `src/fmugen/probe/` | `init --probe`: calling the model once, output and state detection. Layered, each module importing only those above it: `_base` (setup calls, time arguments, `--read`), `_reading` (results in a return value or object), `_from_code` (outputs from the code), `_arguments`, `_calling` (the call and its retries), `_checks` (after the step), `_classes` (the class probe). `__init__` re-exports every name |
 | `src/fmugen/toml_output.py` | Rendering an inferred config as a `fmugen.toml` file |
 | `src/fmugen/interface.schema.json` | JSON Schema of `interface.json` ([interface.md](interface.md)) |
 | `src/fmugen/templates/fmugen_runtime/` | The engine: split into `_constants`, `_helpers`, `_engine`, `_composite` for development; concatenated into one file at build time |
@@ -96,7 +96,7 @@ To move to a newer UniFMU:
 - **Python floor:** `requires-python = ">=3.13"` (decided 2026-10-14). The build side would need 3.11 and the runtime inside the FMU 3.10.
 
 ### Model coverage
-- **Generators** (`yield`-based models driven with `next()`/`send()`): `build` refuses them with a hint, since no published generator model was found to design the inputs against. simpy models work through a factory calling `env.run(until=…)`.
+- **Generators driven with `next()`/`send()`** once per step: a step that returns a generator is read whole into a tuple (kokoro's `KPipeline`, piper's `synthesize`), so an endless one fails the step with a hint (after 100 000 items); no published model stepped with `next()` was found to design the inputs against. simpy models work through a factory calling `env.run(until=…)`.
 - **Other model formats:** Jupyter notebooks, scikit-learn (`kind = "sklearn"` calling `predict` with the inputs as features) and standalone ONNX files.
 - **Inference:** a `state` dict passed in and returned (`def step(u, state): …; return y, state`) isn't recognised as a state; it needs `to = "arg:state[key]"` / `next = "return:1.key"` by hand.
 - **modelDescription:** FMI 3 terminals and icons aren't supported.
@@ -106,7 +106,6 @@ To move to a newer UniFMU:
 - **FMPy is the only importer used.** Add [fmusim from the Reference FMUs](https://github.com/modelica/Reference-FMUs) and, optionally, OMSimulator: importers call functions in different orders.
 - **The published-model tests are manual.** An opt-in `pytest -m pypi` suite built from the configs in `models/r3/*/fmugen.toml` would keep them checked.
 - **Property-based tests** (Hypothesis) for `render_toml` → `load_config` round trips and for `coerce` / `reshape` / `flatten`.
-- **No linter, formatter or type checker.** Add `ruff` and `pre-commit`; `pyright` or `mypy` in basic mode, plus a `TypedDict` for the interface spec.
 
 ---
 

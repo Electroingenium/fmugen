@@ -4,18 +4,17 @@ import dataclasses
 import datetime
 import enum
 import inspect
-import types
-import json
 import keyword
 import math
 import re
 import sys
 import textwrap
+import types
 import typing
 
 from fmugen import static
 from fmugen.config import InterfaceError
-from fmugen.toml_output import _key, _value
+from fmugen.toml_output import _key
 
 #: Argument names (lower case, without ``_``) taken as ``[time]`` arguments, and their source.
 TIME_NAMES = {"t": "time", "time": "time", "currenttime": "time", "tcurrent": "time", "tnow": "time",
@@ -54,6 +53,35 @@ def _horizon(p):
     default = p.default
     return bool(annotation_ints) or default is None or isinstance(default, int) and not isinstance(default, bool)
 
+#: Words in a docstring's text of an argument that make it an array: ``t : np.ndarray``, ``Vector of times``.
+_ARRAY_WORDS = re.compile(r"\b(?:nd)?arrays?\b|array[_-]like|\bvectors?\b|\bsequence\b|\blist\b|linspace", re.IGNORECASE)
+
+
+def _time_vector(fn, p):
+    """Whether an argument named like the time (``t``) is a vector of times, not the time now.
+
+    ssqueezepy's ``ssq_cwt(x, t=None)``: ``t`` is the times of the samples. It's one when it's
+    annotated as an array, or its docstring entry (numpydoc, Google, Sphinx or ``t: np.ndarray``
+    lines under any header) calls it an array, a vector or a list.
+
+    :param fn: the function the argument is of.
+    :param p: the parameter.
+    :type p: inspect.Parameter
+    :rtype: bool
+    """
+    if _time_source(p.name) != "time":
+        return False
+    if p.annotation is not p.empty and static._is_array_hint(static.unwrap_optional(p.annotation)):
+        return True
+    try:
+        doc = inspect.getdoc(fn) or ""
+    except Exception:   # an odd object: no docstring
+        return False
+    entry = re.compile(rf"^[ \t]*(?::(?:param|type)\s+(?:\S+\s+)?)?{re.escape(p.name)}\b[^:\n]{{0,40}}:(.*)(\n.*)?",
+                       re.MULTILINE)
+    return any(_ARRAY_WORDS.search(m.group(1) + (m.group(2) or "")) for m in entry.finditer(doc))
+
+
 #: Python types that are FMI scalar values.
 SCALARS = (bool, int, float, str)
 
@@ -70,8 +98,11 @@ def _dotted_names(text):
     try:
         tree = ast.parse(text.rstrip().removesuffix(")") or "0", mode="eval")
     except SyntaxError:
-        return []
-    return [ast.unparse(n) for n in ast.walk(tree) if isinstance(n, ast.Name)
+        try:   # the text after a call's "(", with a chain after its ")": "2024).utc(2024, 1)"
+            tree = ast.parse(f"_fmugen_called({text}", mode="eval")
+        except SyntaxError:
+            return []
+    return [ast.unparse(n) for n in ast.walk(tree) if isinstance(n, ast.Name) and n.id != "_fmugen_called"
             or isinstance(n, ast.Attribute) and isinstance(n.value, (ast.Name, ast.Attribute))]
 
 DATETIME_BY_NAME = ("init", "date-time by name")   # comments key (not rendered): [time] args only named like one
@@ -290,12 +321,24 @@ def _apply_converts(data, converts):
 
     :param data: the config being inferred; updated in place.
     :type data: dict
+    A step method argument the constructor also has is named ``<method>_NAME`` (as for
+    ``--start``), also before it's renamed so: ``--convert calculate_optimal_actuation_x0=...``
+    then applies to the method's ``x0``, and NAME only to the constructor's.
+
     :param converts: ``{NAME: converter}``, or None.
     :type converts: dict or None
     """
-    for name, converter in (converts or {}).items():
+    converts = converts or {}
+    method = data["model"].get("call", "call").strip("_")
+    for name, converter in converts.items():
+        base = name[len(method) + 1:] if name.startswith(f"{method}_") else None
         for section in ("parameters", "inputs", "states"):
-            info = data.get(section, {}).get(name)
+            variables = data.get(section, {})
+            info = variables.get(name)
+            if info is None and base and section != "parameters" and name not in _all_variables(data):
+                info = variables.get(base)   # not renamed yet
+            elif info is not None and section != "parameters" and f"{method}_{name}" in converts:
+                continue   # the method's copy has its own --convert
             if info is None:
                 continue
             info.pop("numpy", None), info.pop("convert", None)
@@ -305,11 +348,18 @@ def _apply_converts(data, converts):
                 info["convert"] = converter
 
 
+def _all_variables(data):
+    """The names of the parameters, inputs and states of a config being inferred."""
+    return {n for section in ("parameters", "inputs", "states") for n in data.get(section, {})}
+
+
 def _assign_starts(init, method, starts):
     """Split ``--start`` values between constructor and step method arguments.
 
     A name goes to the argument that has no default (it needs a value); on a tie, to the
-    step method. Names neither declares go to whichever accepts ``**kwargs`` (method first).
+    step method. Names neither declares go to whichever accepts ``**kwargs``; when both do, to the
+    constructor, whose keywords configure the object (feedinlib's ``Photovoltaic(**attributes)``
+    with ``feedin(weather, location, **kwargs)``).
     For a name both declare, ``<method>_NAME`` (the variable name init gives the method's one)
     goes to the method, and then NAME to the constructor: x0 and calculate_optimal_actuation_x0.
     A ``--const`` NAME both declare always goes to the constructor.
@@ -335,6 +385,8 @@ def _assign_starts(init, method, starts):
             return NO_SIGNATURE_PARAMETERS
 
     init_p, call_p = params(init), params(method)
+    # object.__init__(*args, **kwargs) of a class without its own doesn't take the step's keywords
+    init_kwargs = init is not object.__init__ and any(p.kind is p.VAR_KEYWORD for p in init_p.values())
     init_starts, call_starts = {}, {}
     # the method's copy of a shared name, given by the name _rename_duplicates gives its variable
     prefix = f"{getattr(method, '__name__', 'call').strip('_')}_"
@@ -356,9 +408,11 @@ def _assign_starts(init, method, starts):
                 else call_starts
         elif in_init or in_call:
             target = init_starts if in_init else call_starts
+        elif init_kwargs:
+            target = init_starts
         elif any(p.kind is p.VAR_KEYWORD for p in call_p.values()):
             target = call_starts
-        elif any(p.kind in (p.VAR_KEYWORD, p.VAR_POSITIONAL) for p in init_p.values()):
+        elif any(p.kind is p.VAR_POSITIONAL for p in init_p.values()):
             target = init_starts
         else:
             continue  # reported as unused
@@ -410,6 +464,19 @@ def _keywordless(fn):
     :rtype: bool
     """
     return hasattr(fn, "nin") and type(fn).__module__.split(".")[0] in ("numpy", "numba")
+
+
+def _single_dispatch(fn):
+    """Whether ``fn`` is a ``functools.singledispatch`` function or ``singledispatchmethod``.
+
+    These choose the implementation by the type of their first argument, so it must be passed by
+    position (galpy's ``Orbit.integrate(t, pot)``).
+
+    :param fn: a callable.
+    :rtype: bool
+    """
+    fn = getattr(fn, "__func__", fn)
+    return callable(getattr(fn, "register", None)) and (hasattr(fn, "registry") or hasattr(fn, "__wrapped__"))
 
 
 def _given_constant(value):
@@ -523,15 +590,27 @@ def _arguments(fn, section, data, comments, skip_self=False, allow_time=True, co
         params = params[1:]
     params = [_unwrap_descriptor(p) for p in params]
     keywordless = _keywordless(fn)
+    dispatched = _single_dispatch(fn)   # its first argument goes by position
+    # a vector of times given (galpy's integrate(t, ...)): a dt beside it is the integrator's own step
+    times_given = any(_time_source(p.name) == "time" and p.name in starts
+                      and (_given_constant(starts[p.name]) or isinstance(starts[p.name], (list, tuple)))
+                      for p in params)
     position = 0
-    for p in params:
+    for index, p in enumerate(params):
         if p.kind in (p.VAR_POSITIONAL, p.VAR_KEYWORD):
             continue
         if p.kind is p.POSITIONAL_ONLY and not positional:
             continue
-        if allow_time and _time_source(p.name) and p.name not in starts and not _horizon(p):
-            time_args[p.name] = _time_source(p.name)
-            continue
+        by_position = p.kind is p.POSITIONAL_ONLY or keywordless or (dispatched and index == 0)
+        if allow_time and _time_source(p.name) == "step_size" and times_given and p.name not in starts:
+            comments.setdefault((section, p.name), f"not the step size: the step is given a vector of times, so "
+                                                   f"{p.name} is the integrator's own step")
+        elif allow_time and _time_source(p.name) and p.name not in starts and not _horizon(p):
+            if not _time_vector(fn, p):
+                time_args[p.name] = _time_source(p.name)
+                continue
+            comments.setdefault((section, p.name), "a vector of times by its annotation or docstring, so not the "
+                                                   "simulation time")
         if allow_time and _time_source(p.name) and isinstance(starts.get(p.name), (int, float)):
             comments[(section, p.name)] = (f"from --start, so a fixed value; to pass the simulation time instead, "
                                            f"remove it and add [time] {p.name} = \"{_time_source(p.name)}\"")
@@ -547,7 +626,13 @@ def _arguments(fn, section, data, comments, skip_self=False, allow_time=True, co
                      "with an input; the epoch plus the simulation time")
             continue
         if _given_constant(starts.get(p.name)):   # --const: a fixed value, not a variable
-            data["model"].setdefault(constants_key, {})[p.name] = _const_entry(starts[p.name])
+            key = str(position) if dispatched and index == 0 else p.name   # a single-dispatch first argument
+            data["model"].setdefault(constants_key, {})[key] = _const_entry(starts[p.name])
+            if key != p.name:
+                comments[("model", f"{constants_key}.{key}")] = (f"--const {p.name}, passed by position: "
+                                                                 "the method dispatches on its type")
+                comments.setdefault(POSITIONAL_STARTS, {})[p.name] = position
+                position += 1
             continue
         if p.name in starts and _split_items(p, starts[p.name], variables, section, comments, arrays):
             continue
@@ -604,18 +689,19 @@ def _arguments(fn, section, data, comments, skip_self=False, allow_time=True, co
         elif arrays and _array_info(default):
             variables[p.name] = _array_info(default, with_start=True)
         elif p.name in starts:   # --start with a value that can't be an FMU variable
-            raise InterfaceError(f"--start {p.name}: {default!r} can't be an FMU variable (a number, string, bool "
-                                 f"or array); give a fixed value with --const {p.name}=...")
+            if not _fixed_start(p.name, default, data, comments, constants_key):
+                raise InterfaceError(f"--start {p.name}: {default!r} can't be an FMU variable (a number, string, "
+                                     f"bool or array); give a fixed value with --const {p.name}=...")
         else:
             comments[("model", f"{constants_key}.{p.name}")] = _constant(default)
         if len(variables) > before and "dimensions" in variables[p.name]:
-            converter = _converter(p.annotation)
+            converter = _converter(p.annotation) or ("numpy" if _documented_ndarray(fn, p.name) else None)
             if converter == "numpy":
                 variables[p.name]["numpy"] = True
             elif converter:
                 variables[p.name]["convert"] = converter
                 comments.setdefault((section, p.name), f"passed as {converter.replace(':', '.')}(...)")
-        if (p.kind is p.POSITIONAL_ONLY or keywordless) and len(variables) > before:
+        if by_position and len(variables) > before:
             variables[p.name]["to"] = f"pos:{position}"
             position += 1
     # not *args/**kwargs' own names: MOMENT's from_pretrained(..., **model_kwargs) takes a model_kwargs keyword
@@ -646,7 +732,8 @@ def _arguments(fn, section, data, comments, skip_self=False, allow_time=True, co
             if computed:
                 data["model"].setdefault(constants_key, {})[name] = _const_entry(starts[name])
                 comments[("model", f"{constants_key}.{name}")] = "--const, passed through **kwargs"
-            else:
+            elif isinstance(starts[name], SCALARS) or (arrays and _array_info(starts[name])) \
+                    or not _fixed_start(name, starts[name], data, comments, constants_key):
                 variables[name] = _extra_info(name, starts[name], arrays)
                 comments[(section, name)] = "start from --start (passed through **kwargs)"
     if time_args and allow_time:
@@ -670,6 +757,48 @@ def _unwrap_descriptor(p):
             or not hasattr(type(default), "__get__") or not hasattr(default, "default"):
         return p
     return p.replace(default=default.default)
+
+
+def _documented_ndarray(fn, name):
+    """Whether ``fn``'s numpydoc docstring types argument ``name`` as an ndarray (gym-pybullet-drones'
+    ``action : ndarray | dict[..]``), not as array_like: then a list won't do.
+
+    :param fn: the function or method.
+    :param name: the argument.
+    :type name: str
+    :rtype: bool
+    """
+    doc = inspect.getdoc(fn) or ""
+    line = re.search(rf"^{re.escape(name)}\s*:\s*(.+)$", doc, re.MULTILINE)
+    return bool(line) and re.search(r"\b(?:np\.|numpy\.)?ndarray\b", line.group(1)) is not None
+
+
+def _fixed_start(name, value, data, comments, constants_key):
+    """Write a ``--start`` value that can't be an FMU variable as a fixed value, as ``--const`` would: a list of
+    strings (gliner's ``labels=['person', 'organization']``), a tuple of mixed values, a dict of lists.
+
+    :param name: the argument.
+    :type name: str
+    :param value: the ``--start`` value.
+    :param data: the config being inferred; updated in place.
+    :type data: dict
+    :param comments: ``(section, key) -> text``; updated in place.
+    :type comments: dict
+    :param constants_key: ``"constants"`` or ``"call_constants"``.
+    :type constants_key: str
+    :return: False when it isn't a Python literal (then it can't be written either).
+    :rtype: bool
+    """
+    text = repr(value)
+    try:
+        if ast.literal_eval(text) != value:
+            return False
+    except (ValueError, TypeError, SyntaxError, MemoryError, RecursionError):
+        return False
+    data["model"].setdefault(constants_key, {})[name] = _const_entry({"python": text})
+    comments[("constant", f"{constants_key}.{name}")] = ("from --start: not a number, string, bool or array, so a "
+                                                         "fixed value, not an FMU variable")
+    return True
 
 
 def _extra_info(name, value, arrays):
@@ -829,6 +958,11 @@ def _split_fields(fn, p, variables, section, comments, starts, arrays):
     except Exception:
         cls = p.annotation if isinstance(p.annotation, type) else None
     cls = type(default) if default is not None else static.unwrap_optional(cls)
+    if cls is None and default is None and p.annotation is p.empty \
+            and any(name.startswith(f"{p.name}.") for name in starts):
+        # the fields given: the class it's named after (simglucose's step(action), its module's Action)
+        from fmugen.templates.fmugen_runtime._helpers import named_class
+        cls = named_class(inspect.unwrap(fn), p.name)
     fields = _object_fields(cls)
     if not fields:
         return False
@@ -982,7 +1116,7 @@ def _made_up_array(fn, p):
 
 #: A documented default: ``default 1e-6``, ``defaults to 0.5``, ``(default: 3)``, ``default=300``.
 _DOCUMENTED_DEFAULT = re.compile(r"\bdefaults?(?:\s+value)?(?:\s+is|\s+to|\s+of)?\s*[:=]?\s*`*([-+]?(?:\d+\.?\d*|\.\d+)"
-                                 r"(?:[eE][-+]?\d+)?)(?![\w.])", re.I)
+                                 r"(?:[eE][-+]?\d+)?)(?![\w.])", re.IGNORECASE)
 #: A typical value for a quantity in a unit a docstring gives, where 1.0 is far from any real one.
 TYPICAL_BY_UNIT = {"K": 293.15, "degC": 20.0, "°C": 20.0, "Pa": 101325.0, "kPa": 101.325, "MPa": 0.101325,
                    "bar": 1.01325, "mbar": 1013.25, "hPa": 1013.25, "psi": 14.696}
@@ -1319,11 +1453,20 @@ def _array_info(value, with_start=False):
     :return: ``{dimensions, type?, numpy? / convert?, start?}``, else None (also for empty arrays).
     :rtype: dict or None
     """
+    if not isinstance(value, type) and not hasattr(value, "tolist") and hasattr(value, "to_numpy")             and hasattr(value, "dims"):
+        value = value.to_numpy()   # an xarray DataArray (py_wake's WS_eff)
+    from fmugen.templates.fmugen_runtime import image_pixels
+    pixels = image_pixels(value)
+    if pixels is not None:
+        value = pixels   # a PIL image (a depth map): its pixels, as the runtime reads it
     # not a class: numpy.float64 (a dtype default) has shape and ndim as descriptors
     if (not isinstance(value, type) and hasattr(value, "shape") and hasattr(value, "tolist")
             and getattr(value, "ndim", 0) > 0):
         from fmugen.templates.fmugen_runtime import flatten
-        shape, flat = [int(n) for n in value.shape], flatten(value.tolist())
+        try:
+            shape, flat = [int(n) for n in value.shape], flatten(value.tolist())
+        except Exception:   # a tensor without data: torch's meta device (whisper's alignment_heads before loading)
+            return None
         fmi_type = NUMPY_TYPES.get(str(value.dtype).rpartition(".")[2])   # "float32", "torch.float32", ...
         if str(value.dtype) == "object" and flat and all(
                 isinstance(x, (int, float)) and not isinstance(x, bool) for x in flat):
@@ -1352,6 +1495,9 @@ def _array_info(value, with_start=False):
         else:
             return None
         info = {"dimensions": shape}
+        if isinstance(value, tuple) and len(shape) == 1:
+            # passed back as a tuple: models compare or unpack it as one (gplearn's const_range, minigrid's agent_start_pos)
+            info["convert"] = "builtins:tuple"
     else:
         return None
     if 0 in shape:

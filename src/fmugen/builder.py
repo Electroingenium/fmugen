@@ -13,8 +13,16 @@ import tempfile
 import zipfile
 from pathlib import Path
 
+from fmugen.arguments import assumptions, guessed_outputs, unfit_outputs
 from fmugen.compose import PARTS_DIR, Composite, combine, is_composite
-from fmugen.config import MODEL_DIR, RESERVED_MODULES, Config, InterfaceError, load_config, normalize
+from fmugen.config import (
+    MODEL_DIR,
+    RESERVED_MODULES,
+    Config,
+    InterfaceError,
+    load_config,
+    normalize,
+)
 from fmugen.description import build_time, stamp_guid, write_model_description
 from fmugen.distribute import (
     COMPILERS,
@@ -24,9 +32,8 @@ from fmugen.distribute import (
 )
 from fmugen.distribute import vendor as vendor_wheels
 from fmugen.interface import import_failure, infer_config, parse_target
-from fmugen.arguments import assumptions, guessed_outputs, unfit_outputs
-from fmugen.toml_output import render_toml
 from fmugen.templates.fmugen_runtime import setup_sys_path
+from fmugen.toml_output import render_toml
 
 #: The installed fmugen package folder.
 PACKAGE_DIR = Path(__file__).resolve().parent
@@ -72,21 +79,21 @@ def _concatenate_runtime(destination):
         text = _INTERNAL_IMPORT.sub("", text)
         sections.append(text)
     first, *rest = sections
+    # only module-level imports: one inside a function (``import numpy`` where numpy is optional) is that
+    # function's own, and the same line in another function doesn't make it redundant
     seen_imports = set()
     for line in first.splitlines():
-        stripped = line.strip()
-        if stripped.startswith(("import ", "from ")):
-            seen_imports.add(stripped)
+        if line.startswith(("import ", "from ")):
+            seen_imports.add(line.strip())
     cleaned_rest = []
     for section in rest:
         section = re.sub(r'\A\s*""".*?"""\s*\n', "", section, count=1, flags=re.DOTALL)
         lines = []
         for line in section.splitlines(keepends=True):
-            stripped = line.strip()
-            if stripped in seen_imports:
-                continue
-            if stripped.startswith(("import ", "from ")):
-                seen_imports.add(stripped)
+            if line.startswith(("import ", "from ")):
+                if line.strip() in seen_imports:
+                    continue
+                seen_imports.add(line.strip())
             lines.append(line)
         cleaned_rest.append("".join(lines))
     content = first + "\n" + "\n".join(cleaned_rest)
@@ -157,7 +164,7 @@ def _template(args, check):
     if key not in _templates:
         folder = Path(tempfile.mkdtemp(prefix="fmugen-unifmu-"))
         atexit.register(shutil.rmtree, folder, ignore_errors=True)
-        result = subprocess.run([exe, *args], capture_output=True, text=True, cwd=folder)
+        result = subprocess.run([exe, *args], capture_output=True, text=True, cwd=folder, check=False)
         if result.returncode != 0 or not check(folder):
             shutil.rmtree(folder, ignore_errors=True)
             raise InterfaceError(f"`unifmu {' '.join(args)}` failed:\n{result.stdout}{result.stderr}")
@@ -644,7 +651,7 @@ NO_OUTPUTS = "no outputs found: add [outputs] by hand (e.g. attributes or proper
 
 
 def init(target, output=None, call=None, force=False, fmi_version=None, starts=None, setup=None, kind=None,
-         create=None, probe=False, converts=None):
+         create=None, probe=False, converts=None, reads=None):
     """Write the inferred config for a model (``fmugen init``).
 
     Warnings about assumptions are printed to stderr.
@@ -671,6 +678,8 @@ def init(target, output=None, call=None, force=False, fmi_version=None, starts=N
     :type probe: bool or float
     :param converts: ``--convert`` options.
     :type converts: dict or None
+    :param reads: ``--read`` options: ``{output name: "attr:..." or "return[:...]"}``.
+    :type reads: dict or None
     :return: ``(written path or None when printed, config dict)``.
     :rtype: tuple
     :raises FileExistsError: the config exists and ``force`` is false.
@@ -684,7 +693,7 @@ def init(target, output=None, call=None, force=False, fmi_version=None, starts=N
     with isolated_imports():
         data, comments = infer_config(target, call=call, config_dir=output.parent, fmi_version=fmi_version,
                                       starts=starts, setup=setup, kind=kind, create=create, probe=probe,
-                                      converts=converts)
+                                      converts=converts, reads=reads)
     warnings = _init_warnings(data, comments, probe)
     if model_path and model_path.stem in RESERVED_MODULES:
         warnings.insert(0, f"{model_path.name} clashes with a UniFMU backend module, so build will refuse it; "
@@ -711,7 +720,7 @@ def _init_warnings(data, comments, probe):
     :type probe: bool
     :rtype: list[str]
     """
-    warnings = assumptions(comments)
+    warnings = assumptions(comments) + list(comments.get(("init", "data_arguments"), []))
     outputs = data.get("outputs", {})
     if not outputs:
         warnings.append(NO_OUTPUTS)

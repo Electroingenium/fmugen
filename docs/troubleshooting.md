@@ -24,7 +24,8 @@ Every config error names the section and key, e.g. `[inputs] x: unknown key(s) [
 | `cannot inspect the signature of …` (comment in the generated config) | A C extension without signature information. | Give the arguments with `--start`, in order (they are passed by position), or write variables by hand with `to = "pos:N"`. |
 | `unknown key(s) [...]` | A typo in a key. | The message lists the allowed keys. |
 | `duplicate variable or clock names` | The same name in two sections, or a variable named like a clock. | Rename one; bind it with `to`/`from`. |
-| `fmugen: warning: it's not clear which method of … runs a step` | `init` guessed the step method. | Rerun with `--call METHOD`, or edit `[model] call`. |
+| `fmugen: warning: it's not clear which method of … runs a step` | `init` guessed the step method (by name, then by how often the package calls each candidate). | Rerun with `--call METHOD`, or edit `[model] call`. |
+| `warning: NAME: looks like data the model runs on, and none was given (…)` | An argument named or typed like the model's input (image, audio, signal, table, file) was left out, made up, or never passed to the model a factory returns; the FMU then runs on nothing or on made-up values. | Give your data with the `--const` or `--start` the warning suggests, with your file name. If it isn't data (a setting named like it), ignore the warning. |
 | `save_state = false` or `save_state = [...]` written by `init`, with a comment | The object holds something that can't be pickled: an ONNX session, a file, a socket, a generator. | Fine for most uses; the FMU just can't roll back. With a list, check that the attributes named as not saved don't change during a simulation (a session or device handle doesn't; a generator does): if they do, set `save_state = false`. |
 | `build` refuses a file named `model.py` | The name clashes with UniFMU's backend module (also `backend`, `main`, `abstract_backend`, `schemas`, `fmugen_runtime`). | Rename the file. |
 
@@ -51,10 +52,12 @@ Every config error names the section and key, e.g. `[inputs] x: unknown key(s) [
 
 ## Known problems
 
-- **`init` binds an argument named `t` to the FMU time**, also when it is a time vector (ssqueezepy's `ssq_cwt(x, t=None)`): remove it from `[time]`.
-- **`--convert` is refused for a step method's argument given by its prefixed name** (`--convert calculate_optimal_actuation_x0=…`). Give a `call:` start instead (`--start calculate_optimal_actuation_x0=call:numpy:array(…)`).
+- **`init` binds an argument named `t` to the FMU time** unless its annotation or docstring says it's an array, a vector or a list (ssqueezepy's `ssq_cwt(x, t=None)`: "t: np.ndarray"). An undocumented time vector is still bound: remove it from `[time]`.
 - **PyInstaller stops on xgboost** unless hypothesis is installed: it imports every xgboost submodule, and `xgboost.testing` needs hypothesis.
 - **Windows long paths:** some packages (cantera, pybamm) fail to import from a venv in a deeply nested folder, and PyInstaller can miss deep data files. Keep build folders short.
 - **Module-level scripts can't be models:** a script that solves at import time has nothing to call. Wrap its code in a function or class.
+- **Results read back from files** (flopy writes its heads, and reads them through `sim.get_model().output.head().get_data()`) aren't found by `init --probe`: the step returns only whether it ran. Add the output by hand with a path that calls the methods: `heads = { from = "attr:get_model().output.head().get_data()", dimensions = [1, 1, 10] }`.
+- **Large arrays need FMI 3:** in FMI 2 every element is a variable of its own, so an image-sized result (a 1080 × 810 depth map) makes a model description of hundreds of MB that importers can't load in reasonable time. Use `--fmi 3`, where an array is one variable.
+- **C functions without a signature** (CoolProp's `PropsSI`) give no variables: write the config by hand.
 
 Problems in UniFMU and FMPy themselves are in [limitations/unifmu.md](limitations/unifmu.md) and [limitations/fmpy.md](limitations/fmpy.md).

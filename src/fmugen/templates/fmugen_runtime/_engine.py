@@ -8,7 +8,6 @@ import json
 import logging
 import math
 import os
-import pickle
 import sys
 import traceback
 import warnings
@@ -16,16 +15,43 @@ from collections.abc import Mapping
 from pathlib import Path
 
 from fmugen.templates.fmugen_runtime._constants import (
-    DEFAULT_VALUES, INTERVAL_CHANGED, INTERVAL_NOT_YET_KNOWN, INTERVAL_UNCHANGED,
-    Status, StepRejected,
+    DEFAULT_VALUES,
+    INTERVAL_CHANGED,
+    INTERVAL_NOT_YET_KNOWN,
+    INTERVAL_UNCHANGED,
+    Status,
+    StepRejected,
 )
 from fmugen.templates.fmugen_runtime._helpers import (
-    _capture_output, _release_output, _clock_of, _is_number, _quiet_debug_logging,
-    assemble_items, coerce, converter, describe, dump_state,
-    flatten, get_path, is_literal_constant, keyword_constants,
-    load_entry, load_state, object_call, outside_bundle, pick, plain_number, reshape,
-    resolve_constant, resolve_reference, results_of, rng_states, set_path,
-    set_rng_states, split_global,
+    _capture_output,
+    _clock_of,
+    _is_number,
+    _quiet_debug_logging,
+    _release_output,
+    assemble_items,
+    coerce,
+    converter,
+    describe,
+    dump_state,
+    flatten,
+    get_path,
+    is_literal_constant,
+    keyword_constants,
+    load_entry,
+    load_state,
+    object_call,
+    outside_bundle,
+    pick,
+    plain_number,
+    reshape,
+    resolve_constant,
+    resolve_reference,
+    results_of,
+    rng_states,
+    set_path,
+    set_rng_states,
+    split_global,
+    uses_self,
 )
 
 
@@ -364,6 +390,7 @@ class Engine:
                 self.obj = self._invoke(getattr(self.entry, create) if create else self.entry,
                                         *self._positional(kind="initpos"), **kwargs)
                 self._run_setup(after_construction=True)
+                self._resolve_constants(of_object=True)
                 self._setter_last, self._setter_fresh, self._setter_called = {}, set(), set()
                 self._apply_attributes(clock=None, initial=True)
                 for name in self.clocks:
@@ -703,7 +730,7 @@ class Engine:
                     return self.error(f"{name}: the model object has no attribute {var['attr']!r} to tune; "
                                       f"set attr = \"...\" in the config to the attribute that holds {name}")
                 status = self.run(f"setting {name}",
-                                  lambda: setattr(self.obj, var["attr"], self._to_python(var, self.values[name])))
+                                  lambda var=var, name=name: setattr(self.obj, var["attr"], self._to_python(var, self.values[name])))
                 if status != Status.ok:
                     return status
                 self.run("updating calculated parameters", self._refresh_calculated_parameters)
@@ -1004,7 +1031,9 @@ class Engine:
         the states of the global random number generators (so a rolled-back step draws the same
         numbers) and literal constants. With ``save_state = [attributes]`` only those attribute
         paths of the model object are saved; the rest (e.g. an ONNX session or a device handle)
-        stays as it is. Pickled with pickle, cloudpickle or dill (:func:`dump_state`). Also used
+        stays as it is. With ``save_state = true`` and an object that can't be pickled whole, its
+        attributes that can be are saved instead (:meth:`_picklable_attributes`). Pickled with
+        pickle, cloudpickle or dill (:func:`dump_state`). Also used
         internally by :meth:`do_step` to undo discarded steps.
 
         :return: ``(status, bytes)``; ``Status.error`` and ``b""`` when the state can't be pickled.
@@ -1025,8 +1054,45 @@ class Engine:
         try:
             return Status.ok, dump_state(state)
         except Exception as e:
-            self.log(f"cannot serialize FMU state: {e!r}", Status.error, "logStatusError")
-            return Status.error, b""
+            error = e
+        partial = self._picklable_attributes() if save is True else None
+        if partial is not None:
+            state["obj"], state["partial"] = partial, True
+            try:
+                return Status.ok, dump_state(state)
+            except Exception as e:
+                error = e
+        self.log(f"cannot serialize FMU state: {error!r}", Status.error, "logStatusError")
+        return Status.error, b""
+
+    def _picklable_attributes(self):
+        """The model object's attributes that can be pickled, when the whole object can't be.
+
+        Logs once which attributes are left out: on restore they keep their current values.
+
+        :return: ``{name: value}``, or None when the object has no attributes or none can be pickled.
+        :rtype: dict or None
+        """
+        try:
+            attrs = vars(self.obj)
+        except TypeError:
+            return None
+        saved, skipped = {}, []
+        for name, value in attrs.items():
+            try:
+                dump_state(value)
+            except Exception:
+                skipped.append(name)
+            else:
+                saved[name] = value
+        if not saved:
+            return None
+        if skipped and not getattr(self, "_partial_state_logged", False):
+            self._partial_state_logged = True
+            self.log(f"the model object can't be pickled whole, so the FMU state saves only its other attributes; "
+                     f"not saved, kept as they are on restore: {', '.join(skipped)}. Set [model] save_state to "
+                     "a list of attributes to choose, or to false", Status.warning, "logStatusWarning")
+        return saved
 
     def deserialize(self, data):
         """Restore a state made by :meth:`serialize` (``fmi2/3SetFMUstate`` + ``DeSerializeFMUstate``).
@@ -1049,6 +1115,8 @@ class Engine:
             if self.obj is not None and state["obj"] is not None:
                 for path, value in state["obj"].items():
                     set_path(self.obj, path, value)
+        elif state.get("partial"):   # the attributes that could be pickled (see _picklable_attributes)
+            vars(self.obj).update(state["obj"])
         else:
             self.obj = state["obj"]
         self.time, self.mode = state["time"], state["mode"]
@@ -1286,7 +1354,9 @@ class Engine:
         """
         if var.get("dimensions"):
             value = plain_number(value, var.get("unit"))   # an array quantity (pint, astropy)
-            flat = flatten(value.tolist() if hasattr(value, "tolist") else value)
+            if not hasattr(value, "tolist") and hasattr(value, "to_numpy"):   # an xarray DataArray
+                value = value.to_numpy()
+            flat =flatten(value.tolist() if hasattr(value, "tolist") else value)
             n = self.size(var)
             if len(flat) != n:
                 raise ValueError(f"{var['name']} has {len(flat)} values, expected {n}")
@@ -1347,21 +1417,35 @@ class Engine:
                         f"dimensions = {list(shape)} (FMI 3) or read one element (from = \"...:0\"); "
                         "fmugen init --probe finds them")
 
-    def _resolve_constants(self):
+    def _resolve_constants(self, of_object=False):
         """Compute ``[model] constants`` and ``call_constants`` as Python values, once.
 
         Runs at initialization (from ``initialize``), not at instantiation, so a ``{ call = ... }``
         that downloads or computes reports failures to the importer. Literal values are deep-copied
-        because the model may change a list or dict constant in place.
+        because the model may change a list or dict constant in place. Those computed from the model
+        object (``self.…``, :func:`uses_self`) are left out, and computed with ``of_object`` once the
+        object is built and set up, again for each new object.
 
+        :param of_object: compute only the ``call_constants`` that use the model object.
+        :type of_object: bool
         :raises RuntimeError: a constant that can't be resolved, naming it.
         """
+        if of_object:
+            for name, value in self.interface.get("call_constants", {}).items():
+                if uses_self(value):
+                    try:
+                        self.call_constants[name] = resolve_constant(value, self.obj)
+                    except Exception as e:
+                        raise RuntimeError(f"[model] call_constants.{name} = {value['call']!r} failed: {e!r}") from e
+            return
         if self.constants is not None:
             return
         resolved = {}
         for table in ("constants", "call_constants"):
             resolved[table] = {}
             for name, value in self.interface.get(table, {}).items():
+                if uses_self(value):
+                    continue
                 try:
                     # a copy: the model may change a list or dict constant in place
                     resolved[table][name] = resolve_constant(copy.deepcopy(value))
@@ -1596,7 +1680,7 @@ class Engine:
             result = self._call(t, step_size)
             derivatives = []
             for v, n in zip(states, sizes):
-                found, value = self._source_value(v["der"], result, True)
+                _found, value = self._source_value(v["der"], result, True)
                 value = plain_number(value)
                 flat = flatten(value.tolist() if hasattr(value, "tolist") else value)
                 if len(flat) != n:

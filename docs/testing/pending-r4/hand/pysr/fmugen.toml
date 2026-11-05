@@ -1,0 +1,22 @@
+# PySR: `init --probe` stops on a deprecated property that raises NotImplementedError
+# (equation_file_), and the `init` config outputs only run metadata. The fitted expression's
+# predictions for the first 4 rows (deterministic, serial, seeded); training data synthetic.
+[model]
+entry = "pysr:PySRRegressor"
+setup = ["fit(numpy.array([[0.1, 0.2, 0.3, 0.4], [0.5, 0.1, 0.9, 0.3], [0.2, 0.8, 0.4, 0.6], [0.9, 0.7, 0.1, 0.2], [0.3, 0.3, 0.5, 0.9], [0.6, 0.4, 0.2, 0.1], [0.8, 0.9, 0.6, 0.5], [0.4, 0.6, 0.8, 0.7]]), numpy.array([1.0, 1.4, 2.1, 1.9, 2.0, 1.2, 2.9, 2.3]))"]
+call = "predict"
+
+[parameters]
+niterations = { start = 5 }
+random_state = { start = 0 }
+deterministic = { start = true }
+parallelism = { start = "serial" }
+
+[inputs]
+X = { dimensions = [8, 4], start = [0.1, 0.2, 0.3, 0.4, 0.5, 0.1, 0.9, 0.3, 0.2, 0.8, 0.4, 0.6, 0.9, 0.7, 0.1, 0.2, 0.3, 0.3, 0.5, 0.9, 0.6, 0.4, 0.2, 0.1, 0.8, 0.9, 0.6, 0.5, 0.4, 0.6, 0.8, 0.7] }
+
+[outputs]
+y0 = { from = "return:0" }
+y1 = { from = "return:1" }
+y2 = { from = "return:2" }
+y3 = { from = "return:3" }

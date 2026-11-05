@@ -1,0 +1,18 @@
+# pycalphad: equilibrium() returns an xarray Dataset indexed by (N, P, T, X_ZN, vertex); `init`
+# finds no output in it. The Gibbs energy and the phases and fractions of the first two vertices,
+# Al-30 % Zn at 600 K (pycalphad's alzn_mey.tdb).
+[model]
+entry = "pycalphad:equilibrium"
+
+[model.constants]
+dbf = { call = "pycalphad:Database('/home/pc-simulacion2/cmp/wr4/data/alzn_mey.tdb')" }
+comps = ["AL", "ZN", "VA"]
+phases = ["LIQUID", "FCC_A1", "HCP_A3"]
+conditions = { call = "builtins:dict({pycalphad.variables.T: 600.0, pycalphad.variables.P: 101325.0, pycalphad.variables.X('ZN'): 0.3, pycalphad.variables.N: 1.0})" }
+
+[outputs]
+GM = { from = "return:GM.values.0.0.0.0" }
+phase_0 = { from = "return:Phase.values.0.0.0.0.0", type = "String" }
+phase_1 = { from = "return:Phase.values.0.0.0.0.1", type = "String" }
+NP_0 = { from = "return:NP.values.0.0.0.0.0" }
+NP_1 = { from = "return:NP.values.0.0.0.0.1" }

@@ -216,7 +216,7 @@ When the step raises one of them, `doStep` returns `discard` and the FMU is put 
 
 ## Async models
 
-A step method or constructor defined with `async def` is run to completion on every call, on one event loop kept for the whole simulation (objects bound to that loop keep working). Generator models (`yield`) aren't supported: `build` refuses them, and a factory returning an object with a step method works instead. A function or method that *returns* a generator (nashpy's `support_enumeration()`) is different: its items are read into a tuple after each call, and outputs read them by position (`return:0.0`, the first item's first element). `init --probe` names such nested tuple items `y0_0`, `y0_1`, ….
+A step method or constructor defined with `async def` is run to completion on every call, on one event loop kept for the whole simulation (objects bound to that loop keep working). A step that is a generator (`yield`), or returns one (nashpy's `support_enumeration()`, kokoro's `KPipeline(...)(text)`, piper's `synthesize`), is read whole into a tuple after each call, and outputs read them by position (`return:0.0`, the first item's first element). `init --probe` names such nested tuple items `y0_0`, `y0_1`, …. A generator meant to be driven with `next()` once per step never stops; it fails the step after 100 000 items, and a factory returning an object with a step method works instead.
 
 ---
 

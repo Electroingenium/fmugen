@@ -65,7 +65,7 @@ def test_a_set_up_with_arithmetic_is_left_out_not_the_whole_example(tmp_path):
             h = t.advance(q=1.2)
         ```
     """)
-    data, text = run(f"{path}:Tank", tmp_path)
+    data, _text = run(f"{path}:Tank", tmp_path)
     assert data["model"]["call"] == "advance" and "setup" not in data["model"]
     assert data["parameters"]["area"]["start"] == 2.5
 
@@ -299,7 +299,7 @@ def test_sizes_are_made_up_as_integers_then_as_lists(tmp_path):
             def predict(self, x):
                 return {"y": sum(self.weights) * x}
     """)
-    data, text = run(f"{path}:Net", tmp_path, probe=True)
+    data, _text = run(f"{path}:Net", tmp_path, probe=True)
     assert data["parameters"]["hidden_size"]["start"] == 1 and data["outputs"]
     assert "dimensions" in data["parameters"]["n_modes"]   # a sequence: arrays of ones, else lists
 
@@ -330,7 +330,7 @@ def test_an_environment_steps_with_an_action_from_its_space_after_reset(tmp_path
                 return {"x": self.state}
     """)
     data, text = run(f"{path}:Env", tmp_path, probe=True)
-    assert data["model"]["setup"] == ["reset"] and data["inputs"]["action"]["start"] == 0
+    assert data["model"]["setup"] == ["reset(seed=0)"] and data["inputs"]["action"]["start"] == 0
     assert "from the model's action or observation space" in text
 
 
@@ -559,6 +559,36 @@ def test_a_readme_showing_several_queries_leads_with_the_step(tmp_path):
     assert data["model"]["call"] == "price" and "setup" not in data["model"]
 
 
+def test_a_class_built_and_used_at_once_gives_the_step(tmp_path):
+    # like umap's README: embedding = umap.UMAP().fit_transform(digits.data)
+    path = write(tmp_path, "embed.py", """
+        class Embedder:
+            def __init__(self, k):
+                self.k = k
+
+            def fit(self, X):
+                self.mean = sum(X) / len(X)
+                return self
+
+            def update(self, X):
+                self.mean = (self.mean + sum(X) / len(X)) / 2
+
+            def fit_transform(self, X):
+                self.fit(X)
+                return [x - self.mean for x in X]
+    """)
+    write(tmp_path, "README.md", """
+        ```python
+        import embed
+        data = [1.0, 2.0, 3.0]
+        result = embed.Embedder(k=3).fit_transform(data)
+        ```
+    """)
+    data, _ = run(f"{path}:Embedder", tmp_path, starts={"X": [1.0, 2.0, 3.0]})
+    assert data["model"]["call"] == "fit_transform"
+    assert data["parameters"]["k"]["start"] == 3
+
+
 def test_a_method_iterated_in_a_loop_header_is_the_step(tmp_path):
     # like nashpy's README: for eq in game.support_enumeration(): print(eq)
     path = write(tmp_path, "game.py", """
@@ -612,7 +642,7 @@ def test_a_dict_argument_is_made_up_from_the_error(tmp_path):
                 self.total = sum(x.values())
                 return self.total
     """)
-    data, text = run(f"{path}:Learner", tmp_path, probe=True, call="learn")
+    data, _text = run(f"{path}:Learner", tmp_path, probe=True, call="learn")
     assert data["inputs"]["a"]["to"] == "arg:x[a]" and "y" in data["outputs"]
 
 
@@ -662,7 +692,7 @@ def test_a_made_up_number_the_model_refuses_is_tried_larger(tmp_path):
             def modulate(self, bits):
                 return bits * self.m
     """)
-    data, text = run(f"{path}:Modem", tmp_path, probe=True, call="modulate")
+    data, _text = run(f"{path}:Modem", tmp_path, probe=True, call="modulate")
     assert data["parameters"]["m"]["start"] == 4
 
 
@@ -698,7 +728,7 @@ def test_an_example_value_with_arithmetic_is_computed(tmp_path):
         f.fit(np.stack((2 * np.ones(3), np.zeros(3)), axis=-1))
         ```
     """)
-    data, text = run(f"{path}:Fitter", tmp_path, probe=True, call="fit")
+    data, _text = run(f"{path}:Fitter", tmp_path, probe=True, call="fit")
     assert data["inputs"]["x"]["start"] == [2.0, 0.0, 2.0, 0.0, 2.0, 0.0]
 
 
@@ -750,7 +780,7 @@ def test_a_name_argument_is_made_up_as_a_name_the_failing_code_looks_up(tmp_path
             def forward(self, x):
                 return self.f(x)
     """)
-    data, text = run(f"{path}:Net", tmp_path, probe=True, call="forward")
+    data, _text = run(f"{path}:Net", tmp_path, probe=True, call="forward")
     assert data["parameters"]["activation"]["start"] == "relu" and "y" in data["outputs"]
 
 
@@ -779,7 +809,7 @@ def test_a_function_argument_left_none_is_made_up_as_a_function(tmp_path):
                 assert self.fun is not None
                 return (self.fun(x + 1e-6) - self.fun(x)) / 1e-6
     """)
-    data, text = run(f"{path}:Derivative", tmp_path, probe=True, call="__call__")
+    data, _text = run(f"{path}:Derivative", tmp_path, probe=True, call="__call__")
     assert data["model"]["constants"]["fun"] == {"call": "numpy:sin"} and "y" in data["outputs"]
 
 
@@ -792,7 +822,7 @@ def test_a_time_argument_that_must_be_positive_is_made_up(tmp_path):
                 self.rate_ = x / t
                 return self
     """)
-    data, text = run(f"{path}:Identifier", tmp_path, probe=True, call="fit")
+    data, _text = run(f"{path}:Identifier", tmp_path, probe=True, call="fit")
     assert data["inputs"]["t"]["start"] == 1.0 and "rate_" in data["outputs"]
 
 
@@ -829,7 +859,7 @@ def test_a_set_up_the_step_needs_gets_made_up_arrays(tmp_path):
             def solve(self):
                 return self._size * 2.0
     """)
-    data, text = run(f"{path}:Solver", tmp_path, probe=True, call="solve")
+    data, _text = run(f"{path}:Solver", tmp_path, probe=True, call="solve")
     assert data["model"]["setup"] == ["setup(numpy.ones((1, 1)), numpy.ones(1))"] and "y" in data["outputs"]
 
 
@@ -850,3 +880,69 @@ def test_an_argument_of_atoms_and_positions_is_made_up_as_a_molecule(tmp_path):
     """)
     data, text = run(f"{path}:energy", tmp_path, probe=True)
     assert data["inputs"]["species_coordinates_0"]["start"] == [8, 1, 1] and "water molecule" in text
+
+
+def test_a_single_dispatch_step_gets_its_first_argument_by_position(tmp_path):
+    # like galpy's Orbit.integrate(t, pot, ..., dt=None): a singledispatchmethod picks its code by the type
+    # of t, so t goes by position; dt beside a vector of times is the integrator's own step, not the FMU's
+    path = write(tmp_path, "orbit.py", """
+        import functools
+
+        class Orbit:
+            def __init__(self, x0=1.0):
+                self.x = x0
+
+            @functools.singledispatchmethod
+            def integrate(self, t, k=1.0, dt=None):
+                self.x = self.x * k + len(t)
+    """)
+    data, _ = run(f"{path}:Orbit", tmp_path, call="integrate",
+                     starts={"t": {"call": "builtins:list([0.0, 0.5, 1.0])"}})
+    assert data["model"]["call_constants"]["0"] == {"call": "builtins:list([0.0, 0.5, 1.0])"}
+    assert "dt" not in data.get("time", {})
+
+
+def test_names_both_kwargs_take_go_to_the_constructor(tmp_path):
+    # like feedinlib's Photovoltaic(**attributes).feedin(weather, **kwargs): the attributes configure the object
+    path = write(tmp_path, "pv.py", """
+        class Photovoltaic:
+            def __init__(self, **attributes):
+                self.attributes = attributes
+
+            def feedin(self, irradiance=1.0, **kwargs):
+                return irradiance * self.attributes["tilt"]
+    """)
+    data, _ = run(f"{path}:Photovoltaic", tmp_path, call="feedin", starts={"tilt": 30.0})
+    assert "tilt" in data["parameters"] and "tilt" not in data.get("inputs", {})
+
+
+def test_the_step_arguments_of_an_unprobed_factory_are_passed_by_keyword(tmp_path):
+    # like transformers' pipeline(task, model)(inputs): what pipeline() returns is known only by calling it
+    path = write(tmp_path, "pipe.py", """
+        def pipeline(task="double"):
+            return lambda inputs, scale=1.0: inputs * 2 * scale
+    """)
+    data, text = run(f"{path}:pipeline", tmp_path, call="__call__", starts={"task": "double", "inputs": 3.0})
+    assert data["parameters"]["task"]["start"] == "double" and data["inputs"]["inputs"]["start"] == 3.0
+    assert "not checked without --probe" in text
+
+
+def test_an_object_whose_dir_fails_is_still_probed(tmp_path):
+    # like scikit-survival: scikit-learn's __dir__ reads every attribute, and feature_importances_ raises
+    path = write(tmp_path, "forest.py", """
+        class Forest:
+            def __init__(self, n=2):
+                self.n = n
+
+            def __dir__(self):
+                return [a for a in super().__dir__() if hasattr(self, a)]
+
+            @property
+            def feature_importances_(self):
+                raise NotImplementedError()
+
+            def predict(self, x=1.0):
+                return x * self.n
+    """)
+    data, _ = run(f"{path}:Forest", tmp_path, call="predict", probe=True)
+    assert "y" in data["outputs"]

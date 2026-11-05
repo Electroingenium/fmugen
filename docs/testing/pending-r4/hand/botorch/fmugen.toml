@@ -1,0 +1,18 @@
+# BoTorch: the `init --probe` config (FMI 3) without the outputs it can't give: properties of the
+# posterior's distribution (`train_targets`, an array, with no dimensions). The GP's posterior mean
+# and variance at X.
+[model]
+entry = "botorch.models:SingleTaskGP"
+fmi_version = 3
+call = "posterior"
+
+[model.constants]
+train_X = { call = "torch:tensor([[0.1, 0.2, 0.3, 0.4], [0.5, 0.1, 0.9, 0.3], [0.2, 0.8, 0.4, 0.6], [0.9, 0.7, 0.1, 0.2], [0.3, 0.3, 0.5, 0.9], [0.6, 0.4, 0.2, 0.1], [0.8, 0.9, 0.6, 0.5], [0.4, 0.6, 0.8, 0.7]], dtype=torch.float64)" }
+train_Y = { call = "torch:tensor([[1.0], [1.4], [2.1], [1.9], [2.0], [1.2], [2.9], [2.3]], dtype=torch.float64)" }
+
+[model.call_constants]
+X = { call = "torch:tensor([[0.5, 0.5, 0.5, 0.5]], dtype=torch.float64)" }
+
+[outputs]
+mean = { from = "return:mean", dimensions = [1, 1] }
+variance = { from = "return:variance", dimensions = [1, 1] }

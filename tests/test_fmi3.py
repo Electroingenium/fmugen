@@ -235,7 +235,8 @@ interval = 2.0
         fmu.setIntervalDecimal(tunable, (c_double * 1)(1.25))      # tunable: allowed in event mode
         fmu.getIntervalDecimal(tunable, intervals, qualifiers)
         assert (intervals[0], qualifiers[0]) == (1.25, 2)
-        with pytest.raises(Exception):
+        from fmpy.fmi1 import FMICallException
+        with pytest.raises(FMICallException):
             fmu.setIntervalDecimal(fixed, (c_double * 1)(2.0))     # fixed: only before initialization ends
 
         fmu.enterStepMode()

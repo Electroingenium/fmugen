@@ -1,4 +1,4 @@
-# docs/testing/tested-models.md "Hand configs / Cantera", as published (fmi_version = 3 there; built
+# docs/testing/hand-configs.md "Cantera", as published (fmi_version = 3 there; built
 # here with --fmi 2, since nothing in it needs FMI 3)
 [model]
 entry = "cantera:Solution"

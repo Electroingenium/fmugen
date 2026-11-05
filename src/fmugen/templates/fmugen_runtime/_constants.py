@@ -8,30 +8,6 @@ variables and the arguments, return values and attributes of the user's code.
 The user's code is never modified. The FMI-version-specific adapters translate
 FMI calls into the methods of `Engine`.
 """
-import ast
-import asyncio
-import builtins
-import contextlib
-import copy
-import dataclasses
-import datetime
-import importlib
-import inspect
-import json
-import logging
-import math
-import os
-import pickle
-import random
-import sys
-import tempfile
-import traceback
-import types
-import typing
-import warnings
-from collections.abc import Mapping
-from fractions import Fraction
-from pathlib import Path
 
 #: The interface.json format this runtime reads; fmugen build writes the same number.
 SPEC_VERSION = 1

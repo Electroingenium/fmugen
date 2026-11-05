@@ -1,0 +1,22 @@
+# demucs: separate_audio_file returns the input and a dict of four stems, each a (2, samples) tensor;
+# the `init --probe` config outputs every sample (about 530,000 FMI 2 variables) and its FMU doesn't
+# finish a 3 s simulation in 15 minutes. Here: each stem's left channel at 0.5 s and 1 s (44.1 kHz).
+# shifts = 1 shifts the input at random: seeded.
+[model]
+entry = "demucs.api:Separator"
+call = "separate_audio_file"
+setup = ["torch:manual_seed(0)", "random:seed(0)"]
+
+[parameters]
+model = { start = "htdemucs" }
+device = { start = "cpu" }
+
+[inputs]
+file = { start = "/home/pc-simulacion2/cmp/wr4/data/speech.wav" }
+
+[outputs]
+vocals_05 = { from = "return:1.vocals.0.22050" }
+vocals_1 = { from = "return:1.vocals.0.44100" }
+drums_1 = { from = "return:1.drums.0.44100" }
+bass_1 = { from = "return:1.bass.0.44100" }
+other_1 = { from = "return:1.other.0.44100" }

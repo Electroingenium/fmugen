@@ -1,7 +1,4 @@
 """Standalone utility functions used by Engine, CompositeEngine and the build-time tools."""
-from fmugen.templates.fmugen_runtime._constants import (
-    FLOAT_TYPES, INT_RANGES, TRUE_STRINGS, FALSE_STRINGS, SPEC_VERSION, DEFAULT_VALUES, Status,
-)
 import ast
 import builtins
 import contextlib
@@ -10,22 +7,25 @@ import dataclasses
 import datetime
 import importlib
 import inspect
-import json
+import itertools
 import logging
-import math
 import os
 import pickle
 import random
 import sys
 import tempfile
-import traceback
 import types
 import typing
-import warnings
 from collections.abc import Iterable, Iterator, Mapping
 from fractions import Fraction
 from pathlib import Path
 
+from fmugen.templates.fmugen_runtime._constants import (
+    FALSE_STRINGS,
+    FLOAT_TYPES,
+    INT_RANGES,
+    TRUE_STRINGS,
+)
 
 # ================= helpers =================
 
@@ -293,6 +293,25 @@ def assemble_items(bound, fn=None):
 _OBJECT_ARGS = {}
 
 
+def named_class(fn, name):
+    """The record class an unannotated argument is named after, in its function's module: ``action`` ->
+    ``Action``, ``patient_action`` -> ``PatientAction`` (simglucose's ``T1DPatient.step(action)``, whose module
+    defines ``Action = namedtuple(...)``). Only a namedtuple, dataclass, attrs or pydantic class; else None.
+
+    :param fn: the function or method.
+    :param name: the argument name.
+    :type name: str
+    :rtype: type or None
+    """
+    module = sys.modules.get(getattr(fn, "__module__", None) or "")
+    cls = getattr(module, "".join(part[:1].upper() + part[1:] for part in name.split("_")), None)
+    if not isinstance(cls, type):
+        return None
+    if (issubclass(cls, tuple) and hasattr(cls, "_fields")) or dataclasses.is_dataclass(cls)             or hasattr(cls, "__attrs_attrs__") or isinstance(getattr(cls, "model_fields", None), dict):
+        return cls
+    return None
+
+
 def object_argument(fn, name):
     """The default instance and the annotated class of ``fn``'s argument ``name``.
 
@@ -321,6 +340,8 @@ def object_argument(fn, name):
         if typing.get_origin(cls) in (typing.Union, types.UnionType):   # Optional[Inputs]
             rest = [a for a in typing.get_args(cls) if a is not type(None)]
             cls = rest[0] if len(rest) == 1 else None
+        if cls is None and default is None and param is not None and param.annotation is inspect.Parameter.empty:
+            cls = named_class(target, name)
         _OBJECT_ARGS[key] = default, cls if isinstance(cls, type) else None
     return _OBJECT_ARGS[key]
 
@@ -388,7 +409,21 @@ def is_literal_constant(value):
     return not (isinstance(value, dict) and len(value) == 1 and ("call" in value or "ref" in value))
 
 
-def resolve_constant(value):
+def uses_self(value):
+    """Whether a constant is computed from the model object: ``{ call = "self.parse_reaction_formula('...')" }``.
+
+    Such a ``call_constants`` value is an argument the object itself makes (equilibrator's
+    ``Reaction``, parsed by the ``ComponentContribution`` the step runs on), so it is computed
+    after the object is built.
+
+    :param value: the constant as written in ``interface.json``.
+    :rtype: bool
+    """
+    text = value.get("call") if isinstance(value, dict) and len(value) == 1 else None
+    return isinstance(text, str) and (text.strip() == "self" or text.strip().startswith(("self.", "self[")))
+
+
+def resolve_constant(value, obj=None):
     """The Python value of a constant from ``interface.json``.
 
     ``{ python = "..." }`` is evaluated with :func:`ast.literal_eval` (literals only, never
@@ -396,6 +431,7 @@ def resolve_constant(value):
     ``{ call = ... }`` is called (:func:`call_reference`); anything else is the value itself.
 
     :param value: the constant as written in ``interface.json``.
+    :param obj: the model object, for a call starting with ``self`` (:func:`uses_self`).
     :return: its value.
     """
     if isinstance(value, dict) and len(value) == 1:
@@ -404,91 +440,156 @@ def resolve_constant(value):
         if "ref" in value:
             return resolve_reference(value["ref"])
         if "call" in value:
-            return call_reference(value["call"])
+            return call_reference(value["call"], obj)
     return value
 
 
-def parse_call_text(text):
+CALLED = "_fmugen_called"   # the name of the called target in a parsed call chain
+
+
+def reject_star_arguments(call, text):
+    """Raise if a call node has ``*args`` or ``**kwargs`` arguments.
+
+    :param call: a call node.
+    :type call: ast.Call
+    :param text: what the error names (the call text the user wrote).
+    :type text: str
+    :raises ValueError: ``*`` or ``**`` arguments.
+    """
+    if any(k.arg is None for k in call.keywords) or any(isinstance(a, ast.Starred) for a in call.args):
+        raise ValueError(f"{text!r}: * and ** arguments are not supported")
+
+
+def parse_call_text(text, chain=False):
     """Parse ``"module:function(arg, key=arg, ...)"`` without calling anything.
 
     The argument list is parsed with :func:`ast.parse` as the call ``_(...)``, so Python's own
     grammar handles nesting and quoting; the nodes are evaluated later by :func:`call_argument`.
+    With ``chain``, attributes, method calls and indexing may follow the call
+    (``"skyfield.api:load.timescale().utc(2024, 1, 1)"``, ``"m:load()[0]"``): the whole
+    expression is returned as a fourth item, the called target named :data:`CALLED` in it.
 
     :param text: the call text.
     :type text: str
-    :return: ``(target, [argument nodes], {keyword: node})``.
+    :param chain: whether anything may follow the call.
+    :type chain: bool
+    :return: ``(target, [argument nodes], {keyword: node})``, and with ``chain`` the expression
+        node (None for a plain call).
     :rtype: tuple
-    :raises ValueError: a missing ``)`` or ``*`` / ``**`` arguments.
+    :raises ValueError: a missing ``)``, ``*`` / ``**`` arguments, or (without ``chain``) anything
+        after the call.
     :raises SyntaxError: arguments that aren't valid Python.
     """
     target, paren, rest = text.partition("(")
     if not paren:
-        return target.strip(), [], {}
-    if not rest.rstrip().endswith(")"):
+        return (target.strip(), [], {}) + ((None,) if chain else ())
+    if not chain and not rest.rstrip().endswith(")"):
         raise ValueError(f"{text!r}: missing ')'")
-    node = ast.parse(f"_({rest}", mode="eval").body
-    if not (isinstance(node, ast.Call) and isinstance(node.func, ast.Name) and node.func.id == "_"):
-        # "pathlib:Path('x').read_bytes()" would otherwise call Path() and drop the rest
-        raise ValueError(f"{text!r}: only one call is supported, nothing after its ')' (no .method(), "
-                         "[index] or operators)")
-    if any(k.arg is None for k in node.keywords) or any(isinstance(a, ast.Starred) for a in node.args):
-        raise ValueError(f"{text!r}: * and ** arguments are not supported")
-    return target.strip(), list(node.args), {k.arg: k.value for k in node.keywords}
+    node =ast.parse(f"{CALLED}({rest}", mode="eval").body
+    expression = node
+    while not (isinstance(node, ast.Call) and isinstance(node.func, ast.Name) and node.func.id == CALLED):
+        if not chain or not isinstance(node, (ast.Attribute, ast.Call, ast.Subscript)):
+            # "pathlib:Path('x').read_bytes()" would otherwise call Path() and drop the rest
+            raise ValueError(f"{text!r}: only one call is supported, nothing after its ')' (no .method(), "
+                             "[index] or operators)" if not chain else
+                             f"{text!r}: only .attribute, .method(...) and [index] may follow the call")
+        node = node.func if isinstance(node, ast.Call) else node.value
+    for call in ast.walk(expression):
+        if isinstance(call, ast.Call):
+            reject_star_arguments(call, text)
+    parsed = target.strip(), list(node.args), {k.arg: k.value for k in node.keywords}
+    return parsed + ((None if expression is node else expression,) if chain else ())
 
 
-def call_reference(text):
+def call_reference(text, obj=None):
     """Call ``"module:function(args)"`` and return the result.
 
     E.g. ``load_from_hub(repo_id="sb3/x", filename="m.zip")``. Without parentheses,
     ``"module:attr.path"`` is the object itself, not called (a function to pass, an enum member).
-    Arguments: see :func:`call_argument`.
+    Attributes, method calls and indexing may follow the call
+    (``"skyfield.api:load.timescale().utc(2024, 1, 1, 12)"``; ``"m:load()[0]"`` for the first
+    item of a returned tuple). Arguments: see :func:`call_argument`. A text starting with ``self``
+    is evaluated on the model object ``obj``: ``"self.parse_reaction_formula('kegg:C00002 = ...')"``.
 
     :param text: the call text.
     :type text: str
+    :param obj: the model object, for a text starting with ``self``.
     :return: what the call returned (or the object).
+    :raises ValueError: a text starting with ``self`` without a model object.
     """
+    if uses_self({"call": text}):
+        if obj is None:
+            raise ValueError(f"{text!r}: self is the model object, so only a class's call_constants can use it")
+        parse_call_text(text, chain=True)   # the same checks as any call text
+        return call_argument(ast.parse(text.strip(), mode="eval").body, {"self": obj})
     target, paren, _ = text.partition("(")
     if not paren:
         return resolve_reference(target.strip())
-    target, args, kwargs = parse_call_text(text)
-    return resolve_reference(target)(*[call_argument(a) for a in args],
-                                     **{k: call_argument(v) for k, v in kwargs.items()})
+    target, args, kwargs, expression = parse_call_text(text, chain=True)
+    fn = resolve_reference(target)
+    if expression is not None:
+        return call_argument(expression, {CALLED: fn})
+    return fn(*[call_argument(a) for a in args], **{k: call_argument(v) for k, v in kwargs.items()})
 
 
-def call_argument(node):
+def _dotted(node, bound):
+    """Whether a node is a dotted name (``numpy.linalg.norm``) not starting at a bound name.
+
+    :param node: an expression node.
+    :type node: ast.expr
+    :param bound: names bound to values.
+    :type bound: dict
+    :rtype: bool
+    """
+    while isinstance(node, ast.Attribute):
+        node = node.value
+    return isinstance(node, ast.Name) and node.id not in bound
+
+
+def call_argument(node, bound=None):
     """Evaluate one argument node of a call constant.
 
     Allowed: a Python literal; a dotted name of an importable object or a builtin
     (``numpy.sin``, ``float``); a call of one (``numpy.linspace(0, 1, 5)``, ``float("inf")``);
-    a list, tuple, set or dict of these; a negated value. Evaluating the AST ourselves (instead
-    of ``eval``) keeps this to imports and calls the user wrote, nothing else.
+    an attribute, method call or index of any of these
+    (``equilibrator_api.ComponentContribution().get_compound``, ``m.load()[0]``); a list, tuple,
+    set or dict of these; a negated value. Evaluating the AST ourselves (instead of ``eval``)
+    keeps this to imports and calls the user wrote, nothing else.
 
     :param node: an expression node from :func:`parse_call_text`.
     :type node: ast.expr
+    :param bound: names bound to values (the called target of a call chain).
+    :type bound: dict or None
     :return: the value.
     :raises ValueError: any other kind of expression.
     """
+    bound = bound or {}
+    if isinstance(node, ast.Name) and node.id in bound:
+        return bound[node.id]
     with contextlib.suppress(ValueError, SyntaxError, TypeError):
         return ast.literal_eval(node)
     if isinstance(node, ast.Name) and hasattr(builtins, node.id):
         return getattr(builtins, node.id)
-    if isinstance(node, (ast.Name, ast.Attribute)):
+    if isinstance(node, (ast.Name, ast.Attribute)) and _dotted(node, bound):
         return resolve_reference(ast.unparse(node))
-    if isinstance(node, ast.Call) and isinstance(node.func, (ast.Name, ast.Attribute)):
-        if any(k.arg is None for k in node.keywords) or any(isinstance(a, ast.Starred) for a in node.args):
-            raise ValueError(f"{ast.unparse(node)!r}: * and ** arguments are not supported")
-        return call_argument(node.func)(*[call_argument(a) for a in node.args],
-                                        **{k.arg: call_argument(k.value) for k in node.keywords})
+    if isinstance(node, ast.Attribute):
+        return getattr(call_argument(node.value, bound), node.attr)
+    if isinstance(node, ast.Subscript):
+        return call_argument(node.value, bound)[call_argument(node.slice, bound)]
+    if isinstance(node, ast.Call) and isinstance(node.func, (ast.Name, ast.Attribute, ast.Call, ast.Subscript)):
+        reject_star_arguments(node, ast.unparse(node))
+        return call_argument(node.func, bound)(*[call_argument(a, bound) for a in node.args],
+                                               **{k.arg: call_argument(k.value, bound) for k in node.keywords})
     if isinstance(node, (ast.List, ast.Tuple, ast.Set)):
-        items = [call_argument(e) for e in node.elts]
+        items = [call_argument(e, bound) for e in node.elts]
         return {ast.List: list, ast.Tuple: tuple, ast.Set: set}[type(node)](items)
     if isinstance(node, ast.Dict) and None not in node.keys:
-        return {call_argument(k): call_argument(v) for k, v in zip(node.keys, node.values)}
+        return {call_argument(k, bound): call_argument(v, bound) for k, v in zip(node.keys, node.values)}
     if isinstance(node, ast.UnaryOp) and isinstance(node.op, (ast.USub, ast.UAdd)):
-        value = call_argument(node.operand)
+        value = call_argument(node.operand, bound)
         return -value if isinstance(node.op, ast.USub) else value
     raise ValueError(f"{ast.unparse(node)!r}: arguments must be literals, names of importable objects, "
-                     "calls of those, or lists/tuples/dicts of these")
+                     "calls of those, their attributes or items, or lists/tuples/dicts of these")
 
 
 def converter(var, now=lambda: 0.0):
@@ -518,6 +619,18 @@ def converter(var, now=lambda: 0.0):
     return resolve_reference(var["convert"])
 
 
+def table_library(obj):
+    """``"pandas"`` or ``"xarray"`` for an object of theirs or of a subclass (py_wake's ``SimulationResult``), else None.
+
+    Checked by module name, so pandas and xarray are never imported here.
+
+    :param obj: any object.
+    :rtype: str or None
+    """
+    return next((library for k in type(obj).__mro__
+                 if (library := k.__module__.split(".")[0]) in ("pandas", "xarray")), None)
+
+
 def _labelled(obj):
     """Whether ``obj`` is a pandas or xarray object indexed by labels (has ``keys``).
 
@@ -527,36 +640,72 @@ def _labelled(obj):
     :return: True for a labelled pandas/xarray object.
     :rtype: bool
     """
-    return type(obj).__module__.split(".")[0] in ("pandas", "xarray") and hasattr(obj, "keys")
+    return table_library(obj) is not None and hasattr(obj, "keys")
+
+
+GENERATOR_LIMIT = 100_000   # items read from a generator a call returns; more is taken as endless
 
 
 def results_of(result):
     """What a model call returned, with a generator read into a tuple.
 
-    A generator (nashpy's ``support_enumeration``) can only be read once; as a tuple, several
-    outputs can read it and it can be saved with the FMU state. Anything else is returned
-    unchanged.
+    A generator (nashpy's ``support_enumeration``, the audio chunks of kokoro's ``KPipeline`` or
+    piper's ``synthesize``) can only be read once; as a tuple, several outputs can read it and it
+    can be saved with the FMU state. So is one in a returned tuple or list (faster-whisper's
+    ``transcribe``: the segments' generator and an info object). Anything else is returned unchanged.
 
     :param result: what the model returned.
     :return: ``tuple(result)`` for a generator, else ``result``.
+    :raises ValueError: a generator that doesn't stop (a model driven with ``next()`` once per step).
     """
-    return tuple(result) if isinstance(result, types.GeneratorType) else result
+    if type(result) in (tuple, list) and any(isinstance(r, types.GeneratorType) for r in result):
+        return type(result)(results_of(r) for r in result)
+    if not isinstance(result, types.GeneratorType):
+        return result
+    items = tuple(itertools.islice(result, GENERATOR_LIMIT + 1))
+    if len(items) > GENERATOR_LIMIT:
+        raise ValueError(f"the step returned a generator that gave more than {GENERATOR_LIMIT} items: fmugen reads "
+                         "all of them on each step, so a generator driven with next() once per step can't be run")
+    return items
+
+
+def image_pixels(value):
+    """The pixels of a PIL image as a numpy array (transformers' depth-estimation pipeline), or None.
+
+    Only PIL's own images: other objects with numpy's array interface keep their parts (spatialmath's
+    ``SE3`` pose: ``t``, ``R``, ...). None also when numpy isn't installed.
+
+    :param value: any value.
+    :rtype: numpy.ndarray or None
+    """
+    if isinstance(value, type) or type(value).__module__.split(".")[0] != "PIL" \
+            or not hasattr(value, "__array_interface__"):
+        return None
+    try:
+        import numpy
+    except ImportError:
+        return None
+    return numpy.asarray(value)
 
 
 def plain_number(value, unit=None):
     """A quantity or one-value pandas/xarray object as a plain number.
 
     A pint quantity (anything with ``.magnitude`` and ``.units``) or an astropy one becomes its
-    magnitude, in ``unit`` when given; a one-value pandas/xarray column becomes its value.
-    Anything else is returned unchanged.
+    magnitude, in ``unit`` when given; a one-value pandas/xarray column becomes its value; an
+    image with numpy's array interface (PIL) becomes the array of its pixels. Anything else is
+    returned unchanged.
 
     :param value: what the model returned.
     :param unit: the variable's unit, to convert to.
     :type unit: str or None
     :return: the number (or ``value``).
     """
-    if type(value).__module__.split(".")[0] in ("pandas", "xarray") and getattr(value, "size", None) == 1:
+    if table_library(value) and getattr(value, "size", None) == 1:
         value = value.item()
+    pixels = image_pixels(value)
+    if pixels is not None:
+        return pixels
     if hasattr(value, "magnitude") and hasattr(value, "units"):
         return value.m_as(unit) if unit and hasattr(value, "m_as") else value.magnitude
     if hasattr(value, "unit") and hasattr(value, "to_value"):   # an astropy Quantity
@@ -599,7 +748,7 @@ def _nth(obj, part):
     :raises IndexError: ``obj`` has fewer elements.
     """
     if not (part.lstrip("-").isdigit() and part.count("-") <= 1) or isinstance(obj, (str, bytes, Mapping)) \
-            or type(obj).__module__.split(".")[0] in ("pandas", "xarray") or not isinstance(obj, Iterable) \
+            or table_library(obj) or not isinstance(obj, Iterable) \
             or isinstance(obj, Iterator):
         return _MISSING
     return list(obj)[int(part)]
@@ -631,7 +780,9 @@ def get_path(obj, path):
     mapping a part is a key, unless it's only an attribute (``"options.update"``: the method).
     A number on any other iterable without indexing (``"bodies.0"`` on a ``dict_keys`` view)
     picks that element, and on an object that takes keys (``obj["Voltage [V]"]``) a part is
-    then tried as a key, but both only where there's no such attribute.
+    then tried as a key, but both only where there's no such attribute. A part ending in ``()``
+    calls that method with no arguments: ``"to_json().ents.0.label"`` (a spaCy ``Doc``),
+    ``"get_model().output.head().get_data()"`` (flopy's heads, read from its output files).
 
     :param obj: the start object (usually the model object or a call result).
     :param path: the dotted path.
@@ -640,7 +791,9 @@ def get_path(obj, path):
     :raises AttributeError: a missing attribute (or KeyError / IndexError).
     """
     for part in path.split("."):
-        if isinstance(obj, Mapping) and (part in obj or not hasattr(obj, part)) or _labelled(obj) and part in obj:   # "options.update": the method
+        if part.endswith("()") and part[:-2].isidentifier():
+            obj = getattr(obj, part[:-2])()
+        elif isinstance(obj, Mapping) and (part in obj or not hasattr(obj, part)) or _labelled(obj) and part in obj:   # "options.update": the method
             obj = obj[part]
         elif part.lstrip("-").isdigit() and part.count("-") <= 1 and _indexable(obj):
             try:
@@ -890,7 +1043,7 @@ def _capture_output(enabled):
     for stream in (sys.stdout, sys.stderr):
         with contextlib.suppress(Exception):
             stream.flush()
-    sink = tempfile.TemporaryFile()
+    sink = tempfile.TemporaryFile()  # noqa: SIM115 (kept open until _release_output closes it)
     for fd in (1, 2):
         with contextlib.suppress(OSError):
             _CONSOLE.setdefault(fd, os.dup(fd))

@@ -66,7 +66,7 @@ def test_discard_in_fmi3_reports_the_time_reached(tmp_path, make_fmu, adapter):
     fmu = adapter(make_fmu(tmp_path), fmi=3)
     fmu.initialize()
     assert fmu.set("x", -1.0) == OK
-    status, event_needed, terminate, early_return, last_time = fmu.fmi3DoStep(0.0, 1.0, False)
+    status, event_needed, _terminate, early_return, last_time = fmu.fmi3DoStep(0.0, 1.0, False)
     assert (status, event_needed, early_return, last_time) == (DISCARD, False, False, 0.0)
 
 
@@ -304,21 +304,50 @@ def test_async_step_method(tmp_path, make_fmu, adapter):
     assert fmu.get("total") == 3.0
 
 
-def test_generator_models_are_refused_with_a_hint(tmp_path, make_fmu):
+def test_generator_steps_are_read_whole(tmp_path, make_fmu, adapter):
+    # like kokoro's KPipeline or piper's synthesize: each call yields its results in chunks
+    write(tmp_path, "gen.py", '''
+        def chunks(n=1.0):
+            for i in range(3):
+                yield n * i
+    ''', '''
+        [model]
+        entry = "gen.py:chunks"
+        [inputs]
+        n = {}
+        [outputs]
+        last = { from = "return:2" }
+    ''')
+    fmu = adapter(make_fmu(tmp_path))
+    fmu.set("n", 2.0)
+    fmu.initialize()
+    assert fmu.fmi2DoStep(0.0, 1.0, False) == OK, fmu.logs
+    assert fmu.get("last") == 4.0
+
+
+def test_endless_generator_steps_fail_with_a_hint(tmp_path, make_fmu, adapter, monkeypatch):
+    from fmugen.templates.fmugen_runtime import _helpers
+    monkeypatch.setattr(_helpers, "GENERATOR_LIMIT", 10)
     write(tmp_path, "gen.py", '''
         def counter(n=1.0):
             while True:
-                yield {"y": n}
+                yield n
     ''', '''
         [model]
         entry = "gen.py:counter"
         [inputs]
         n = {}
         [outputs]
-        y = {}
+        y = { from = "return:0" }
     ''')
-    with pytest.raises(InterfaceError, match="generator"):
-        make_fmu(tmp_path)
+    fmu = adapter(make_fmu(tmp_path))
+    try:   # the step may run when initialization ends, to give the outputs their first values
+        fmu.initialize()
+        status = fmu.fmi2DoStep(0.0, 1.0, False)
+    except AssertionError:
+        status = ERROR
+    assert status == ERROR
+    assert "next() once per step" in str(fmu.logs)
 
 
 def test_fmi2_takes_wider_types_and_checks_ranges(tmp_path, make_fmu, capsys):

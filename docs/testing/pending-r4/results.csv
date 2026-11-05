@@ -1,0 +1,315 @@
+model,config,verdict,outputs compared,max rel diff,notes
+ngboost,probe,match,13,0.0,"random by design, not compared: feature_importances_[1,1], feature_importances_[1,2], feature_importances_[1,3], feature_importances_[1,4], feature_importances_[2,1], feature_importances_[2,2], feature_importances_[2,4], y[1], y[2],"
+ngboost,plain,FMU fails,,,"FMICallException: fmi2DoStep failed with status 3 (error). | FMU log:                     ""fmugen init --probe finds them"") / TypeError: y is an array of shape [8], not a single value: give it dimensions = [8] (FMI 3) or read one element (from = ""...:0""); fmugen init --probe finds them / Send free i"
+ngboost,compiled (probe),match,16,0.0,
+interpret,probe,match,24,0.0,
+interpret,plain,FMU fails,,,"FMICallException: fmi2DoStep failed with status 3 (error). | FMU log:                     ""fmugen init --probe finds them"") / TypeError: y is an array of shape [8], not a single value: give it dimensions = [8] (FMI 3) or read one element (from = ""...:0""); fmugen init --probe finds them / Send free i"
+interpret,compiled (probe),FMU fails,,,"sim.py rc=timeout: Reading configuration file at path '""/home/pc-simulacion2/cmp/wr4/m/interpret/sim_compiled_unz/resources/launch.toml""' | Awaiting handshake. | Connection established! | Reading configuration file at path '""/home/pc-simulacion2/cmp/wr4/m/interpret/sim_compiled_unz/resources/launch."
+pygam,probe,match,24,0.0,
+pygam,plain,FMU fails,,,"FMICallException: fmi2DoStep failed with status 3 (error). | FMU log:                     ""fmugen init --probe finds them"") / TypeError: y is an array of shape [8], not a single value: give it dimensions = [8] (FMI 3) or read one element (from = ""...:0""); fmugen init --probe finds them / Send free i"
+pygam,compiled (probe),match,32,0.0,
+autogluon,probe,match,26,0.0,
+autogluon,plain,FMU fails,,,"FMICallException: fmi2DoStep failed with status 3 (error). | FMU log:     raise TypeError(f""{var['name']} is None"") / TypeError: decision_threshold is None / Send free instance message to shut down backend."
+autogluon,compiled (probe),match,26,0.0,
+flaml,probe,match,55,0.0,"random by design, not compared: best_config_train_time, time_to_find_best_model"
+flaml,plain,FMU fails,,,"FMICallException: fmi2DoStep failed with status 3 (error). | FMU log:                     ""fmugen init --probe finds them"") / TypeError: y is an array of shape [8], not a single value: give it dimensions = [8] (FMI 3) or read one element (from = ""...:0""); fmugen init --probe finds them / Send free i"
+flaml,compiled (probe),match,63,0.0,
+hmmlearn,probe,not comparable,,0.0,random: two direct runs differ
+hmmlearn,plain,FMU fails,,,"FMICallException: fmi2DoStep failed with status 3 (error). | FMU log:                     ""fmugen init --probe finds them"") / TypeError: y is an array of shape [24], not a single value: give it dimensions = [24] (FMI 3) or read one element (from = ""...:0""); fmugen init --probe finds them / Send free"
+hmmlearn,seeded,not comparable,,0.0,random: two direct runs differ
+hmmlearn,compiled (seeded),not comparable,,0.0,
+tslearn,probe,match,32,0.0,
+tslearn,plain,FMU fails,,,"FMICallException: fmi2DoStep failed with status 3 (error). | FMU log:                     ""fmugen init --probe finds them"") / TypeError: y is an array of shape [8], not a single value: give it dimensions = [8] (FMI 3) or read one element (from = ""...:0""); fmugen init --probe finds them / Send free i"
+tslearn,compiled (probe),match,32,0.0,
+sktime,probe,match,23,0.0,
+sktime,plain,FMU fails,,,"FMICallException: fmi2ExitInitializationMode failed with status 3 (error). | FMU log:     return float(value) / TypeError: float() argument must be a string or a real number, not 'ForecastingPipeline' / Send free instance message to shut down backend."
+sktime,compiled (probe),match,27,0.0,
+aeon,probe,match,24,0.0,
+aeon,plain,FMU fails,,,"FMICallException: fmi2ExitInitializationMode failed with status 3 (error). | FMU log:     return float(value) / TypeError: float() argument must be a string or a real number, not 'dict' / Send free instance message to shut down backend."
+aeon,compiled (probe),match,32,0.0,
+neuralprophet,probe,FMU fails,,,"FMICallException: fmi2ExitInitializationMode failed with status 3 (error). | FMU log:     result = self.tuner._tune( /         model, scale_batch_size_kwargs=scale_batch_size_kwargs, lr_find_kwargs=lr_find_kw / Send free instance message to shut down backend."
+neuralprophet,plain,FMU fails,,,"FMICallException: fmi2ExitInitializationMode failed with status 3 (error). | FMU log:     result = self.tuner._tune( /         model, scale_batch_size_kwargs=scale_batch_size_kwargs, lr_find_kwargs=lr_find_kw / Send free instance message to shut down backend."
+neuralprophet,compiled (None),no config to compile,,,
+skforecast,probe,match,12,0.0,
+skforecast,plain,FMU fails,,,"FMICallException: fmi2DoStep failed with status 3 (error). | FMU log:                     ""fmugen init --probe finds them"") / TypeError: y is an array of shape [4], not a single value: give it dimensions = [4] (FMI 3) or read one element (from = ""...:0""); fmugen init --probe finds them / Send free i"
+skforecast,compiled (probe),match,16,0.0,
+mlforecast,probe,match,12,0.0,
+mlforecast,plain,FMU fails,,,"FMICallException: fmi2ExitInitializationMode failed with status 3 (error). | FMU log:     return float(value) / TypeError: float() argument must be a string or a real number, not 'dict' / Send free instance message to shut down backend."
+mlforecast,compiled (probe),match,16,0.0,
+mapie,probe,match,128,0.0,
+mapie,plain,FMU fails,,,"FMICallException: fmi2DoStep failed with status 3 (error). | FMU log:                     ""fmugen init --probe finds them"") / TypeError: y is a tuple of shape [2], not a single value: give it dimensions = [2] (FMI 3) or read one element (from = ""...:0""); fmugen init --probe finds them / Send free in"
+mapie,compiled (probe),match,128,0.0,
+umap,probe,match,96,0.0,
+umap,plain,FMU fails,,,"FMICallException: fmi2DoStep failed with status 3 (error). | FMU log:     raise TypeError(f""{var['name']} is None"") / TypeError: knn_indices is None / Send free instance message to shut down backend."
+umap,compiled (probe),match,128,0.0,
+hdbscan,probe,match,102,0.0,
+hdbscan,plain,FMU fails,,,"FMICallException: fmi2DoStep failed with status 3 (error). | FMU log:                     ""fmugen init --probe finds them"") / TypeError: y is an array of shape [8], not a single value: give it dimensions = [8] (FMI 3) or read one element (from = ""...:0""); fmugen init --probe finds them / Send free i"
+hdbscan,compiled (probe),match,136,0.0,
+pysr,probe,no config,,,`init` wrote no config (see init_probe.log)
+pysr,plain,FMU fails,,,"FMICallException: fmi2ExitInitializationMode failed with status 3 (error). | FMU log:                     f""set type = \""String\"" for it in the config"") / TypeError: output_directory_ is a string ('outputs'), not a Real: set type = ""String"" for it in the config / Send free instance message to shut d"
+pysr,hand,match,12,0.0,
+pysr,compiled (hand),FMU fails,,,Exception: Failed to instantiate model | FMU log: Instantiation of fmi2 slave failed; dispatch error; error in backend subprocess; backend exited unexpectedly with exit status 1. Backend emitted the following output before exit:  / [fmugen] the model failed to load: ModuleNotFoundError: No module na
+gplearn,probe,match,32,0.0,
+gplearn,plain,FMU fails,,,"FMICallException: fmi2DoStep failed with status 3 (error). | FMU log:                     ""fmugen init --probe finds them"") / TypeError: y is an array of shape [8], not a single value: give it dimensions = [8] (FMI 3) or read one element (from = ""...:0""); fmugen init --probe finds them / Send free i"
+gplearn,compiled (probe),match,32,0.0,
+imodels,probe,match,24,0.0,
+imodels,plain,FMU fails,,,"FMICallException: fmi2DoStep failed with status 3 (error). | FMU log:                     ""fmugen init --probe finds them"") / TypeError: y is an array of shape [8], not a single value: give it dimensions = [8] (FMI 3) or read one element (from = ""...:0""); fmugen init --probe finds them / Send free i"
+imodels,compiled (probe),match,32,0.0,
+sksurv,probe,no config,,,`init` wrote no config (see init_probe.log)
+sksurv,plain,FMU fails,,,"FMICallException: fmi2DoStep failed with status 3 (error). | FMU log:                     ""fmugen init --probe finds them"") / TypeError: y is an array of shape [8], not a single value: give it dimensions = [8] (FMI 3) or read one element (from = ""...:0""); fmugen init --probe finds them / Send free i"
+sksurv,hand,match,12,0.0,
+sksurv,compiled (hand),match,16,0.0,
+botorch,probe,FMU fails,,,"FMICallException: fmi3ExitInitializationMode failed with status 3 (error). | FMU log:                     ""fmugen init --probe finds them"") / TypeError: train_targets is an array of shape [8], not a single value: give it dimensions = [8] (FMI 3) or read one element (from = ""...:0""); fmugen init --pr"
+botorch,plain,FMU fails,,,"FMICallException: fmi3ExitInitializationMode failed with status 3 (error). | FMU log:                     ""fmugen init --probe finds them"") / TypeError: train_targets is an array of shape [8], not a single value: give it dimensions = [8] (FMI 3) or read one element (from = ""...:0""); fmugen init --pr"
+botorch,hand,match,6,0.0,
+botorch,compiled (hand),match,8,0.0,
+numpyro,probe,FMU fails,,,FMICallException: fmi2DoStep failed with status 3 (error). | FMU log:            ^^^^^^^^^^^^^^^^^^ / AssertionError: `run` must be called before `get_extra_fields`. / Send free instance message to shut down backend.
+numpyro,plain,FMU fails,,,FMICallException: fmi2ExitInitializationMode failed with status 3 (error). | FMU log:                          ^^^^^^^^^^^^^^^^^^^^ / AttributeError: 'float' object has no attribute 'sample_field' / Send free instance message to shut down backend.
+numpyro,compiled (None),no config to compile,,,
+brian2,probe,match,4,0.0,
+brian2,plain,not comparable,,0.0,the FMU has no outputs
+brian2,compiled (probe),match,4,0.0,
+spikingjelly,probe,match,6,0.0,
+spikingjelly,plain,FMU fails,,,FMICallException: fmi2DoStep failed with status 3 (error). | FMU log:          ^^^^^^^ / AttributeError: 'list' object has no attribute 'dtype' / Send free instance message to shut down backend.
+spikingjelly,compiled (probe),match,8,0.0,
+alibi_detect,probe,no config,,,`init` wrote no config (see init_probe.log)
+alibi_detect,plain,no config,,,`init` wrote no config (see init_plain.log)
+alibi_detect,compiled (None),no config to compile,,,
+cleanlab,probe,match,24,0.0,
+cleanlab,plain,not comparable,,0.0,the FMU has no outputs
+cleanlab,compiled (probe),match,32,0.0,
+open_clip,probe,match,2048,0.0,
+open_clip,plain,no config,,,`init` wrote no config (see init_plain.log)
+open_clip,compiled (probe),match,2048,0.0,
+sam,probe,match,786468,0.0,
+sam,plain,FMU fails,,,"FMICallException: fmi2DoStep failed with status 3 (error). | FMU log:                     ""fmugen init --probe finds them"") / TypeError: iou_scores is an array of shape [1, 1, 3], not a single value: give it dimensions = [1, 1, 3] (FMI 3) or read one element (from = ""...:0""); fmugen init --probe fin"
+sam,compiled (probe),match,786468,0.0,
+depth_anything,probe,no config,,,`init` wrote no config (see init_probe.log)
+depth_anything,plain,no config,,,`init` wrote no config (see init_plain.log)
+depth_anything,compiled (None),no config to compile,,,
+detr,probe,match,191000,0.0,
+detr,plain,match,16,0.0,
+detr,compiled (probe),match,191000,0.0,
+mediapipe_pose,probe,FMU fails,,,"FMICallException: fmi2ExitInitializationMode failed with status 3 (error). | FMU log:   File ""/home/pc-simulacion2/.local/share/uv/python/cpython-3.13.16-linux-x86_64-gnu/lib/python3.13/ctypes/__init__.py"", line 403, in _load_library /     return _dlopen(n / Send free instance message to shut down b"
+mediapipe_pose,plain,FMU fails,,,"FMICallException: fmi2ExitInitializationMode failed with status 3 (error). | FMU log:   File ""/home/pc-simulacion2/.local/share/uv/python/cpython-3.13.16-linux-x86_64-gnu/lib/python3.13/ctypes/__init__.py"", line 403, in _load_library /     return _dlopen(n / Send free instance message to shut down b"
+mediapipe_pose,compiled (None),no config to compile,,,
+deepface,probe,match,24,0.0,
+deepface,plain,not comparable,,0.0,the FMU has no outputs
+deepface,compiled (probe),match,24,0.0,
+doctr,probe,match,32,0.0,
+doctr,plain,FMU fails,,,"FMICallException: fmi2DoStep failed with status 3 (error). | FMU log:     return float(value) / TypeError: float() argument must be a string or a real number, not 'Document' / Send free instance message to shut down backend."
+doctr,compiled (probe),match,32,0.0,
+trocr,probe,match,52,0.0,
+trocr,plain,FMU fails,,,"FMICallException: fmi2DoStep failed with status 3 (error). | FMU log:                     ""fmugen init --probe finds them"") / TypeError: y is an array of shape [1, 7], not a single value: give it dimensions = [1, 7] (FMI 3) or read one element (from = ""...:0""); fmugen init --probe finds them / Send "
+trocr,compiled (probe),match,52,0.0,
+faster_whisper,probe,match,464,0.0,
+faster_whisper,plain,FMU fails,,,"FMICallException: fmi2DoStep failed with status 3 (error). | FMU log:     return float(value) / TypeError: float() argument must be a string or a real number, not 'generator' / Send free instance message to shut down backend."
+faster_whisper,compiled (probe),match,464,0.0,
+vosk,probe,match,4,0.0,
+vosk,plain,match,3,0.0,
+vosk,hand,match,3,0.0,"random by design, not compared: text"
+vosk,compiled (hand),match,4,0.0,
+kokoro,probe,FMU fails,,,"$ /home/pc-simulacion2/cmp/vr4/kokoro/bin/python -m fmugen build /home/pc-simulacion2/cmp/wr4/m/kokoro/probe.toml -o /home/pc-simulacion2/cmp/wr4/m/kokoro/probe.fmu --capture-output --fmi 2 | fmugen: error: kokoro:KPipeline is a generator (it uses yield), which fmugen can't step yet; a factory that "
+kokoro,plain,FMU fails,,,"$ /home/pc-simulacion2/cmp/vr4/kokoro/bin/python -m fmugen build /home/pc-simulacion2/cmp/wr4/m/kokoro/plain.toml -o /home/pc-simulacion2/cmp/wr4/m/kokoro/plain.fmu --capture-output --fmi 2 | fmugen: error: kokoro:KPipeline is a generator (it uses yield), which fmugen can't step yet; a factory that "
+kokoro,compiled (None),no config to compile,,,
+piper,probe,FMU fails,,,"$ /home/pc-simulacion2/cmp/vr4/piper/bin/python -m fmugen build /home/pc-simulacion2/cmp/wr4/m/piper/probe.toml -o /home/pc-simulacion2/cmp/wr4/m/piper/probe.fmu --capture-output --fmi 2 | fmugen: error: piper:PiperVoice is a generator (it uses yield), which fmugen can't step yet; a factory that ret"
+piper,plain,FMU fails,,,"$ /home/pc-simulacion2/cmp/vr4/piper/bin/python -m fmugen build /home/pc-simulacion2/cmp/wr4/m/piper/plain.toml -o /home/pc-simulacion2/cmp/wr4/m/piper/plain.fmu --capture-output --fmi 2 | fmugen: error: piper:PiperVoice is a generator (it uses yield), which fmugen can't step yet; a factory that ret"
+piper,compiled (None),no config to compile,,,
+torchcrepe,probe,not comparable,,0.0,random: two direct runs differ
+torchcrepe,plain,not comparable,,0.0,the FMU has no outputs
+torchcrepe,seeded,match,124,0.0,
+torchcrepe,compiled (seeded),match,124,0.0,
+basic_pitch,probe,no config,,,`init` wrote no config (see init_probe.log)
+basic_pitch,plain,no config,,,`init` wrote no config (see init_plain.log)
+basic_pitch,compiled (None),no config to compile,,,
+demucs,probe,FMU fails,,,timeout (15 min)
+demucs,plain,FMU fails,,,"FMICallException: fmi2DoStep failed with status 3 (error). | FMU log:                     ""fmugen init --probe finds them"") / TypeError: y is a tuple of shape [2], not a single value: give it dimensions = [2] (FMI 3) or read one element (from = ""...:0""); fmugen init --probe finds them / Send free in"
+demucs,hand,match,15,0.0,
+demucs,compiled (hand),match,20,0.0,
+gliner,probe,match,49,0.0,
+gliner,plain,match,8,0.0,
+gliner,compiled (probe),FMU fails,,,"FMICallException: fmi2ExitInitializationMode failed with status 3 (error). | FMU log: initialization failed: OSError(""We couldn't connect to 'https://huggingface.co' to load the files, and couldn't find them in the cached files.\nCheck your internet connection or see how to run the library in offlin"
+spacy,probe,not comparable,,0.0,the FMU has no outputs
+spacy,plain,FMU fails,,,"FMICallException: fmi2DoStep failed with status 3 (error). | FMU log:     return float(value) / TypeError: float() argument must be a string or a real number, not 'spacy.tokens.doc.Doc' / Send free instance message to shut down backend."
+spacy,compiled (probe),FMU fails,,,"FMICallException: fmi2ExitInitializationMode failed with status 3 (error). | FMU log: initialization failed: OSError(""[E050] Can't find model 'en_core_web_sm'. It doesn't seem to be a Python package or a valid path to a data directory."") / OSError: [E050] Can't find model 'en_core_web_sm'. It doesn'"
+vader,probe,match,16,0.0,
+vader,plain,FMU fails,,,"FMICallException: fmi2DoStep failed with status 3 (error). | FMU log:     return float(value) / TypeError: float() argument must be a string or a real number, not 'dict' / Send free instance message to shut down backend."
+vader,compiled (probe),match,16,0.0,
+keybert,probe,not comparable,,0.0,the FMU has no outputs
+keybert,plain,not comparable,,0.0,the FMU has no outputs
+keybert,compiled (probe),not comparable,,0.0,
+fasttext,probe,FMU fails,,,"FMICallException: fmi2DoStep failed with status 3 (error). | FMU log: If using `np.array(obj, copy=False)` replace it with `np.asarray(obj)` to allow a copy when needed (no behavior change in NumPy 1.x). / For more details, see https://numpy.org/devdocs/numpy_2_0_migration_guide.html#adapting-to-cha"
+fasttext,plain,FMU fails,,,"FMICallException: fmi2DoStep failed with status 3 (error). | FMU log: If using `np.array(obj, copy=False)` replace it with `np.asarray(obj)` to allow a copy when needed (no behavior change in NumPy 1.x). / For more details, see https://numpy.org/devdocs/numpy_2_0_migration_guide.html#adapting-to-cha"
+fasttext,compiled (None),no config to compile,,,
+chemprop,probe,FMU fails,,,FMICallException: fmi2ExitInitializationMode failed with status 3 (error). | FMU log:                        ^^^^^^^^^^^^^^^^^^^^^^^ / AttributeError: 'float' object has no attribute 'hparams' / Send free instance message to shut down backend.
+chemprop,plain,FMU fails,,,"FMICallException: fmi2ExitInitializationMode failed with status 3 (error). | FMU log:     return fn(*args, **kwargs) / TypeError: MPNN.__init__() missing 3 required positional arguments: 'message_passing', 'agg', and 'predictor' / Send free instance message to shut down backend."
+chemprop,compiled (None),no config to compile,,,
+esm2,probe,match,1080,0.0,
+esm2,plain,FMU fails,,,"FMICallException: fmi2DoStep failed with status 3 (error). | FMU log:     raise TypeError(f""{var['name']} is None"") / TypeError: loss is None / Send free instance message to shut down backend."
+esm2,compiled (probe),match,1080,0.0,
+orb,probe,FMU fails,,,FMICallException: fmi2ExitInitializationMode failed with status 3 (error). | FMU log:                  ^^^^^^^^^^^^^ / AttributeError: 'tuple' object has no attribute 'to' / Send free instance message to shut down backend.
+orb,plain,FMU fails,,,"FMICallException: fmi2ExitInitializationMode failed with status 3 (error). | FMU log:     return fn(*args, **kwargs) / TypeError: ORBCalculator.__init__() missing 1 required positional argument: 'atoms_adapter' / Send free instance message to shut down backend."
+orb,compiled (None),no config to compile,,,
+sevenn,probe,match,3,0.0,
+sevenn,plain,FMU fails,,,"FMICallException: fmi2DoStep failed with status 3 (error). | FMU log:     return float(value) / TypeError: float() argument must be a string or a real number, not 'Atoms' / Send free instance message to shut down backend."
+sevenn,compiled (probe),FMU fails,,,Exception: Failed to instantiate model | FMU log: Instantiation of fmi2 slave failed; dispatch error; error in backend subprocess; backend exited unexpectedly with exit status 1. Backend emitted the following output before exit:  / [fmugen] the model failed to load: OSError: Can't get source for <fu
+pyts,probe,match,3,0.0,
+pyts,plain,match,3,0.0,
+pyts,compiled (probe),match,4,0.0,
+rocketpy,probe,FMU fails,,,FMICallException: fmi2ExitInitializationMode failed with status 3 (error). | FMU log:     ~~~~~~~~~~~~~~~~~~~~~~~~~~~~^^ / TypeError: 'float' object is not callable / Send free instance message to shut down backend.
+rocketpy,plain,FMU fails,,,FMICallException: fmi2ExitInitializationMode failed with status 3 (error). | FMU log:     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^ / AttributeError: 'float' object has no attribute 'warn_if_unstable' / Send free instance message to shut down backend.
+rocketpy,compiled (None),no config to compile,,,
+aerosandbox,probe,match,39,0.0,
+aerosandbox,plain,FMU fails,,,"FMICallException: fmi2ExitInitializationMode failed with status 3 (error). | FMU log:     return fn(*args, **kwargs) / TypeError: AeroBuildup.__init__() missing 2 required positional arguments: 'airplane' and 'op_point' / Send free instance message to shut down backend."
+aerosandbox,compiled (probe),match,39,0.0,
+jsbsim,probe,match,4,0.0,
+jsbsim,plain,match,3,0.0,
+jsbsim,hand,match,16,0.0,
+jsbsim,compiled (hand),FMU fails,,,"FMICallException: fmi2ExitInitializationMode failed with status 3 (error). | FMU log: initialization failed: RuntimeError(""[model] constants.0 = 'jsbsim:get_default_root_dir()' failed: TypeError('expected str, bytes or os.PathLike object, not NoneType')"") / TypeError: expected str, bytes or os.PathL"
+skyfield,probe,no config,,,`init` wrote no config (see init_probe.log)
+skyfield,plain,FMU fails,,,"$ /home/pc-simulacion2/cmp/vr4/skyfield/bin/python -m fmugen build /home/pc-simulacion2/cmp/wr4/m/skyfield/plain.toml -o /home/pc-simulacion2/cmp/wr4/m/skyfield/plain.fmu --capture-output --fmi 2 | fmugen: error: [model] call_constants.t: 'skyfield.api:load.timescale().utc(2024, 1, 1, 12)': only one"
+skyfield,compiled (None),no config to compile,,,
+rebound,probe,match,41,0.0,
+rebound,plain,FMU fails,,,"FMICallException: fmi2DoStep failed with status 3 (error). | FMU log:     return float(value) / ValueError: could not convert string to float: <rebound.particle.Particle object at 0x74126cd039c0, m=5.0 x=0.0 y=0.0 z=0.0 vx=0.0 vy=0.0 vz=0.0> / Send free instance message to shut down backend."
+rebound,compiled (probe),FMU fails,,,Exception: Failed to instantiate model | FMU log: Instantiation of fmi2 slave failed; dispatch error; error in backend subprocess; backend exited unexpectedly with exit status 1. Backend emitted the following output before exit:  / [fmugen] the model failed to load: ImportError: librebound not found
+galpy,probe,FMU fails,,,FMICallException: fmi3DoStep failed with status 3 (error). | FMU log:                     '1 positional argument') / TypeError: integrate requires at least 1 positional argument / Send free instance message to shut down backend.
+galpy,plain,FMU fails,,,FMICallException: fmi3DoStep failed with status 3 (error). | FMU log:                     '1 positional argument') / TypeError: integrate requires at least 1 positional argument / Send free instance message to shut down backend.
+galpy,hand,not comparable,,0.0,no output could be read directly: no direct value
+galpy,compiled (hand),FMU fails,,,sim.py rc=timeout: $ /home/pc-simulacion2/cmp/vr4/galpy/bin/python /mnt/c/Users/PC-SIMULACION2/Desktop/fmugen/docs/testing/pending-100/harness/sim.py /home/pc-simulacion2/cmp/wr4/m/galpy/hand.compiled.fmu /home/pc-simulacion2/cmp/wr4/m/galpy/sim_compiled.json --stop 3.0 --h 1.0 | Reading configurati
+pybullet_drones,probe,match,228,0.0,
+pybullet_drones,plain,FMU fails,,,"FMICallException: fmi2ExitInitializationMode failed with status 3 (error). | FMU log:                     ""fmugen init --probe finds them"") / TypeError: gui_input is an array of shape [4], not a single value: give it dimensions = [4] (FMI 3) or read one element (from = ""...:0""); fmugen init --probe "
+pybullet_drones,compiled (probe),match,304,0.0,
+minigrid,probe,match,484,0.0,
+minigrid,plain,FMU fails,,,"FMICallException: fmi2DoStep failed with status 3 (error). | FMU log:     return float(value) / TypeError: float() argument must be a string or a real number, not 'dict' / Send free instance message to shut down backend."
+minigrid,compiled (probe),match,635,0.0,
+pettingzoo,probe,match,36,0.0,
+pettingzoo,plain,no config,,,`init` wrote no config (see init_plain.log)
+pettingzoo,compiled (probe),FMU fails,,,Exception: Failed to instantiate model | FMU log: Instantiation of fmi2 slave failed; dispatch error; error in backend subprocess; backend exited unexpectedly with exit status 1. Backend emitted the following output before exit:  / [fmugen] the model failed to load: FileNotFoundError: [Errno 2] No s
+metaworld,probe,match,147,0.0,
+metaworld,plain,not comparable,,0.0,the FMU has no outputs
+metaworld,compiled (probe),match,196,0.0,
+citylearn,probe,no config,,,`init` wrote no config (see init_probe.log)
+citylearn,plain,no config,,,`init` wrote no config (see init_plain.log)
+citylearn,compiled (None),no config to compile,,,
+sinergym,probe,no config,,,`init` wrote no config (see init_probe.log)
+sinergym,plain,no config,,,`init` wrote no config (see init_plain.log)
+sinergym,compiled (None),no config to compile,,,
+pymgrid,probe,FMU fails,,,"FMICallException: fmi2DoStep failed with status 3 (error). | FMU log:     microgrid_step.append(name, *module.step(0.0, normalized=False)) /                                  ~~~~~~~~~~~^^^^^^^^^^^^^ / Send free instance message to shut down backend."
+pymgrid,plain,FMU fails,,,"FMICallException: fmi2DoStep failed with status 3 (error). | FMU log:     microgrid_step.append(name, *module.step(0.0, normalized=False)) /                                  ~~~~~~~~~~~^^^^^^^^^^^^^ / Send free instance message to shut down backend."
+pymgrid,compiled (None),no config to compile,,,
+ochre,probe,FMU fails,,,FMICallException: fmi2ExitInitializationMode failed with status 3 (error). | FMU log:                            ~~~~~~~~~~~~~~~~~~^^^^^^^^^^^^ / KeyError: 'key_0' / Send free instance message to shut down backend.
+ochre,plain,FMU fails,,,FMICallException: fmi2ExitInitializationMode failed with status 3 (error). | FMU log:                            ~~~~~~~~~~~~~~~~~~^^^^^^^^^^^^ / KeyError: 'key_0' / Send free instance message to shut down backend.
+ochre,compiled (None),no config to compile,,,
+demandlib,probe,FMU fails,,,"FMICallException: fmi2DoStep failed with status 3 (error). | FMU log:     return float(value) / TypeError: float() argument must be a string or a real number, not 'DataFrame' / Send free instance message to shut down backend."
+demandlib,plain,FMU fails,,,"FMICallException: fmi2DoStep failed with status 3 (error). | FMU log:     return float(value) / TypeError: float() argument must be a string or a real number, not 'DataFrame' / Send free instance message to shut down backend."
+demandlib,hand,match,9,0.0,
+demandlib,compiled (hand),match,12,0.0,
+feedinlib,probe,FMU fails,,,"FMICallException: fmi2ExitInitializationMode failed with status 3 (error). | FMU log:         "" but it's not provided as an argument."") / AttributeError: Your model requires azimuth but it's not provided as an argument. / Send free instance message to shut down backend."
+feedinlib,plain,FMU fails,,,"FMICallException: fmi2ExitInitializationMode failed with status 3 (error). | FMU log:         "" but it's not provided as an argument."") / AttributeError: Your model requires azimuth but it's not provided as an argument. / Send free instance message to shut down backend."
+feedinlib,hand,FMU fails,,,FMICallException: fmi2DoStep failed with status 3 (error). | FMU log:            ~~~~~~~~~~~~~~~~~~~~~~~^^^^^^^^^^^^ / AttributeError: 'DataFrame' object has no attribute 'data' / Send free instance message to shut down backend.
+feedinlib,compiled (None),no config to compile,,,
+pvfactors,probe,match,16,0.0,
+pvfactors,plain,FMU fails,,,"FMICallException: fmi2ExitInitializationMode failed with status 3 (error). | FMU log:   File ""/home/pc-simulacion2/cmp/vr4/pvfactors/lib/python3.13/site-packages/pvfactors/geometry/base.py"", line 122, in _get_rotation_from_tilt_azimuth /     is_pointing_right = ((surface_azimuth - axis_azimuth) % 36"
+pvfactors,compiled (probe),match,16,0.0,
+py_wake,probe,match,40,0.0,
+py_wake,plain,match,4,0.0,
+py_wake,hand,match,18,0.0,
+py_wake,compiled (hand),match,24,0.0,
+ccblade,probe,FMU fails,,,FMICallException: fmi2DoStep failed with status 3 (error). | FMU log:                                                      ~~~~~~~^^^ / TypeError: 'float' object is not subscriptable / Send free instance message to shut down backend.
+ccblade,plain,FMU fails,,,FMICallException: fmi2ExitInitializationMode failed with status 3 (error). | FMU log:                         ~~~^^^ / TypeError: len() of unsized object / Send free instance message to shut down backend.
+ccblade,compiled (None),no config to compile,,,
+capytaine,probe,FMU fails,,,FMICallException: fmi2DoStep failed with status 3 (error). | FMU log:                              ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ / AttributeError: 'float' object has no attribute 'minimal_computable_wavelength' / Send free instance message to shut down backend.
+capytaine,plain,FMU fails,,,FMICallException: fmi2DoStep failed with status 3 (error). | FMU log:              ^^^^^^^^^^^^^ / AttributeError: 'float' object has no attribute 'wavelength' / Send free instance message to shut down backend.
+capytaine,compiled (None),no config to compile,,,
+openmdao,probe,mismatch,3,0.0,
+openmdao,plain,not comparable,,0.0,the FMU has no outputs
+openmdao,hand,match,20,0.0,
+openmdao,compiled (hand),match,20,0.0,
+geopy,probe,match,63,0.0,
+geopy,plain,FMU fails,,,FMICallException: fmi2ExitInitializationMode failed with status 3 (error). | FMU log:                   ~~~~~~~~~~~~~~~~^^^^^^^^^^ / TypeError: kilometers() got an unexpected keyword argument 'newport_ri' / Send free instance message to shut down backend.
+geopy,compiled (probe),match,63,0.0,
+reaktoro,probe,no config,,,`init` wrote no config (see init_probe.log)
+reaktoro,plain,no config,,,`init` wrote no config (see init_plain.log)
+reaktoro,compiled (None),no config to compile,,,
+thermopack,probe,match,70,0.0,
+thermopack,plain,FMU fails,,,"FMICallException: fmi2DoStep failed with status 3 (error). | FMU log:     return float(value) / TypeError: float() argument must be a string or a real number, not 'FlashResult' / Send free instance message to shut down backend."
+thermopack,compiled (probe),match,70,0.0,
+teqp,probe,match,4,0.0,
+teqp,plain,no config,,,`init` wrote no config (see init_plain.log)
+teqp,compiled (probe),match,4,0.0,
+pycalphad,probe,not comparable,,0.0,the FMU has no outputs
+pycalphad,plain,FMU fails,,,"FMICallException: fmi2ExitInitializationMode failed with status 3 (error). | FMU log:     return float(value) / TypeError: float() argument must be a string or a real number, not 'Dataset' / Send free instance message to shut down backend."
+pycalphad,hand,match,6,0.0,"random by design, not compared: GM, NP_0, NP_1"
+pycalphad,compiled (hand),match,6,0.0,
+phreeqpython,probe,match,69,0.0,
+phreeqpython,plain,FMU fails,,,"FMICallException: fmi2DoStep failed with status 3 (error). | FMU log:     return float(value) / TypeError: float() argument must be a string or a real number, not 'Solution' / Send free instance message to shut down backend."
+phreeqpython,compiled (probe),match,91,0.0,
+equilibrator,probe,no config,,,`init` wrote no config (see init_probe.log)
+equilibrator,plain,FMU fails,,,"FMICallException: fmi2ExitInitializationMode failed with status 3 (error). | FMU log:     ~~^^ /   File ""/home/pc-simulacion2/cmp/wr4/m/equilibrator/sim_plain_unz/ / Send free instance message to shut down backend."
+equilibrator,compiled (None),no config to compile,,,
+cobra,probe,match,802,0.0,
+cobra,plain,FMU fails,,,"FMICallException: fmi2DoStep failed with status 3 (error). | FMU log:     return float(value) / TypeError: float() argument must be a string or a real number, not 'Solution' / Send free instance message to shut down backend."
+cobra,compiled (probe),match,1065,0.0,
+gillespy2,probe,not comparable,,0.0,random: two direct runs differ
+gillespy2,plain,FMU fails,,,"FMICallException: fmi2DoStep failed with status 3 (error). | FMU log:   File ""/home/pc-simulacion2/cmp/wr4/m/gillespy2/sim_plain_unz/resources/fmugen_runtime.py"", line 2559, in _call /     return results_of(self._ / Send free instance message to shut down backend."
+gillespy2,compiled (probe),not comparable,,0.0,
+pysb,probe,FMU fails,,,"FMICallException: fmi2ExitInitializationMode failed with status 3 (error). | FMU log:                                   ^^^^^^^^^^^^^^^^^^^^^^^^^^ /   File ""/home/pc-simulacion2/cmp/vr4/pysb/lib/python3.13/site-packages/pysb/bng.py"", line 660, in ge / Send free instance message to shut down backend."
+pysb,plain,FMU fails,,,"FMICallException: fmi2ExitInitializationMode failed with status 3 (error). | FMU log:                                   ^^^^^^^^^^^^^^^^^^^^^^^^^^ /   File ""/home/pc-simulacion2/cmp/vr4/pysb/lib/python3.13/site-packages/pysb/bng.py"", line 660, in ge / Send free instance message to shut down backend."
+pysb,compiled (None),no config to compile,,,
+roadrunner,probe,match,156,0.0,
+roadrunner,plain,match,3,0.0,
+roadrunner,compiled (probe),match,156,0.0,
+myokit,probe,FMU fails,,,FMICallException: fmi2ExitInitializationMode failed with status 3 (error). | FMU log: [compilers.C.base] cc -pthread -fno-strict-overflow -Wsign-compare -Wunreachable-code -DNDEBUG -g -O3 -Wall -O3 -fstack-protector -fstack-clash-protection -U_FORTIFY_SOURCE -D_FORTIFY_SOURCE=2 -fno-omit-frame-point
+myokit,plain,FMU fails,,,FMICallException: fmi2ExitInitializationMode failed with status 3 (error). | FMU log: [compilers.C.base] cc -pthread -fno-strict-overflow -Wsign-compare -Wunreachable-code -DNDEBUG -g -O3 -Wall -O3 -fstack-protector -fstack-clash-protection -U_FORTIFY_SOURCE -D_FORTIFY_SOURCE=2 -fno-omit-frame-point
+myokit,compiled (None),no config to compile,,,
+biosppy,probe,match,158572,0.0,
+biosppy,plain,FMU fails,,,"FMICallException: fmi2ExitInitializationMode failed with status 3 (error). | FMU log:                     ""fmugen init --probe finds them"") / TypeError: y is a tuple of shape [7], not a single value: give it dimensions = [7] (FMI 3) or read one element (from = ""...:0""); fmugen init --probe finds the"
+biosppy,compiled (probe),match,158572,0.0,
+mne,probe,match,60000,0.0,
+mne,plain,not comparable,,0.0,the FMU has no outputs
+mne,compiled (probe),match,60000,0.0,
+yasa,probe,match,36,0.0,
+yasa,plain,FMU fails,,,"FMICallException: fmi2ExitInitializationMode failed with status 3 (error). | FMU log:     return float(value) / TypeError: float() argument must be a string or a real number, not 'DataFrame' / Send free instance message to shut down backend."
+yasa,compiled (probe),FMU fails,,,Exception: Failed to instantiate model | FMU log: Instantiation of fmi2 slave failed; dispatch error; error in backend subprocess; backend exited unexpectedly with exit status 1. Backend emitted the following output before exit:  / [fmugen] the model failed to load: ModuleNotFoundError: No module na
+flopy,probe,match,4,0.0,
+flopy,plain,FMU fails,,,"FMICallException: fmi2DoStep failed with status 3 (error). | FMU log:                     ""fmugen init --probe finds them"") / TypeError: y is a tuple of shape [2], not a single value: give it dimensions = [2] (FMI 3) or read one element (from = ""...:0""); fmugen init --probe finds them / Send free in"
+flopy,compiled (probe),match,4,0.0,
+pysheds,probe,FMU fails,,,FMICallException: fmi2DoStep failed with status 3 (error). | FMU log:     raise TypeError('Data must be a Raster.') / TypeError: Data must be a Raster. / Send free instance message to shut down backend.
+pysheds,plain,FMU fails,,,FMICallException: fmi2DoStep failed with status 3 (error). | FMU log:                                                      ^^^^^^^^^^^ / AttributeError: 'float' object has no attribute 'nodata' / Send free instance message to shut down backend.
+pysheds,compiled (None),no config to compile,,,
+rrmpg,probe,match,120,0.0,
+rrmpg,plain,not comparable,,0.0,the FMU has no outputs
+rrmpg,compiled (probe),match,120,0.0,
+hydroeval,probe,match,4,0.0,
+hydroeval,plain,match,4,0.0,
+hydroeval,compiled (probe),match,4,0.0,
+pyspice,probe,match,7,0.0,
+pyspice,plain,FMU fails,,,"FMICallException: fmi2DoStep failed with status 3 (error). | FMU log:     return float(value) / TypeError: float() argument must be a string or a real number, not 'Circuit' / Send free instance message to shut down backend."
+pyspice,compiled (probe),match,7,0.0,
+fatpack,probe,match,4,0.0,
+fatpack,plain,FMU fails,,,FMICallException: fmi2ExitInitializationMode failed with status 3 (error). | FMU log:            ^^^^^ / AttributeError: 'list' object has no attribute 'min' / Send free instance message to shut down backend.
+fatpack,compiled (probe),match,4,0.0,
+pylife,probe,match,32,0.0,
+pylife,plain,not comparable,,0.0,the FMU has no outputs
+pylife,compiled (probe),match,32,0.0,
+uxsim,probe,FMU fails,,,"FMICallException: fmi2DoStep failed with status 3 (error). | FMU log:     return Vehicle(W, *args, **kwargs) / TypeError: Vehicle.__init__() missing 3 required positional arguments: 'orig', 'dest', and 'departure_time' / Send free instance message to shut down backend."
+uxsim,plain,FMU fails,,,FMICallException: fmi2DoStep failed with status 3 (error). | FMU log:        ^^^^^^^^^^^ / AttributeError: 'float' object has no attribute 'finalized' / Send free instance message to shut down backend.
+uxsim,compiled (None),no config to compile,,,
+cityflow,probe,no config,,,`init` wrote no config (see init_probe.log)
+cityflow,plain,no config,,,`init` wrote no config (see init_plain.log)
+cityflow,compiled (None),no config to compile,,,
+bluesky,probe,not comparable,,0.0,the FMU has no outputs
+bluesky,plain,not comparable,,0.0,the FMU has no outputs
+bluesky,compiled (probe),not comparable,,0.0,
+sippy,probe,match,56,0.0,
+sippy,plain,not comparable,,0.0,the FMU has no outputs
+sippy,compiled (probe),match,56,0.0,
+pygeomag,probe,match,59,0.0,
+pygeomag,plain,FMU fails,,,"FMICallException: fmi2DoStep failed with status 3 (error). | FMU log:     return float(value) / TypeError: float() argument must be a string or a real number, not 'GeoMagResult' / Send free instance message to shut down backend."
+pygeomag,compiled (probe),match,74,0.0,
+oemof_thermal,probe,match,12,0.0,
+oemof_thermal,plain,match,12,0.0,
+oemof_thermal,compiled (probe),match,12,0.0,
+sunpy,probe,match,4,0.0,
+sunpy,plain,match,4,0.0,
+sunpy,compiled (probe),match,4,0.0,

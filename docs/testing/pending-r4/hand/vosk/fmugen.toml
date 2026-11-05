@@ -1,0 +1,18 @@
+# vosk: AcceptWaveform returns only whether an utterance ended (False for 3 s of speech); the text is
+# what FinalResult() returns afterwards, a JSON string. Kaldi's small English model, 3 s of jfk.flac.
+[model]
+entry = "vosk:KaldiRecognizer"
+call = "AcceptWaveform"
+
+[model.constants]
+0 = { call = "vosk:Model(model_name='vosk-model-small-en-us-0.15')" }
+
+[model.call_constants]
+data = { call = "builtins:bytes(numpy.fromfile('/home/pc-simulacion2/cmp/wr4/data/speech.raw', dtype='int16'))" }
+
+[parameters]
+sample_rate = { start = 16000, to = "pos:1" }
+
+[outputs]
+utterance_end = { from = "return", type = "Boolean" }
+text = { from = "get:FinalResult", type = "String" }

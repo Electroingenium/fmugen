@@ -26,17 +26,44 @@ import typing
 from pathlib import Path
 
 from fmugen import static
-from fmugen.config import InterfaceError, stdlib_clash
-from fmugen.toml_output import render_toml
 from fmugen.arguments import (
-    SCALARS, POSITIONAL_STARTS, START_ERRORS, NO_SIGNATURE, PROBED,
-    _number_like, _array_info, _dotted_names, _arguments, _apply_converts,
-    _assign_starts, assumptions, guessed_outputs, unfit_outputs, class_called, _only_varargs, _time_source,
+    NO_SIGNATURE,
+    POSITIONAL_STARTS,
+    PROBED,
+    SCALARS,
+    START_ERRORS,
+    _apply_converts,
+    _arguments,
+    _array_info,
+    _assign_starts,
+    _const_entry,
+    _dotted_names,
+    _extra_info,
+    _given_constant,
+    _number_like,
+    _only_varargs,
+    _time_source,
+    class_called,
 )
+from fmugen.config import InterfaceError, stdlib_clash
 from fmugen.probe import (
-    ConstantError, _run_setup, _probe_call, _probe_class, _forwarded,
-    _outputs_from_return, _add_returned, _add_attributes, _detect_states,
-    _taken, _split_varargs, _varargs_by_keyword, MADE_UP_TEXT,
+    MADE_UP_TEXT,
+    READ_ERRORS,
+    REQUESTED_READS,
+    ConstantError,
+    _add_attributes,
+    _add_returned,
+    _detect_states,
+    _forwarded,
+    _outputs_from_return,
+    _probe_call,
+    _probe_class,
+    _requested_outputs,
+    _run_setup,
+    _split_varargs,
+    _taken,
+    _varargs_by_keyword,
+    object_names,
 )
 
 #: Step method names tried in order when a class is given without ``--call``.
@@ -118,7 +145,7 @@ def parse_target(target):
 
 
 def infer_config(target, call=None, config_dir=None, fmi_version=None, starts=None, setup=None, kind=None,
-                 create=None, probe=False, converts=None):
+                 create=None, probe=False, converts=None, reads=None):
     """Infer a config for a model target (``fmugen init``, and ``fmugen build model.py``).
 
     With fmi_version=3, list/tuple/numpy values become array variables and bytes become Binary.
@@ -147,6 +174,9 @@ def infer_config(target, call=None, config_dir=None, fmi_version=None, starts=No
     :type probe: bool or float
     :param converts: ``{argument: "module:function" or "numpy"}``: how arguments are passed in.
     :type converts: dict or None
+    :param reads: ``{output name: "attr:<path>" or "return[:<path>]"}`` (``--read``): outputs at
+        paths the probe doesn't search, typed by what they give in the probe.
+    :type reads: dict or None
     :return: ``(config dict, {(section, name): comment})``.
     :rtype: tuple[dict, dict]
     :raises InterfaceError: the model can't be imported, the target is ambiguous, or the options
@@ -161,19 +191,55 @@ def infer_config(target, call=None, config_dir=None, fmi_version=None, starts=No
             f"(not {config_dir})")
     if path:
         target = f"{path.resolve()}" + (f":{name}" if name else "")
-    with contextlib.chdir(config_dir), _source_reads() as reads:
-        if probe is True or not probe:
-            data, comments = _infer_config(target, call, config_dir, fmi_version, starts, setup, kind, create, probe,
-                                           converts)
-        else:
-            data, comments = _with_timeout(float(probe), _infer_config, target, call, config_dir, fmi_version, starts,
-                                           setup, kind, create, True, converts)
-    if reads:
-        shown = ", ".join(sorted(reads)[:3]) + (f" and {len(reads) - 3} more" if len(reads) > 3 else "")
+    _factory_models.clear()
+    REQUESTED_READS.clear()
+    REQUESTED_READS.update(reads or {})
+    READ_ERRORS.clear()
+    try:
+        with contextlib.chdir(config_dir), _source_reads() as source_reads:
+            if probe is True or not probe:
+                data, comments = _infer_config(target, call, config_dir, fmi_version, starts, setup, kind, create,
+                                               probe, converts)
+            else:
+                data, comments = _with_timeout(float(probe), _infer_config, target, call, config_dir, fmi_version,
+                                               starts, setup, kind, create, True, converts)
+            missing = _missing_data(data, comments, starts or {})
+            if missing:
+                comments[("init", "data_arguments")] = missing
+        _unread_requests(data, comments, probe)
+    finally:
+        _factory_models.clear()
+        REQUESTED_READS.clear()
+        READ_ERRORS.clear()
+    if source_reads:
+        shown = ", ".join(sorted(source_reads)[:3]) + (f" and {len(source_reads) - 3} more" if len(source_reads) > 3 else "")
         comments[("model", "#compile")] = (f"--compile won't work: the model's libraries read their own source files "
                                            f"by path ({shown}), and a compiled FMU has none; build without --compile, "
                                            "or with --vendor")
     return data, comments
+
+
+def _unread_requests(data, comments, probe):
+    """Add the ``--read`` outputs the probe didn't add, or stop on one it couldn't read.
+
+    :param data: the inferred config; updated in place.
+    :type data: dict
+    :param comments: ``(section, key) -> text``; updated in place.
+    :type comments: dict
+    :param probe: whether ``--probe`` was given.
+    :raises InterfaceError: the probe's step worked, and a requested path failed or gave no FMI value.
+    """
+    for name, source in REQUESTED_READS.items():
+        if data.get("outputs", {}).get(name, {}).get("from") == source and ("outputs", name) in comments:
+            continue
+        if name in READ_ERRORS and comments.get(PROBED):
+            raise InterfaceError(f"--read {name}={source}: {READ_ERRORS[name]}")
+        for section in ("outputs", "locals"):
+            data.get(section, {}).pop(name, None)
+        data.setdefault("outputs", {})[name] = {"from": source}
+        comments[("outputs", name)] = ("--read; not checked, since the probe's step didn't run" if probe else
+                                       "--read; type not checked: a number unless you say otherwise, "
+                                       "or run init --probe")
 
 
 @contextlib.contextmanager
@@ -379,9 +445,12 @@ STRING_ATTRIBUTES = {"strip", "lower", "upper", "split", "startswith", "endswith
                      "isdigit", "isalpha", "rstrip", "lstrip", "partition", "format"}
 #: An error asking for a dict: river's "'float' object is not an instance of 'dict'".
 DICT_ASKED = re.compile(r"instance of '?dict|must be (?:a )?dict|expected (?:a )?dict|"
-                        r"'(?:float|int)' object has no attribute '(?:items|keys|get)'|not a mapping", re.I)
+                        r"'(?:float|int)' object has no attribute '(?:items|keys|get)'|not a mapping", re.IGNORECASE)
 #: "KeyError('n_estimators')": the argument is a dict with that key.
 MISSING_KEY = re.compile(r"KeyError\('(\w+)'\)")
+#: An error asking for a pandas object: pylife's "An accessor object needs to be either a pandas.Series or a
+#: pandas.DataFrame".
+PANDAS_ASKED = re.compile(r"\bpandas\.(?:Series|DataFrame)\b|\b(?:pd|pandas) (?:Series|DataFrame)\b")
 
 
 def _shaped_starts(data, comments, starts, shaped):
@@ -563,6 +632,22 @@ def _shaped_starts(data, comments, starts, shaped):
         tries.insert(0, ({name: {"call": built} for name, built in classes.items()},
                          "made up as a class of the package the docs or the error name: the probe failed with a "
                          "number; check it"))
+    if "'dict' object has no attribute" in error and error.startswith("probe call failed"):
+        # a dict both the constructor and the step take, which the step wants in another form: rrmpg's
+        # GR4J(params=None).simulate(..., params=None) takes a structured array; the constructor, a dict
+        for name, value in starts.items():
+            if isinstance(value, dict) and value and name not in shaped and not {*value} <= {"call", "python"}:
+                tries.append(({name: {"python": repr(value)}}, "passed to the constructor, a constant: the step "
+                                                               "failed with it as a dict"))
+    if PANDAS_ASKED.search(error):
+        # a dict given where pandas is wanted: pylife's WoehlerCurve(pandas_obj), a pandas accessor, "needs to be
+        # either a pandas.Series or a pandas.DataFrame"
+        for name, value in starts.items():
+            if isinstance(value, dict) and value and name not in shaped and "call" not in value and "python" not in value:
+                table = all(isinstance(v, list) for v in value.values())
+                kind = "DataFrame" if table else "Series"
+                tries.append(({name: {"call": f"pandas:{kind}({value!r})"}},
+                              f"passed as a pandas {kind}: the probe failed with a dict, and the error asks for pandas"))
     if (match := MISSING_KEY.search(error)) and match.group(1) not in starts and match.group(1) not in shaped:
         # a key of **kwargs (surfaces' hyperparameter functions): an Integer, which also passes as a number
         tries.append(({match.group(1): 1}, "made up as 1: the step looks it up in its keyword arguments; check it"))
@@ -594,7 +679,7 @@ def _shaped_starts(data, comments, starts, shaped):
 
 
 #: The message inside a probe failure: "probe construction failed (TypeError('Could not interpret ...: 1.0'))".
-FAILURE_MESSAGE = re.compile(r"probe (?:construction|call) failed \(\w+\(['\"](.*?)(?:['\"]\)\)|$)", re.S)
+FAILURE_MESSAGE = re.compile(r"probe (?:construction|call) failed \(\w+\(['\"](.*?)(?:['\"]\)\)|$)", re.DOTALL)
 #: A string literal that may be a name an argument is compared with: "tanh", "Glorot normal", "fan_in".
 NAME_LITERAL = re.compile(r"^[A-Za-z][\w .-]{0,30}$")
 
@@ -658,7 +743,7 @@ TORCHSCRIPT_DECLARATION = re.compile(r"is missing value for argument '\w+'\. Dec
 TORCHSCRIPT_MADE_UP = {"Tensor": {"call": "torch:ones(1, 512)"}, "int": 1, "float": 1.0, "bool": False}
 #: An error listing the values a number may take: silero's "Supported sampling rates: [8000, 16000]".
 ALLOWED_VALUES = re.compile(r"(?:supported|one of|allowed|valid|must be in)[^\[\]()]{0,40}[\[(]((?:\s*-?\d+(?:\.\d+)?\s*,)+"
-                            r"\s*-?\d+(?:\.\d+)?\s*)[\])]", re.I)
+                            r"\s*-?\d+(?:\.\d+)?\s*)[\])]", re.IGNORECASE)
 
 
 def _example_value(entry_ref, name):
@@ -833,7 +918,7 @@ ATOMS_ATTRIBUTES = {"symbols", "pbc", "positions", "cell", "numbers", "get_posit
 #: A made-up ASE ``Atoms``: a water molecule in a 10 Å box.
 MADE_UP_ATOMS = "ase.build:molecule('H2O', vacuum=5.0)"
 #: An argument holding both a molecule's atoms and their positions: torchani's ``species_coordinates``.
-MOLECULE_NAME = re.compile(r"(species|numbers|atoms).*(coord|position)", re.I)
+MOLECULE_NAME = re.compile(r"(species|numbers|atoms).*(coord|position)", re.IGNORECASE)
 #: An annotation naming a pymatgen crystal structure: chgnet's ``structure: Structure | Sequence[Structure]``.
 STRUCTURE_ANNOTATION = re.compile(r"\bStructure\b")
 #: A made-up pymatgen ``Structure``: aluminium, face-centred cubic.
@@ -841,7 +926,7 @@ MADE_UP_STRUCTURE = "pymatgen.core:Structure.from_spacegroup('Fm-3m', pymatgen.c
 #: A made-up molecule as (atomic numbers, positions in Å), a batch of one: water.
 MADE_UP_MOLECULE = ([[8, 1, 1]], [[[0.0, 0.0, 0.0], [0.96, 0.0, 0.0], [-0.24, 0.93, 0.0]]])
 #: An error about a time series: pastas' "The dtype of the values of the series 'None' is not float".
-SERIES_ASKED = re.compile(r"\bseries\b|DatetimeIndex|PeriodIndex", re.I)
+SERIES_ASKED = re.compile(r"\bseries\b|DatetimeIndex|PeriodIndex", re.IGNORECASE)
 #: A made-up dated series (:data:`SERIES_ASKED`): 24 daily values going up and down.
 MADE_UP_SERIES = f"pandas:Series({[1.0, 1.5, 2.0, 2.5, 3.0, 2.5, 2.0, 1.5] * 3}, " \
                  "index=pandas.date_range('2020-01-01', periods=24))"
@@ -852,7 +937,7 @@ NOT_CALLABLE = re.compile(r"'(?:float|int)' object is not callable|must be (?:a 
 #: Names of arguments that are a function: numdifftools' ``fun``, scipy-like ``func``, ``callback``.
 FUNCTION_NAME = re.compile(r"^(fun|func|function|fn|f|callback|objective)$")
 #: An error asking for a jax random key: equinox's "invalid PRNG key data".
-PRNG_ASKED = re.compile(r"PRNG ?key", re.I)
+PRNG_ASKED = re.compile(r"PRNG ?key", re.IGNORECASE)
 #: A class name in an error or a docstring's type line: "a Transfer or a State", "Borehole object".
 CLASS_WORD = re.compile(r"\b([A-Z][a-z0-9]+(?:[A-Z][a-z0-9]*)*)\b")
 
@@ -1046,8 +1131,32 @@ def _infer_config_once(target, call, config_dir, fmi_version, starts, setup, kin
         comments[("model", "kind")] = (f"{entry.__name__} has no methods to run: building it computes everything "
                                        "(its properties are the results), so it's built with the inputs every step")
     options = {"arrays": arrays, "starts": starts, "probe": probe, "converts": dict(converts or {})}
+    if inspect.isclass(entry) and kind != "function" and not call and not create and probe \
+            and _methods_need_more(entry, starts):
+        # every method needs arguments not given: building it may compute the results (geopy's geodesic(a, b),
+        # whose properties are the distance in every unit; its methods measure other points)
+        tried = copy.deepcopy((data, comments))
+        tried[0]["model"]["kind"] = "function"
+        try:
+            _infer_function(entry, *tried, **copy.deepcopy(options))
+        except InterfaceError:
+            pass
+        else:
+            if _works(tried):
+                data, comments = tried
+                kind = "function"
+                comments[("model", "kind")] = (
+                    f"{entry.__name__}(...) built with the inputs every step: its methods all need arguments not "
+                    "given, and the object it builds has the results (pass --call METHOD to step a method instead)")
     if inspect.isclass(entry) and kind != "function":
+        before = copy.deepcopy((data, comments, options))
         _infer_class(entry, call, data, comments, create=create, **options)
+        if probe and not call and not create and not _probe_failed(comments) and _no_numeric_results(data) \
+                and (built := _built_each_step(entry, *before)) is not None:
+            # stepping the object finds no numeric result, but the object built with the inputs has them as
+            # attributes (iapws' IAPWS97(T=..., P=...): h, s, rho, ...; its __call__(**kwargs) returns nothing)
+            data, comments = built
+            kind = "function"
     elif call and kind != "function":
         # a function with --call is a factory: called once, --call runs on what it returns
         if create:
@@ -1067,6 +1176,9 @@ def _infer_config_once(target, call, config_dir, fmi_version, starts, setup, kin
         _infer_class(None, method, data, comments, factory=entry, **options)
         comments[("model", "call")] = (f"{entry_name}() returns the model: {', '.join(left)} are arguments of its "
                                        f"{method}(), {how}")
+    elif probe and kind != "function" and not create \
+            and (stepped := _factory_run(entry, data, comments, starts, options)) is not None:
+        data, comments = stepped   # cobra's load_model('textbook') returns a Model, whose optimize() solves it
     else:
         if call or create:
             raise InterfaceError("--call and --create only apply to classes")
@@ -1134,7 +1246,7 @@ def _with_usage(entry, module, path, call, create, setup, starts, probe):
     :rtype: tuple or None
     """
     from fmugen import examples
-    from fmugen.templates.fmugen_runtime import resolve_constant
+    from fmugen.templates.fmugen_runtime import resolve_constant, uses_self
     try:
         usage = examples.find_usage(entry, module, Path(path).resolve() if path else None)
         values = examples.find_values(entry, module, Path(path).resolve() if path else None)
@@ -1164,6 +1276,8 @@ def _with_usage(entry, module, path, call, create, setup, starts, probe):
                 value = _computed(value["expr"]) if probe else None
                 if value is None:
                     continue
+            elif uses_self(value):   # made by the model object (equilibrator's cc.parse_reaction_formula(...))
+                pass
             elif isinstance(value, dict):
                 if not probe:
                     continue
@@ -1687,6 +1801,8 @@ def _infer_function(fn, data, comments, arrays=False, starts=None, probe=False, 
         else:
             comments[PROBED] = True
             seen = _outputs_from_return(result, data, comments, default_name="y", is_class=False, arrays=arrays)
+            _requested_outputs(data, comments, arrays, result=result)
+            seen |= {n for n in REQUESTED_READS if n in data.get("outputs", {})}
             returned_names |= seen
             if result is None:
                 _suggest_object_step(data, comments)
@@ -1755,6 +1871,22 @@ def _infer_class(cls, call, data, comments, arrays=False, starts=None, create=No
         return d, c
 
     best = attempt(call, create)
+    if not call and _probe_failed(best[1]) and not _construction_failed(best[1]) \
+            and best[0]["model"].get("call") != "generate" and _generates(cls):
+        # a generative model whose forward() needs what generate() makes up (transformers' encoder-decoders, TrOCR:
+        # "You have to specify either decoder_input_ids or decoder_inputs_embeds")
+        try:
+            tried = attempt("generate", create)
+        except InterfaceError:
+            tried = None
+        if tried and _works(tried):
+            failed = best[0]["model"].get("call", "__call__")
+            tried[1][("model", "call")] = (f"generate(): {failed}() failed in the probe, and {cls.__name__} generates "
+                                           "its output (pass --call METHOD to choose another)")
+            for key in ("create",):
+                if ("model", key) in best[1]:
+                    tried[1][("model", key)] = best[1][("model", key)]
+            best = tried
     if not create and _construction_failed(best[1]):
         for maker in _factories(cls):
             try:
@@ -1798,6 +1930,50 @@ def _infer_class(cls, call, data, comments, arrays=False, starts=None, create=No
     data.update(best[0])
     comments.clear()
     comments.update(best[1])
+
+
+def _parameter_names(fn):
+    """The names ``fn`` declares (not ``*args`` / ``**kwargs``), or an empty set without a signature."""
+    try:
+        return {n for n, p in inspect.signature(fn).parameters.items()
+                if p.kind not in (p.VAR_POSITIONAL, p.VAR_KEYWORD)} if fn is not None else set()
+    except (TypeError, ValueError):
+        return set()
+
+
+def _generates(cls):
+    """Whether ``cls`` is a generative model with a ``generate()`` method taking ``**kwargs`` (transformers'
+    ``GenerationMixin``: ``generate(inputs=None, ..., **kwargs)``)."""
+    method = getattr(cls, "generate", None)
+    if not callable(method):
+        return False
+    try:
+        return any(p.kind is p.VAR_KEYWORD for p in inspect.signature(method).parameters.values())
+    except (TypeError, ValueError):
+        return False
+
+
+def _no_numeric_results(data):
+    """Whether a config's outputs hold no number (only strings and booleans, or none)."""
+    return not any(info.get("type", "Real") not in ("String", "Boolean")
+                   for info in data.get("outputs", {}).values())
+
+
+def _built_each_step(cls, data, comments, options):
+    """The config of ``cls`` built with the inputs every step (``kind = "function"``), when that probe works and
+    finds numeric results; else None."""
+    tried = copy.deepcopy((data, comments))
+    tried[0]["model"]["kind"] = "function"
+    try:
+        _infer_function(cls, *tried, **copy.deepcopy(options))
+    except InterfaceError:
+        return None
+    if not _works(tried) or _no_numeric_results(tried[0]):
+        return None
+    tried[1][("model", "kind")] = (
+        f"{cls.__name__}(...) built with the inputs every step: stepping it gives no numeric result, while the "
+        "object built has them (pass --call METHOD to step a method instead)")
+    return tried
 
 
 def _works(result):
@@ -1894,6 +2070,11 @@ def _infer_class_once(cls, call, data, comments, arrays=False, starts=None, crea
         constructor = getattr(cls, create) if create else cls.__init__   # a bound classmethod has no cls argument
         init_starts, call_starts = _assign_starts(constructor, None if object_step else getattr(cls, method_name, None),
                                                   starts or {})
+        if method_name == "generate" and _generates(cls):
+            # generate(**kwargs) passes them on to forward(): pixel_values is the step's, not from_pretrained's
+            forward = _parameter_names(getattr(cls, "forward", None)) - _parameter_names(constructor)
+            for name in [n for n in init_starts if n.partition(".")[0] in forward]:
+                call_starts[name] = init_starts.pop(name)
         init_starts, call_starts = _split_varargs(cls, create, method_name, init_starts, call_starts, data,
                                                   comments, probe)
     by_keyword = not factory and _varargs_by_keyword(getattr(cls, create) if create else cls, init_starts, data,
@@ -1929,6 +2110,15 @@ def _infer_class_once(cls, call, data, comments, arrays=False, starts=None, crea
         # getattr: a callable object (a library's placeholder for a missing optional dependency) has no __name__
         comments[("inputs", None)] = (f"the object {getattr(factory, '__name__', type(factory).__name__)}() returns is known only by running it: add the "
                                       f"inputs and outputs of {method_name}() by hand, or run init --probe")
+        # the --start names the factory doesn't take are the step's (transformers' pipeline(...)(inputs)):
+        # passed to it by keyword, unchecked
+        for name, value in call_starts.items():
+            if _given_constant(value):
+                data["model"].setdefault("call_constants", {})[name] = _const_entry(value)
+            else:
+                data.setdefault("inputs", {})[name] = _extra_info(name, value, arrays)
+                comments[("inputs", name)] = (f"from --start, passed to {method_name}() by keyword; "
+                                              "not checked without --probe")
     else:
         method = inspect.getattr_static(cls, method_name)
         _arguments(_forwarded(getattr(cls, method_name), method_name, cls), "inputs", data, comments,
@@ -1955,8 +2145,8 @@ def _infer_class_once(cls, call, data, comments, arrays=False, starts=None, crea
         read = static.Returned()
     _add_returned(read, data, comments, is_class=True, arrays=arrays, probe=probe, seen=seen_returns)
     if cls is not None:
-        _add_attributes(cls, method_name, data, comments, arrays, probe, seen_attrs)
-    attrs = set(seen_attrs) | (set(dir(obj)) if obj is not None else set())
+        _add_attributes(cls, method_name, data, comments, arrays, probe, seen_attrs, obj=obj)
+    attrs = set(seen_attrs) | (set(object_names(obj)) if obj is not None else set())
     if cls is not None:
         attrs |= set(static.assigned_attributes(cls, method_name)) | set(static.assigned_attributes(cls, "__init__"))
         attrs |= set(static.own_properties(cls))
@@ -1967,7 +2157,8 @@ def _pick_method(cls, starts=None, constructor=None):
     """The step method of a class: the first of :data:`CALL_NAMES` it has (``update`` only when it has no
     :data:`STEP_LIKE` method: osqp's ``update`` changes settings, ``solve`` runs it), else ``__next__`` for an
     iterator, else the only method the ``--start`` names fit (:func:`_methods_taking`), else the one they point
-    at (:func:`_method_from_starts`), else its only public method, else the best of
+    at (:func:`_method_from_starts`), else the only public method the class defines (unless it inherits a
+    :data:`STEP_LIKE` one), else the best of
     :func:`_rank_methods`: asked at a prompt in a terminal (:func:`_ask_method`), else picked with a warning
     listing the candidates.
 
@@ -1986,6 +2177,19 @@ def _pick_method(cls, starts=None, constructor=None):
     has_step = any(callable(getattr(cls, m, None)) for m in STEP_LIKE)
     left = _leftover_starts(constructor, starts)
     fitting = _methods_taking(cls, left) if left else []
+    if not left and starts and constructor is not None:   # it takes **kwargs: names it doesn't declare that a
+        undeclared = _undeclared_starts(constructor, starts)   # method does are the step's (transformers'
+        if undeclared and _methods_taking(cls, undeclared):    # from_pretrained(name, **kwargs), forward(pixel_values))
+            left, fitting = undeclared, _methods_taking(cls, undeclared)
+    if _ase_calculator(cls) and (not left or _fits(cls.get_potential_energy, left)):
+        return "get_potential_energy", (f"get_potential_energy(): {cls.__name__} is an ASE calculator, whose "
+                                        "calculate() only fills its results (pass --call METHOD to choose another)")
+    forward = getattr(cls, "forward", None)
+    if left and callable(forward) and _only_varargs(forward) and _only_varargs(getattr(cls, "__call__", None)) \
+            and all("forward" in m for m in fitting):  # noqa: B004 (fetches the method)
+        # a torch module whose forward(*args) dispatches (spikingjelly's single_step_forward / multi_step_forward;
+        # not gliner's, whose predict_entities(text, labels) the names fit)
+        return "forward", f"forward(): {cls.__name__}() runs it, and it takes any arguments"
     for name in CALL_NAMES:
         if name == "update" and has_step:
             continue
@@ -2006,7 +2210,9 @@ def _pick_method(cls, starts=None, constructor=None):
     picked = _method_from_starts(cls, starts, constructor)
     if picked:
         return picked
-    if len(public) == 1:
+    # pygam's LinearGAM defines only prediction_intervals, predict is inherited; botorch's SingleTaskGP only
+    # forward, and X is posterior's
+    if len(public) == 1 and (not has_step or public[0] in STEP_LIKE) and (not fitting or public[0] in fitting):
         return public[0], None
     ranked = _rank_methods(cls, starts, constructor, fitting)
     if not ranked:
@@ -2020,6 +2226,18 @@ def _pick_method(cls, starts=None, constructor=None):
                      f"{ranked[0]}() (candidates, best first: {shown}); pass --call METHOD to choose another\n")
     return ranked[0], (f"{ranked[0]}() guessed: it's not clear which method runs a step (candidates, best first: "
                        f"{shown}); pass --call METHOD to choose another")
+
+
+def _ase_calculator(cls):
+    """Whether ``cls`` follows ASE's calculator interface (orb's ORBCalculator, SevenNet's, mace's): its
+    ``calculate(atoms, properties, system_changes)`` returns nothing, ``get_potential_energy(atoms)`` the energy.
+
+    :param cls: the class.
+    :type cls: type
+    :rtype: bool
+    """
+    return all(callable(getattr(cls, m, None)) for m in ("calculate", "get_potential_energy", "get_property")) \
+        and any(k.__name__ in ("Calculator", "BaseCalculator") and k.__module__.startswith("ase.") for k in cls.__mro__)
 
 
 def _ask_method(cls, ranked):
@@ -2061,7 +2279,7 @@ def _ask_method(cls, ranked):
 
 #: Method names that usually run a model, best first: picked when nothing else tells the step method
 #: (the --call of the tested models: sklearn-like predict, solve, run, forecast, ...).
-STEP_LIKE = ("predict", "forecast", "simulate", "solve", "run", "run_steps", "compute", "propagate", "forward",
+STEP_LIKE = ("predict", "forecast", "simulate", "solve", "run", "run_steps", "compute", "propagate", "integrate", "forward",
              "evaluate", "transcribe", "encode", "calculate", "process", "apply")
 #: Method names (or prefixes, ending in _) that set a model up when the class also has a :data:`STEP_LIKE`
 #: method (sklearn's fit before predict, osqp's update before solve); without one, fit and train run the
@@ -2111,13 +2329,83 @@ def _rank_methods(cls, starts, constructor, fitting=()):
             tier = 0 if mine and covered else 1 if mine else 2
         except (TypeError, ValueError):   # a C method: may take anything
             taken, covered, tier = 0, True, 1
-        not_step = _named(m, NOT_STEP) or has_step and _named(m, SETUP_IF_STEP)
+        not_step = _named(m, NOT_STEP) or has_step and _named(m, SETUP_IF_STEP) \
+            or m.lower().startswith("internal")   # libroadrunner's internalOneStep, beside oneStep
         first = m.split("_")[0]
         place = (STEP_LIKE.index(m) if m in STEP_LIKE else STEP_LIKE.index(first) + 0.5 if first in STEP_LIKE
                  else len(STEP_LIKE) if m in ("fit", "train") else len(STEP_LIKE) + 1)
         keys[m] = (tier if leftover else 0, bool(left) and not covered, m not in fitting, not_step, place,
                    any(_variant_of(m, n) for n in names), -taken, m not in vars(cls), m)
-    return sorted(keys, key=keys.get)
+    ranked = sorted(keys, key=keys.get)
+    # nothing tells the first ones apart but the name: the one the package calls most first (thermopack's
+    # two_phase_tpflash() before guess_phase(), openmdao's run_model() before run_driver()); also before one the
+    # class defines itself, when the package calls it far more (skyfield's inherited at(), 283 calls, before
+    # EarthSatellite's ITRF_position_velocity_error(), none)
+    tied = [m for m in ranked if keys[m][:-2] == keys[ranked[0]][:-2]] if ranked else []
+    if len(tied) > 1:
+        calls = _package_calls(cls)
+        count = {m: calls.get(m, 0) for m in tied}
+        top = max(tied, key=lambda m: (count[m], -tied.index(m)))
+        rest = max((count[m] for m in tied if m != top), default=0)
+        if count[top] >= max(3, 2 * rest):
+            tied.remove(top)
+            tied.insert(0, top)
+        else:
+            exact = [m for m in tied if keys[m][:-1] == keys[tied[0]][:-1]]
+            exact.sort(key=lambda m: -count[m])
+            tied[:len(exact)] = exact
+        ranked[:len(tied)] = tied
+    return ranked
+
+
+#: Files of a package read for :func:`_package_calls`: its code, stubs, docs and notebooks.
+CALL_COUNT_SUFFIXES = (".py", ".pyx", ".pyi", ".rst", ".md", ".txt", ".ipynb")
+#: At most this many files of a package are read for :func:`_package_calls`, each at most this size (bytes).
+CALL_COUNT_FILES, CALL_COUNT_SIZE = 4000, 2_000_000
+_CALLED = re.compile(r"\.([A-Za-z_]\w*)\(")
+_package_call_counts = {}
+
+
+def _package_calls(cls):
+    """How often each method name is called (``.name(``) in the files of the package that defines ``cls``: its
+    own code, tests, examples and docs, as installed. The method a package's users and its own code call most is
+    the one that runs it, when its signature and name don't tell.
+
+    :param cls: the class.
+    :type cls: type
+    :return: name -> count (empty when the package's files can't be found).
+    :rtype: dict
+    """
+    top = (getattr(cls, "__module__", None) or "").partition(".")[0]
+    if top in _package_call_counts:
+        return _package_call_counts[top]
+    counts = {}
+    try:
+        spec = importlib.util.find_spec(top) if top else None
+    except (ImportError, ValueError):
+        spec = None
+    roots = list(spec.submodule_search_locations or []) if spec else []
+    origin = spec.origin if spec else getattr(sys.modules.get(top), "__file__", None)   # a model file loaded by path
+    files = []
+    if not roots and origin and os.path.isfile(origin):
+        files = [Path(origin)]
+    for root in roots:
+        for path in Path(root).rglob("*"):
+            if len(files) >= CALL_COUNT_FILES:
+                break
+            if path.suffix in CALL_COUNT_SUFFIXES and path.is_file():
+                files.append(path)
+    for path in files:
+        try:
+            if path.stat().st_size > CALL_COUNT_SIZE:
+                continue
+            text = path.read_text(encoding="utf-8", errors="replace")
+        except OSError:
+            continue
+        for name in _CALLED.findall(text):
+            counts[name] = counts.get(name, 0) + 1
+    _package_call_counts[top] = counts
+    return counts
 
 
 def _named(name, names):
@@ -2134,15 +2422,15 @@ def _variant_of(name, other):
     if name == other:
         return False
     words, part = name.split("_"), other.split("_")
-    for plural in ("", "s"):
-        want = part[:-1] + [part[-1] + plural]
+    # other's words, or one of them plural (zones_at of zone_at)
+    for want in [part] + [part[:j] + [part[j] + "s"] + part[j + 1:] for j in range(len(part))]:
         if any(words[i:i + len(want)] == want for i in range(len(words) - len(want) + 1)):
             return True
     return False
 
 
 #: A numpydoc section header: the name, then a line of dashes.
-_SECTION = re.compile(r"^(\w[\w ]*)\n-{3,}\n", re.M)
+_SECTION = re.compile(r"^(\w[\w ]*)\n-{3,}\n", re.MULTILINE)
 #: A numpydoc entry: ``name : type`` at the section's indentation (or ``name`` alone).
 _ENTRY = re.compile(r"^(\w+)\s*(?::\s*(.*))?$")
 #: A unit in square brackets: ``Temperature, [K]``.
@@ -2249,9 +2537,9 @@ def docstring_parameters(*objects):
 
 #: Words of a numpydoc type line that mean an array.
 _ARRAY_WORDS = re.compile(r"\b(array_like|array-like|ndarray|array|arrays|matrix|tensor|sequence of|list of|"
-                          r"iterable of|vector)\b", re.I)
+                          r"iterable of|vector)\b", re.IGNORECASE)
 #: A shape in a numpydoc entry: ``shape (4,)``, ``of shape (n_samples, n_features)``, ``shape=(n, 3)``.
-_SHAPE = re.compile(r"shape\s*(?:of\s*|=\s*|:\s*)?[(\[]([^)\]]*)[)\]]", re.I)
+_SHAPE = re.compile(r"shape\s*(?:of\s*|=\s*|:\s*)?[(\[]([^)\]]*)[)\]]", re.IGNORECASE)
 #: The size made up for a dimension a docstring names but doesn't fix (``n_samples``).
 MADE_UP_SIZE = 3
 
@@ -2351,6 +2639,56 @@ def _results_only(cls):
     return True
 
 
+def _methods_need_more(cls, starts):
+    """Whether every method a step could run requires an argument the ``--start`` / ``--const`` values don't
+    give, and none is named like a step (:data:`CALL_NAMES`, :data:`STEP_LIKE`): then the object built may be
+    the result (geopy's ``geodesic(a, b)``: ``destination(point, bearing)`` and ``measure(a, b)`` are for other
+    points).
+
+    :param cls: the class.
+    :type cls: type
+    :param starts: the values.
+    :type starts: dict or None
+    :rtype: bool
+    """
+    if any("__call__" in vars(k) or "__next__" in vars(k) for k in cls.__mro__[:-1]):
+        return False
+    names = {n.partition(".")[0] for n in starts or {}}
+    seen = False
+    for m in dir(cls):
+        if m.startswith("_") or _builds(cls, m) or isinstance(inspect.getattr_static(cls, m, None), (property, type)):
+            continue
+        method = getattr(cls, m, None)
+        if not callable(method):
+            continue
+        if m in CALL_NAMES or m in STEP_LIKE or m.split("_")[0] in STEP_LIKE or _named(m, SETUP_IF_STEP):
+            return False
+        try:
+            params = inspect.signature(method).parameters.values()
+        except (TypeError, ValueError):
+            return False
+        required = {p.name for p in params if p.name != "self" and p.default is p.empty
+                    and p.kind not in (p.VAR_POSITIONAL, p.VAR_KEYWORD)}
+        if not required or required <= names:
+            return False
+        seen = True
+    return seen
+
+
+def _required_by_builders(cls):
+    """The names the public classmethods that build ``cls`` require (no default)."""
+    out = set()
+    for m in dir(cls):
+        if m.startswith("_") or not _builds(cls, m):
+            continue
+        try:
+            out |= {n for n, p in inspect.signature(getattr(cls, m)).parameters.items()
+                    if p.default is p.empty and p.kind not in (p.VAR_POSITIONAL, p.VAR_KEYWORD)}
+        except (TypeError, ValueError):
+            continue
+    return out
+
+
 def _pick_create(cls, starts):
     """The classmethod that builds the object, when the constructor can't take the ``--start`` / ``--const`` names.
 
@@ -2387,13 +2725,27 @@ def _pick_create(cls, starts):
         except (TypeError, ValueError):
             continue
         for_steps |= {n for n in names if n.startswith(f"{m.strip('_')}_")}
-    blocked = set() if takes_any else names - declared - for_steps
+    # ...unless a classmethod requires it: transformers' from_pretrained(pretrained_model_name_or_path), which
+    # load_custom_generate also takes, optionally
+    for m in dir(cls):
+        if not m.startswith("_") and _builds(cls, m):
+            try:
+                for_steps -= {n for n, p in inspect.signature(getattr(cls, m)).parameters.items()
+                              if p.default is p.empty and p.kind not in (p.VAR_POSITIONAL, p.VAR_KEYWORD)}
+            except (TypeError, ValueError):
+                continue
+    blocked = names - declared - for_steps
+    if takes_any:
+        # **kwargs takes any name, except one a classmethod requires by name: timesfm's
+        # TimesFM_2p5_200M_torch(torch_compile=True, config=None, **kwargs) ignores pretrained_model_name_or_path,
+        # which from_pretrained(pretrained_model_name_or_path) loads the weights from
+        blocked &= _required_by_builders(cls)
     missing = {n for n in declared if init[n].default is init[n].empty} - names
     if not blocked and not missing:
-        return None, None
+        return _pick_loader(cls, starts)
     fits = []
     for m in dir(cls):
-        if m.startswith("_") or not isinstance(inspect.getattr_static(cls, m, None), classmethod):
+        if m.startswith("_") or not _builds(cls, m):
             continue
         try:
             params = inspect.signature(getattr(cls, m)).parameters.values()
@@ -2403,12 +2755,97 @@ def _pick_create(cls, starts):
         kwargs = any(p.kind is p.VAR_KEYWORD for p in params)
         required = {p.name for p in params if p.kind not in (p.VAR_POSITIONAL, p.VAR_KEYWORD) and p.default is p.empty}
         if required <= names and (names & own or kwargs) and (not blocked or blocked & own or kwargs):
-            fits.append(m)
+            fits.append((m, bool(names & own), len(required)))
+    # those naming one of them, before those only taking **kwargs (transformers' from_pretrained before
+    # from_encoder_decoder_pretrained, for pretrained_model_name_or_path)
+    fits = [f for f in fits if f[1]] or fits
+    # then the one requiring the most of them, when only one does: hapsira's Orbit.from_classical(attractor, a,
+    # ecc, inc, raan, argp, nu) before heliosynchronous(attractor, a=None, ...) and stationary(attractor)
+    most = max((f[2] for f in fits), default=0)
+    if len(fits) > 1 and most > 1 and sum(f[2] == most for f in fits) == 1:
+        fits = [f for f in fits if f[2] == most]
+    fits = [f[0] for f in fits]
     if len(fits) == 1:
         why = (f"{', '.join(sorted(blocked))} not arguments of {cls.__name__}()" if blocked
                else f"{cls.__name__}() requires {', '.join(sorted(missing))}")
         return fits[0], f"{cls.__name__}.{fits[0]}(...) builds it: {why}, and it's the only classmethod that fits"
     return None, None
+
+
+#: Classmethods that build an object from files: picked by :func:`_pick_loader` when a value is a path that exists.
+LOADER_NAMES = ("load", "read", "open", "from_file", "from_files", "from_path", "from_folder", "from_dir",
+                "from_directory", "load_from_file", "read_file")
+
+
+def _pick_loader(cls, starts):
+    """The classmethod that loads the object from files, when the constructor could take the names too: flopy's
+    ``MFSimulation(sim_ws=...)`` makes an empty simulation in that folder, ``MFSimulation.load(sim_ws=...)``
+    reads the one there. The only :data:`LOADER_NAMES` classmethod that takes a name whose value is a file or
+    folder that exists, and whose required arguments the names cover.
+
+    :param cls: the class.
+    :type cls: type
+    :param starts: the ``--start`` / ``--const`` values.
+    :type starts: dict
+    :return: ``(classmethod name, comment)``, or ``(None, None)``.
+    :rtype: tuple
+    """
+    paths = {n for n, v in starts.items() if isinstance(v, str) and 0 < len(v) < 4096 and os.path.exists(v)}
+    if not paths:
+        return None, None
+    names = {n.partition(".")[0] for n in starts}
+    fits = []
+    for m in LOADER_NAMES:
+        if not _builds(cls, m):
+            continue
+        try:
+            params = inspect.signature(getattr(cls, m)).parameters.values()
+        except (TypeError, ValueError):
+            continue
+        params = list(params)
+        own = {p.name for p in params if p.kind not in (p.VAR_POSITIONAL, p.VAR_KEYWORD)}
+        required = {p.name for p in params if p.name in own and p.default is p.empty} - {"cls", "self"}
+        kwargs = any(p.kind is p.VAR_KEYWORD for p in params)
+        # it takes every name the constructor would: autogluon's TabularPredictor(label, path) isn't load(path)
+        if own & paths and required <= names and (kwargs or names <= own | _step_names(cls)):
+            fits.append((m, sorted(own & paths)))
+    if len(fits) != 1:
+        return None, None
+    m, taken = fits[0]
+    return m, (f"{cls.__name__}.{m}(...) builds it: {', '.join(taken)} {'is a path' if len(taken) == 1 else 'are paths'} "
+               f"that exist{'s' if len(taken) == 1 else ''}, which {m}() reads (pass --create to choose another)")
+
+
+def _step_names(cls):
+    """The argument names of the public methods of ``cls`` that aren't classmethods: those the step may take."""
+    names = set()
+    for m in dir(cls):
+        if not m.startswith("_") and not _builds(cls, m) and callable(getattr(cls, m, None)) \
+                and not isinstance(inspect.getattr_static(cls, m, None), (property, type)):
+            names |= _parameter_names(getattr(cls, m))
+    return names
+
+
+def _builds(cls, name):
+    """Whether ``cls.name`` builds an object of the class: a classmethod, or a staticmethod annotated to return
+    the class (piper's ``PiperVoice.load(model_path) -> 'PiperVoice'``).
+
+    :param cls: the class.
+    :type cls: type
+    :param name: the attribute.
+    :type name: str
+    :rtype: bool
+    """
+    raw = inspect.getattr_static(cls, name, None)
+    if isinstance(raw, classmethod):
+        return True
+    if not isinstance(raw, staticmethod):
+        return False
+    try:
+        returned = inspect.signature(raw.__func__).return_annotation
+    except (TypeError, ValueError):
+        return False
+    return returned is cls or (isinstance(returned, str) and returned.strip("'\"").split(".")[-1] == cls.__name__)
 
 
 def _method_from_starts(cls, starts, constructor):
@@ -2443,9 +2880,9 @@ def _method_from_starts(cls, starts, constructor):
         return None
     methods = {}
     for m in dir(cls):
-        if m.startswith("_") or not callable(getattr(cls, m, None)) \
+        if m.startswith("_") or not callable(getattr(cls, m, None)) or _builds(cls, m) \
                 or isinstance(inspect.getattr_static(cls, m, None), (property, type)):
-            continue
+            continue   # a classmethod building the object isn't a step (flopy's MFSimulation.load(sim_ws))
         try:
             params = [p for p in inspect.signature(getattr(cls, m)).parameters.values()
                       if p.name not in ("self", "cls") and p.kind not in (p.VAR_POSITIONAL, p.VAR_KEYWORD)]
@@ -2529,12 +2966,54 @@ def _fits(fn, names):
     try:
         params = [p for p in inspect.signature(fn).parameters.values()
                   if p.name != "self" and p.kind not in (p.VAR_POSITIONAL, p.VAR_KEYWORD)]
+        declared = {p.name for p in params}
+        required = {p.name for p in params if p.default is p.empty}
     except (TypeError, ValueError):
-        return False
-    declared = {p.name for p in params}
-    required = {p.name for p in params if p.default is p.empty}
+        documented = _doc_signature(fn)
+        if documented is None:
+            return False
+        declared, required = documented
     wanted = {n.partition(".")[0] for n in names}
     return wanted <= declared and required <= wanted
+
+
+#: A pybind11 / nanobind docstring's first line: ``get_Ar00(self: teqp.AbstractModel, T: float, ...) -> float``.
+_DOC_SIGNATURE = re.compile(r"^\s*(\w+)\((.*)\)\s*(?:->.*)?$")
+
+
+def _doc_signature(fn):
+    """The arguments a C method's docstring declares in its first line, as pybind11 and nanobind write it, when
+    it has no readable signature (teqp's ``get_Ar00(self, T, rho, molefrac)``).
+
+    :param fn: a function or method.
+    :return: ``(declared names, required names)``, or None: no such line, or ``*args`` / ``arg0`` names
+        (then the names aren't the real ones).
+    :rtype: tuple[set, set] or None
+    """
+    doc = getattr(fn, "__doc__", None) or ""
+    match = _DOC_SIGNATURE.match(doc.strip().splitlines()[0]) if doc.strip() else None
+    if not match or match.group(1) != getattr(fn, "__name__", None):
+        return None
+    parts, depth, current = [], 0, ""
+    for ch in match.group(2):   # split on the commas outside brackets: ndarray[float64[m, 1]]
+        depth += (ch in "([{") - (ch in ")]}")
+        if ch == "," and depth == 0:
+            parts.append(current)
+            current = ""
+        else:
+            current += ch
+    parts.append(current)
+    declared, required = set(), set()
+    for part in (p.strip() for p in parts if p.strip()):
+        name = re.split(r"[:=]", part, maxsplit=1)[0].strip()
+        if name in ("self", "/", "*") or name.startswith("*"):
+            continue
+        if not name.isidentifier() or re.fullmatch(r"arg\d+", name):
+            return None
+        declared.add(name)
+        if "=" not in part:
+            required.add(name)
+    return declared, required
 
 
 def _methods_taking(cls, names):
@@ -2547,7 +3026,7 @@ def _methods_taking(cls, names):
     :rtype: list[str]
     """
     return [m for m in dir(cls) if not m.startswith("_") and callable(getattr(cls, m, None))
-            and _fits(getattr(cls, m), names)]
+            and not _builds(cls, m) and _fits(getattr(cls, m), names)]
 
 
 def _returned_method(fn, data, starts):
@@ -2580,6 +3059,8 @@ def _returned_method(fn, data, starts):
                                                                       types.ModuleType, *SCALARS)):
         return None
     cls = type(model)
+    if _ase_calculator(cls) and _fits(cls.get_potential_energy, left):
+        return "get_potential_energy", left, "the energy of an ASE calculator, whose calculate() only fills its results"
     fitting = _methods_taking(cls, left)
     if len(fitting) == 1:
         return fitting[0], left, "the only method they fit"
@@ -2595,6 +3076,241 @@ def _returned_method(fn, data, starts):
         best = min(fitting, key=place)
         return best, left, f"the first of those they fit ({', '.join(sorted(fitting, key=place)[:6])}); pass --call to choose another"
     return None
+
+
+#: Methods that run a model and require no argument, called on what a factory returns when no --start name is
+#: left for a method (:func:`_factory_run`): cobra's ``Model.optimize()``.
+FACTORY_RUNS = ("optimize", "simulate", "solve", "run", "integrate", "propagate")
+
+
+def _factory_run(fn, data, comments, starts, options):
+    """A factory function whose model runs by a method that takes no argument: ``fn`` returns an object (not a
+    result) of a class with one of :data:`FACTORY_RUNS` requiring nothing, and the probe of it works, giving
+    outputs. Calls ``fn`` once with the values: only with ``--probe``.
+
+    :param fn: the entry function.
+    :param data: the config being inferred.
+    :type data: dict
+    :param comments: its comments.
+    :type comments: dict
+    :param starts: the ``--start`` / ``--const`` values.
+    :type starts: dict
+    :param options: the inference options (:func:`_infer_class`).
+    :type options: dict
+    :return: ``(data, comments)`` with ``fn`` as the factory and the method as the step, or None.
+    :rtype: tuple or None
+    """
+    if _undeclared_starts(fn, starts):
+        return None
+    from fmugen.templates.fmugen_runtime import resolve_constant
+    try:
+        _run_setup(data)
+        model = fn(**{n: resolve_constant(v) for n, v in starts.items()})
+    except Exception:
+        return None
+    if model is None or inspect.isclass(model) or isinstance(model, (types.FunctionType, types.MethodType,
+                                                                      types.ModuleType, *SCALARS, dict, list, tuple)):
+        return None
+    cls = type(model)
+    for method in FACTORY_RUNS:
+        if not callable(getattr(cls, method, None)) or not _fits(getattr(cls, method), []):
+            continue
+        tried = copy.deepcopy((data, comments))
+        try:
+            _infer_class(None, method, *tried, factory=fn, **copy.deepcopy(options))
+        except InterfaceError:
+            return None
+        if not _works(tried):
+            return None
+        tried[1][("model", "call")] = (f"{fn.__name__}() returns the model, a {cls.__name__}: its {method}() runs it "
+                                       "(pass --call METHOD to choose another)")
+        return tried
+    return None
+
+
+#: Factory function -> the callable model it returned in the probe (:func:`_returns_callable`), for one inference.
+_factory_models = {}
+#: Words of argument names that are the data a model runs on (``pixel_values``, ``audio``, ``signal``, ``X``).
+DATA_WORDS = {"image", "images", "img", "imgs", "pixel", "pixels", "picture", "photo", "frame", "frames", "video",
+              "audio", "sound", "speech", "wav", "waveform", "waveforms", "signal", "signals", "ecg", "eeg", "emg",
+              "series", "data", "x", "inputs", "input", "samples", "sample", "observations", "text", "texts",
+              "sentence", "sentences", "document", "documents", "docs", "tokens", "file", "filename", "path",
+              "sbml", "uri", "df", "table", "pages", "point", "points", "cloud", "mesh"}
+#: Last words of argument names that are settings about the data, not the data (``sampling_rate``, ``data_format``).
+SETTING_WORDS = {"rate", "format", "type", "dir", "dirs", "size", "sizes", "shape", "mode", "kind", "name", "names",
+                 "dtype", "len", "length", "count", "column", "columns", "key", "keys", "range", "freq", "level",
+                 "scale", "dim", "dims", "index", "id", "ids", "fn", "func", "function", "kwargs", "options",
+                 "config", "processor", "loader", "mask", "unit", "units"}
+#: Annotation or docstring types that are data: tensors, images, tables, audio bytes (not arrays: parameters and
+#: geometry are arrays too, pastas' p and ccblade's chord).
+DATA_TYPES = re.compile(r"\b(?:Tensor|Image|DataFrame|bytes|PathLike)\b")
+
+
+def _qualified(fn):
+    """``(module, qualified name)`` of a function: the same for a model file imported again by path."""
+    return getattr(fn, "__module__", None), getattr(fn, "__qualname__", None)
+
+
+def _looks_like_data(name, annotation=""):
+    """Whether argument ``name`` (with its annotation or docstring type) is the data the model runs on: named
+    like :data:`DATA_WORDS` (not ending in a :data:`SETTING_WORDS` one), or typed like :data:`DATA_TYPES`.
+
+    :param name: the argument.
+    :type name: str
+    :param annotation: its annotation or docstring type, as text.
+    :type annotation: str
+    :rtype: bool
+    """
+    words = [w for w in re.split(r"_|(?<=[a-z])(?=[A-Z])", name) if w]
+    lower = [w.lower() for w in words]
+    if not lower or lower[-1] in SETTING_WORDS:
+        return False
+    return bool(set(lower) & DATA_WORDS) or name in ("X", "y_true") or bool(DATA_TYPES.search(annotation or ""))
+
+
+def _data_template(name, annotation, torch_model):
+    """A ``--const`` / ``--start`` line giving argument ``name`` from a file, for :func:`_missing_data`.
+
+    :param name: the argument.
+    :type name: str
+    :param annotation: its annotation or docstring type, as text.
+    :type annotation: str
+    :param torch_model: whether the model is a torch module (its inputs are tensors).
+    :type torch_model: bool
+    :rtype: str
+    """
+    words = {w.lower() for w in re.split(r"_|(?<=[a-z])(?=[A-Z])", name) if w}
+    if words & {"file", "filename", "path", "uri", "sbml"} or "PathLike" in annotation:
+        return f"--start {name}=path/to/file"
+    if torch_model or "Tensor" in annotation:   # a torch module's text is token ids too
+        return f"--const \"{name}=call:torch:load('{name}.pt')\""
+    if words & {"text", "texts", "sentence", "sentences", "document", "documents", "docs"}:
+        return f'--start "{name}=your text"'
+    if "Image" in annotation and "ndarray" not in annotation:
+        return f"--const \"{name}=call:PIL.Image:open('{name}.png')\""
+    if "DataFrame" in annotation or words & {"df", "table"}:
+        return f"--const \"{name}=call:pandas:read_csv('{name}.csv')\""
+    if "bytes" in annotation:
+        return f"--const \"{name}=call:pathlib:Path('{name}.raw').read_bytes()\""
+    if words & {"image", "images", "img", "imgs", "pixel", "pixels", "picture", "photo", "frame", "frames", "video",
+                "audio", "sound", "speech", "wav", "waveform", "waveforms"}:
+        return f"--const \"{name}=call:numpy:load('{name}.npy')\""
+    return f"--const \"{name}=call:numpy:loadtxt('{name}.txt')\""
+
+
+def _missing_data(data, comments, starts):
+    """Warnings for arguments that look like the data the model runs on (:func:`_looks_like_data`) and weren't
+    given: left out as a None default, made up by init, or not passed at all to the model a factory returns
+    (open_clip's ``create_model(...)``, a CLIP model taking ``image``). Each says how to give it.
+
+    :param data: the inferred config.
+    :type data: dict
+    :param comments: its comments.
+    :type comments: dict
+    :param starts: the ``--start`` / ``--const`` values given.
+    :type starts: dict
+    :return: warning lines.
+    :rtype: list[str]
+    """
+    given = {n.partition(".")[0] for n in starts}
+    entry = _entry_object(data["model"].get("entry", ""))
+    step = data["model"].get("call")
+    fn = getattr(entry, step, None) if inspect.isclass(entry) and step and ":" not in step else entry
+    factory = None if inspect.isclass(entry) else _factory_models.get(_qualified(entry))
+    try:
+        signature = inspect.signature(fn).parameters if callable(fn) else {}
+    except (TypeError, ValueError):
+        signature = {}
+    docs = {}
+    for obj in (fn, getattr(entry, "__init__", None) if inspect.isclass(entry) else None):
+        try:
+            docs.update({n: t for n, t in _documented_types(obj).items() if n not in docs})
+        except Exception:
+            pass
+    torch_model = any(k.__module__.startswith("torch.") for k in type(factory).__mro__) if factory is not None else (
+        inspect.isclass(entry) and any(k.__module__.startswith("torch.") for k in entry.__mro__))
+
+    def annotation(name, params=signature):
+        p = params.get(name)
+        shown = "" if p is None or p.annotation is p.empty else (
+            p.annotation if isinstance(p.annotation, str) else getattr(p.annotation, "__name__", str(p.annotation)))
+        return f"{shown} {docs.get(name, '')}".strip()
+
+    error = str(comments.get(("outputs", None), ""))
+    failed = error.startswith(("probe call failed", "probe construction failed"))
+    error_words = set(re.findall(r"[a-z]+", error.lower())) - SETTING_WORDS if failed else set()
+
+    def named_in_error(name):
+        return failed and (name in error or bool({w.lower() for w in name.split("_")} & error_words))
+
+    # a first argument left None is the data, unless other data was given (TrOCR's generate(inputs=None, **kwargs)
+    # given pixel_values)
+    first = None if any(_looks_like_data(n) for n in given) else next(
+        (n for n in signature if n not in ("self", "cls")), None)
+    found = {}   # name -> how it stands
+    for key, value in comments.items():
+        if key[0] == "model" and isinstance(key[1], str) and value == {"python": "None"}:
+            table, _, name = key[1].partition(".")
+            # an optional argument is the data when it comes first (biosppy's ecg(signal=None, ...)) or the
+            # probe's error asks for it: not every None path or embedding (decoder_inputs_embeds)
+            if table in ("constants", "call_constants") and name and name not in given \
+                    and (name == first or named_in_error(name)):
+                found.setdefault(name, "left out: its default is None")
+    for section in ("parameters", "inputs"):
+        for name, info in data.get(section, {}).items():
+            note = str(comments.get((section, name), ""))
+            if name not in given and ("made up" in note or "no default in the code" in note) and (
+                    "dimensions" in info or not isinstance(info.get("start"), (int, float, bool))
+                    or DATA_TYPES.search(annotation(name))):   # a number made up for x is a number, not data
+                found.setdefault(name, f"made up as {_shown_start(info)}")
+    for table in ("constants", "call_constants"):
+        for name, value in data["model"].get(table, {}).items():
+            note = str(comments.get(("constant", f"{table}.{name}"), comments.get((table, name), "")))
+            if name not in given and "made up" in note:
+                found.setdefault(name, f"made up as {value.get('call', value.get('python', value)) if isinstance(value, dict) else value}")
+    if factory is not None and not data["model"].get("call"):
+        # the model a factory returns, which the FMU never calls: its forward's (or __call__'s) data arguments
+        method = getattr(type(factory), "forward", None) or getattr(type(factory), "__call__", None)  # noqa: B004 (fetches the method)
+        try:
+            params = inspect.signature(method).parameters
+        except (TypeError, ValueError):
+            params = {}
+        for name, p in params.items():   # the first one (CLIP's forward(image=None, text=None): image)
+            if name != "self" and p.kind not in (p.VAR_POSITIONAL, p.VAR_KEYWORD) and name not in given \
+                    and _looks_like_data(name, annotation(name, params)):
+                found.setdefault(name, f"not passed: {entry.__name__}() returns a {type(factory).__name__}, whose "
+                                       f"{method.__name__}() takes it, so the FMU only reads the model's settings")
+                signature = {**signature, name: p}
+                break
+    lines = []
+    for name, how in found.items():
+        if not _looks_like_data(name, annotation(name)):
+            continue
+        if named_in_error(name):
+            how += f"; the probe failed without it ({FAILURE_MESSAGE.search(error).group(1) if FAILURE_MESSAGE.search(error) else error})"
+        lines.append(f"{name}: looks like data the model runs on, and none was given ({how}); give your own, e.g. "
+                     f"{_data_template(name, annotation(name), torch_model)}")
+    return lines
+
+
+def _shown_start(info):
+    """A variable's start value as the warning shows it: short, with an array's shape."""
+    start, dims = info.get("start"), info.get("dimensions")
+    if dims:
+        return f"an array of shape {tuple(dims)}"
+    text = repr(start)
+    return text if len(text) <= 40 else text[:37] + "..."
+
+
+def _documented_types(fn):
+    """Argument name -> the type its docstring gives (numpydoc ``name : type``, Google ``name (type):``)."""
+    doc = inspect.getdoc(fn) if fn is not None else None
+    found = {}
+    for line in (doc or "").splitlines():
+        match = re.match(r"^\s*(\w+)\s*:\s*(\S.*)$", line) or re.match(r"^\s*(\w+)\s*\(([^)]*)\)\s*:", line)
+        if match and match.group(1) not in found:
+            found[match.group(1)] = match.group(2)
+    return found
 
 
 def _returns_callable(fn, data, starts):
@@ -2620,6 +3336,7 @@ def _returns_callable(fn, data, starts):
         return None
     if inspect.isclass(model) or not callable(model):
         return None
+    _factory_models[_qualified(fn)] = model   # for _missing_data: the arguments of the model it returns
     function = isinstance(model, (types.FunctionType, types.MethodType))
     if not left:   # nothing left for it: only a function it makes (lambdify), not any callable object it returns
         return [] if function and model is not fn else None

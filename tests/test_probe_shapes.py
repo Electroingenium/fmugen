@@ -6,7 +6,6 @@ import textwrap
 import pytest
 
 from fmugen.builder import init, isolated_imports
-from fmugen.config import InterfaceError
 
 
 def write(tmp_path, name, source):
@@ -152,7 +151,7 @@ def test_const_values_are_fixed_and_their_files_copied(tmp_path):
             def predict(self, source):
                 return self.k * float(open(source).read())
     """)
-    data, text = probe(f"{path}:Detector", tmp_path, call="predict",
+    data, _text = probe(f"{path}:Detector", tmp_path, call="predict",
                        starts={"model": {"python": "'w.bin'"}, "source": "img.txt"})
     assert data["model"]["constants"] == {"model": "w.bin"}   # a plain TOML value, not a variable
     assert "parameters" not in data and data["inputs"] == {"source": {"start": "img.txt"}}
@@ -481,8 +480,28 @@ def test_reset_is_called_when_the_step_needs_it(tmp_path):
                 return self.state, 1.0, False, False, {}
     """)
     data, text = probe(f"{path}:Env", tmp_path)
-    assert data["model"]["setup"] == ["reset"] and "y0" in data["outputs"]
-    assert "reset() before the first step" in text
+    # with seed=0, which reset() takes: each run of the FMU gives the same results
+    assert data["model"]["setup"] == ["reset(seed=0)"] and "y0" in data["outputs"]
+    assert "reset(seed=0) before the first step" in text and "same results" in text
+
+
+def test_reset_without_a_seed_is_called_bare(tmp_path):
+    path = write(tmp_path, "env.py", """
+        class Env:
+            def __init__(self):
+                self.state = None
+
+            def reset(self):
+                self.state = 0.0
+
+            def step(self, action=0.5):
+                if self.state is None:
+                    raise RuntimeError("Cannot call env.step() before calling env.reset()")
+                self.state += action
+                return {"x": self.state}
+    """)
+    data, text = probe(f"{path}:Env", tmp_path)
+    assert data["model"]["setup"] == ["reset"] and "reset() before the first step" in text
 
 
 def test_a_factory_of_a_torch_like_module_reads_forward(tmp_path):
@@ -650,7 +669,7 @@ def test_a_const_shared_with_the_step_method_goes_to_the_constructor(tmp_path):
             def solve(self, x0, Xm):
                 return {"u": float(sum(x0)) + self.x0[0] + Xm[0]}
     """)
-    data, text = probe(f"{path}:Ctrl", tmp_path, call="solve", fmi_version=3,
+    data, _text = probe(f"{path}:Ctrl", tmp_path, call="solve", fmi_version=3,
                        starts={"x0": {"call": "builtins:list([1.0])"}, "solve_x0": [2.0], "Xm": [3.0]})
     assert data["model"]["constants"] == {"x0": {"call": "builtins:list([1.0])"}}
     assert "call_constants" not in data["model"]
@@ -720,6 +739,134 @@ def test_update_is_the_step_only_without_a_run_like_method():
     assert _pick_method(Filter)[0] == "update"
 
 
+def test_an_inherited_run_like_method_beats_the_only_one_defined():
+    from fmugen.interface import _pick_method
+
+    class GAM:
+        def fit(self, X, y): ...
+        def predict(self, X): ...
+        def confidence_intervals(self, X, width=0.95): ...
+
+    class LinearGAM(GAM):     # like pygam's: defines only prediction_intervals, inherits predict
+        def prediction_intervals(self, X, width=0.95): ...
+
+    class Probe:
+        def measure(self): ...
+
+    assert _pick_method(LinearGAM, {"X": [[1.0]]}, LinearGAM.__init__)[0] == "predict"
+    assert _pick_method(Probe)[0] == "measure"
+
+
+def test_internal_methods_and_integrate_in_the_ranking():
+    from fmugen.interface import _rank_methods
+
+    class Runner:             # like libroadrunner's RoadRunner
+        def internalOneStep(self, currentTime, stepSize): ...
+        def oneStep(self, currentTime, stepSize): ...
+
+    class Orbit:              # like galpy's: integrate, beside bruteSOS
+        def bruteSOS(self, t, pot): ...
+        def integrate(self, t, pot): ...
+
+    assert _rank_methods(Runner, {}, Runner.__init__)[0] == "oneStep"
+    assert _rank_methods(Orbit, {}, Orbit.__init__)[0] == "integrate"
+
+
+def test_from_pretrained_and_the_step_its_kwargs_would_swallow():
+    from fmugen.interface import _pick_create, _pick_method
+
+    class Model:              # like transformers' VisionEncoderDecoderModel
+        def __init__(self, config=None, encoder=None, decoder=None): ...
+
+        @classmethod
+        def from_pretrained(cls, pretrained_model_name_or_path, *model_args, config=None, **kwargs): ...
+
+        @classmethod
+        def from_encoder_decoder_pretrained(cls, encoder_path=None, decoder_path=None, **kwargs): ...
+
+        def load_custom_generate(self, pretrained_model_name_or_path=None): ...
+        def forward(self, pixel_values=None, labels=None): ...
+        def generate(self, inputs=None, **kwargs): ...
+
+    starts = {"pretrained_model_name_or_path": "m", "pixel_values": {"call": "torch:zeros(1)"}}
+    assert _pick_create(Model, starts)[0] == "from_pretrained"
+    assert _pick_method(Model, starts, Model.from_pretrained)[0] == "forward"
+
+
+def test_a_staticmethod_returning_the_class_builds_it():
+    from fmugen.interface import _pick_create
+
+    class Voice:              # like piper's PiperVoice.load(model_path) -> "PiperVoice"
+        def __init__(self, session, config): ...
+
+        @staticmethod
+        def load(model_path, use_cuda=False) -> "Voice": ...
+
+        @staticmethod
+        def helper(model_path): ...
+
+        def synthesize(self, text): ...
+
+    assert _pick_create(Voice, {"model_path": "v.onnx", "text": "hi"})[0] == "load"
+
+
+def test_an_ase_calculator_steps_with_its_energy():
+    import types
+
+    from fmugen.interface import _pick_method
+
+    Calculator = types.new_class("Calculator", exec_body=lambda ns: ns.update(
+        __module__="ase.calculators.calculator",
+        calculate=lambda self, atoms=None, properties=None, system_changes=None: None,
+        get_potential_energy=lambda self, atoms=None, force_consistent=False: 0.0,
+        get_forces=lambda self, atoms=None: None,
+        get_property=lambda self, name, atoms=None, allow_calculation=True: None))
+
+    class Potential(Calculator):   # like orb's ORBCalculator: calculate() only fills self.results
+        def __init__(self, model, device="cpu"): ...
+
+    assert _pick_method(Potential, {"model": {"call": "m:x()"}, "atoms": {"call": "ase.build:bulk('Cu')"}},
+                        Potential.__init__)[0] == "get_potential_energy"
+
+
+def test_a_c_method_signature_is_read_from_its_docstring():
+    from fmugen.interface import _doc_signature, _fits
+
+    class Method:              # what pybind11 gives: no inspect.signature, its signature as the docstring's first line
+        __name__ = "get_Ar00"
+        __doc__ = ("get_Ar00(self: teqp.AbstractModel, T: float, rho: float, molefrac: numpy.ndarray[numpy.float64[m, 1]],"
+                   " tol: float = 1e-9) -> float\n\nThe residual Helmholtz energy.")
+
+        def __call__(self, *args):
+            ...
+
+        @property
+        def __signature__(self):
+            raise ValueError("no signature found for builtin")
+
+    assert _doc_signature(Method()) == ({"T", "rho", "molefrac", "tol"}, {"T", "rho", "molefrac"})
+    assert _fits(Method(), ["T", "rho", "molefrac"]) and not _fits(Method(), ["T"])
+    unnamed = Method()
+    unnamed.__doc__ = "get_Ar00(self: object, arg0: float) -> float"
+    assert _doc_signature(unnamed) is None
+
+
+def test_a_module_whose_forward_takes_anything_steps_with_forward():
+    from fmugen.interface import _pick_method
+
+    class Module:
+        def __call__(self, *args, **kwargs):
+            return self.forward(*args, **kwargs)
+
+    class LIFNode(Module):    # like spikingjelly's: forward dispatches to single_step_forward or multi_step_forward
+        def __init__(self, tau=2.0): ...
+        def forward(self, *args, **kwargs): ...
+        def single_step_forward(self, x): ...
+        def multi_step_forward(self, x_seq): ...
+
+    assert _pick_method(LIFNode, {"x": [1.5]}, LIFNode.__init__)[0] == "forward"
+
+
 def test_ranking_run_like_prefixes_and_clean_up_names():
     from fmugen.interface import _rank_methods
 
@@ -768,7 +915,7 @@ def test_a_documented_array_without_default_is_made_up_as_ones(tmp_path):
                     raise TypeError("q must be given as an array")
                 return float(q.sum() + gyr.sum())
     ''')
-    data, text = probe(f"{path}:Filter", tmp_path)
+    data, _text = probe(f"{path}:Filter", tmp_path)
     assert data["inputs"]["q"] == {"dimensions": [4], "start": [1.0] * 4, "numpy": True}
     assert data["inputs"]["gyr"]["dimensions"] == [3]
     assert data["outputs"]
@@ -873,7 +1020,7 @@ def test_a_set_up_the_error_names_is_found(tmp_path):
                     raise RuntimeError("call connect() before read()")
                 return 1.5
     """)
-    data, text = probe(f"{path}:Device", tmp_path, call="read")
+    data, _text = probe(f"{path}:Device", tmp_path, call="read")
     assert data["model"]["setup"] == ["connect()"] and data["outputs"]
 
 
@@ -951,7 +1098,7 @@ def test_a_documented_array_that_takes_a_number_stays_a_number(tmp_path):
             """
             return 1000.0 + 0.8 * SA - 0.2 * CT
     ''')
-    data, text = probe(f"{path}:rho", tmp_path)
+    data, _text = probe(f"{path}:rho", tmp_path)
     assert data["inputs"]["SA"] == {"start": 1.0} and data["inputs"]["CT"] == {"start": 1.0}
 
 
@@ -970,6 +1117,51 @@ def test_a_fitted_model_gets_its_number_of_features(tmp_path):
                     raise ValueError(f"Feature count mismatch: expecting {self.n_features_in_} features")
                 return X.sum(axis=1)
     """)
-    data, text = probe(f"{path}:Regressor", tmp_path, call="predict",
+    data, _text = probe(f"{path}:Regressor", tmp_path, call="predict",
                        setup=["fit(numpy.ones((5, 4)), numpy.ones(5))"])
     assert data["inputs"]["X"]["dimensions"] == [1, 4] and data["outputs"]
+
+
+def test_convert_of_the_step_methods_copy_of_a_constructor_argument(tmp_path):
+    # like CFTOC: --convert calculate_optimal_actuation_x0 is the step method's x0, x0 the constructor's
+    path = write(tmp_path, "ctrl.py", """
+        class Ctrl:
+            def __init__(self, x0):
+                self.x0 = x0
+
+            def solve(self, x0):
+                assert type(x0).__name__ == "tuple", type(x0)
+                return {"u": float(sum(x0)) + self.x0[0]}
+    """)
+    data, _ = probe(f"{path}:Ctrl", tmp_path, call="solve", fmi_version=3,
+                    starts={"x0": [1.0], "solve_x0": [2.0, 3.0]}, converts={"solve_x0": "builtins:tuple"})
+    assert data["inputs"]["solve_x0"]["convert"] == "builtins:tuple" and "convert" not in data["parameters"]["x0"]
+    assert data["outputs"] == {"u": {"from": "return:u"}}
+
+
+def test_a_vector_of_times_is_not_the_simulation_time(tmp_path):
+    # like ssqueezepy's ssq_cwt(x, t=None): t is the times of the samples
+    path = write(tmp_path, "cwt.py", '''
+        def cwt(x=1.0, t=None, fs=None):
+            """Transform.
+
+            # Arguments:
+                t: np.ndarray / None
+                    Vector of times at which samples are taken.
+            """
+            return {"y": x * 2}
+
+        def ode(y=1.0, t=0.0):
+            """Right-hand side.
+
+            Parameters
+            ----------
+            t : float
+                The time now.
+            """
+            return {"dy": -y}
+    ''')
+    data, _ = probe(f"{path}:cwt", tmp_path)
+    assert "t" not in data.get("time", {})
+    data, _ = probe(f"{path}:ode", tmp_path, force=True)
+    assert data["time"] == {"t": "time"}

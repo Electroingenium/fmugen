@@ -1,0 +1,25 @@
+# PyWake: the Jensen (1983) wake model returns a SimulationResult (an xarray Dataset); `init --probe`
+# outputs its site coordinates (WD, WS, Weibull_A, ...) but not the data variables indexed by
+# turbine. Here: each turbine's effective wind speed and power (Horns Rev 1 site and V80 turbines,
+# three turbines in a row along the 270° wind).
+[model]
+entry = "py_wake.literature.noj:Jensen_1983"
+call = "__call__"
+
+[model.constants]
+site = { call = "py_wake.examples.data.hornsrev1:Hornsrev1Site()" }
+windTurbines = { call = "py_wake.examples.data.hornsrev1:V80()" }
+
+[inputs]
+x = { dimensions = [3], start = [0.0, 560.0, 1120.0] }
+y = { dimensions = [3], start = [0.0, 0.0, 0.0] }
+wd = { start = 270.0 }
+ws = { start = 10.0 }
+
+[outputs]
+WS_eff_0 = { from = "return:WS_eff.values.0.0.0" }
+WS_eff_1 = { from = "return:WS_eff.values.1.0.0" }
+WS_eff_2 = { from = "return:WS_eff.values.2.0.0" }
+Power_0 = { from = "return:Power.values.0.0.0" }
+Power_1 = { from = "return:Power.values.1.0.0" }
+Power_2 = { from = "return:Power.values.2.0.0" }

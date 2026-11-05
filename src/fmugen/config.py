@@ -129,7 +129,6 @@ class InterfaceError(ValueError):
     The CLI prints its message and exits with an error; ``fmugen init`` turns some of them into
     warnings.
     """
-    pass
 
 
 class Config:
@@ -480,10 +479,6 @@ def normalize(config, entry_obj, module_name, sys_path, model_name=None, author=
         init_sig = None
         call_sig = _signature(entry_obj) if step_call else None
 
-    if step_call and (inspect.isgeneratorfunction(entry_obj) if not is_class
-                      else call and inspect.isgeneratorfunction(getattr(entry_obj, call, None))):
-        raise InterfaceError(f"{model['entry']} is a generator (it uses yield), which fmugen can't step yet; "
-                             "a factory that returns an object with a step method works ([model] call)")
     integrate = _integrate(model, step_call)
     repeat = _repeat(model, step_call, integrate)
     discard_on = _discard_on(model.get("discard_on", []))
@@ -517,11 +512,14 @@ def normalize(config, entry_obj, module_name, sys_path, model_name=None, author=
     for table, values in (("constants", constants), ("call_constants", call_constants)):
         for name, value in values.items():
             if isinstance(value, dict) and "call" in value:   # computed when the FMU initializes
-                from fmugen.templates.fmugen_runtime import parse_call_text
+                from fmugen.templates.fmugen_runtime import parse_call_text, uses_self
                 try:
-                    parse_call_text(str(value["call"]))
+                    parse_call_text(str(value["call"]), chain=True)
                 except (ValueError, SyntaxError) as e:
                     raise InterfaceError(f"[model] {table}.{name}: {e}") from e
+                if uses_self(value) and (table == "constants" or not is_class):
+                    raise InterfaceError(f"[model] {table}.{name} = {{ call = {value['call']!r} }}: self is the "
+                                         "model object, so only a class's call_constants can use it")
 
     time_args, time_epochs = {}, {}
     for arg, source in config.data.get("time", {}).items():
@@ -618,8 +616,8 @@ def normalize(config, entry_obj, module_name, sys_path, model_name=None, author=
     for var in variables:
         var["valueReference"] = vr
         vr += element_count(var) if version == 2 else 1   # FMI 2: an array takes one reference per element
-    for vr, clock in enumerate(clocks, start=vr):
-        clock["valueReference"] = vr
+    for ref, clock in enumerate(clocks, start=vr):
+        clock["valueReference"] = ref
 
     inputs = {v["name"] for v in variables if v["causality"] == "input"}
     for var in variables:
@@ -872,7 +870,7 @@ def parse_call(text):
     :type text: str
     :return: ``{"call": target, "args": [...], "kwargs": {...}}``.
     :rtype: dict
-    :raises InterfaceError: a syntax error, a missing ``)``, ``**kwargs``, or an argument that is
+    :raises InterfaceError: a syntax error, a missing ``)``, ``**`` other than a dict literal, or an argument that is
         neither a literal, a name nor a call of a name.
     """
     import ast
@@ -909,9 +907,17 @@ def parse_call(text):
             raise InterfaceError(f"[model] setup {text!r}: only one call is supported, nothing after its ')'")
         args = [argument(node) for node in parsed.args]
         for keyword in parsed.keywords:
-            if keyword.arg is None:
-                raise InterfaceError(f"[model] setup {text!r}: **kwargs is not supported")
-            kwargs[keyword.arg] = argument(keyword.value)
+            if keyword.arg is not None:
+                kwargs[keyword.arg] = argument(keyword.value)
+                continue
+            # **{"key": value, ...}: keys that aren't valid names (e.g. "max-iter") can be given this way
+            mapping = keyword.value
+            if not (isinstance(mapping, ast.Dict) and all(
+                    isinstance(k, ast.Constant) and isinstance(k.value, str) for k in mapping.keys)):
+                raise InterfaceError(f"[model] setup {text!r}: ** takes only a dict literal with string keys, "
+                                     "e.g. **{'max-iter': 10}")
+            for key, value in zip(mapping.keys, mapping.values):
+                kwargs[key.value] = argument(value)
     return {"call": call.strip(), "args": args, "kwargs": kwargs}
 
 

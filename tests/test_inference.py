@@ -45,8 +45,10 @@ def test_rendered_config_round_trips(tmp_path):
     output, data = init(tmp_path / "tank.py")
     text = output.read_text()
     assert tomllib.loads(text)["model"] == {"entry": "tank.py:Tank", "call": "step"}
-    # integers stay Integer, as an int scalar default does (layer sizes: torch refuses floats)
-    assert tomllib.loads(text)["parameters"]["limits"] == {"dimensions": [2], "type": "Integer", "start": [0, 5]}
+    # integers stay Integer, as an int scalar default does (layer sizes: torch refuses floats);
+    # a tuple default is passed back as a tuple
+    assert tomllib.loads(text)["parameters"]["limits"] == {"dimensions": [2], "type": "Integer", "start": [0, 5],
+                                                           "convert": "builtins:tuple"}
     assert data["outputs"] == {"y": {"from": "return"}, "overflow": {"type": "Boolean"}}
     assert data["locals"] == {"level": {}}
     assert load_config(output).entry_name == "Tank"
@@ -115,14 +117,15 @@ def test_fmi3_infers_arrays_binary_and_float32(tmp_path):
     '''))
     data, comments = infer(tmp_path / "filt.py", fmi_version=3)
     assert data["model"]["fmi_version"] == 3
-    assert data["parameters"]["weights"] == {"dimensions": [3], "start": [0.5, 0.25, 0.25]}
+    assert data["parameters"]["weights"] == {"dimensions": [3], "start": [0.5, 0.25, 0.25], "convert": "builtins:tuple"}
     assert data["parameters"]["tag"] == {"type": "Binary", "start": "01"}
     assert data["outputs"]["y"] == {"from": "return", "dimensions": [3]}
     assert data["outputs"]["out"] == {"type": "Float32"}
     assert "[clocks.sample]" in render_toml(data, comments)
 
     data2, comments2 = infer(tmp_path / "filt.py")              # FMI 2: arrays, but no Binary or Float32
-    assert data2["parameters"]["weights"] == {"dimensions": [3], "start": [0.5, 0.25, 0.25]}
+    assert data2["parameters"]["weights"] == {"dimensions": [3], "start": [0.5, 0.25, 0.25],
+                                              "convert": "builtins:tuple"}
     assert "tag" not in data2["parameters"] and "--fmi 3" in comments2[("parameters", "#tag")]
     assert data2["outputs"]["out"] == {}
 
@@ -187,7 +190,7 @@ def test_optional_from_typing_objects():
     import typing
 
     from fmugen.static import unwrap_optional
-    assert unwrap_optional(typing.Optional[bool]) is bool
+    assert unwrap_optional(typing.Optional[bool]) is bool  # noqa: UP045 (the old spelling is what's tested)
     assert unwrap_optional(int | None) is int
     assert unwrap_optional(int | str) == int | str
 
@@ -395,8 +398,13 @@ def test_setup_call_keeps_keyword_arguments():
     assert parse_call("reset(seed=0)") == {"call": "reset", "args": [], "kwargs": {"seed": 0}}
     assert parse_call("psychrolib:SetUnitSystem(psychrolib.SI, strict=True)") == {
         "call": "psychrolib:SetUnitSystem", "args": [{"ref": "psychrolib.SI"}], "kwargs": {"strict": True}}
-    with pytest.raises(InterfaceError, match=r"\*\*kwargs"):
+    with pytest.raises(InterfaceError, match=r"dict literal"):
         parse_call("reset(**opts)")
+    with pytest.raises(InterfaceError, match=r"dict literal"):
+        parse_call("reset(**{1: 2})")
+    # **{...} gives keys that aren't valid Python names
+    assert parse_call("fit(1, **{'max-iter': 10, 'x': psychrolib.SI}, seed=0)") == {
+        "call": "fit", "args": [1], "kwargs": {"max-iter": 10, "x": {"ref": "psychrolib.SI"}, "seed": 0}}
 
 
 def test_setup_call_takes_calls_as_arguments():
@@ -412,12 +420,17 @@ def test_setup_call_takes_calls_as_arguments():
         parse_call("fit(1).predict(2)")
 
 
-def test_call_constant_refuses_text_after_the_call():
-    # "pathlib:Path('x').read_bytes()" (rembg, easyocr) would run only Path(), dropping the rest: refused
+def test_call_constant_chains_attributes_calls_and_indexes(tmp_path):
+    # skyfield's load.timescale().utc(...), orb's pretrained model returned in a tuple, an argument
+    # that is a method of a built object (equilibrator's ComponentContribution().get_compound)
     from fmugen.templates.fmugen_runtime import resolve_constant
-    with pytest.raises(ValueError, match="only one call"):
-        resolve_constant({"call": "pathlib:Path('x.png').read_bytes()"})
-    with pytest.raises(ValueError, match="only one call"):
+    (tmp_path / "x.png").write_bytes(b"png")
+    path = str(tmp_path / "x.png").replace("\\", "/")
+    assert resolve_constant({"call": f"pathlib:Path('{path}').read_bytes()"}) == b"png"
+    assert resolve_constant({"call": "builtins:divmod(7, 2)[1]"}) == 1
+    assert resolve_constant({"call": "datetime:datetime(2024, 1, 2).replace(year=2020).isoformat()"})         == "2020-01-02T00:00:00"
+    assert resolve_constant({"call": "builtins:sorted(builtins.str('ba').upper())"}) == ["A", "B"]
+    with pytest.raises(ValueError, match="may follow the call"):
         resolve_constant({"call": "numpy:zeros(3) + numpy.ones(3)"})
 
 
@@ -531,7 +544,7 @@ def test_factory_annotated_with_a_base_class(tmp_path):
 def test_bytes_dated_series_and_object_arrays_are_outputs(tmp_path):
     # rembg returns PNG bytes, pastas a Series indexed by dates, facenet-pytorch object arrays of
     # numbers: each was left out ("no outputs found")
-    pd = pytest.importorskip("pandas")
+    pytest.importorskip("pandas")
     (tmp_path / "res.py").write_text(textwrap.dedent('''
         import numpy as np, pandas as pd
         def png(n=3):
@@ -558,8 +571,42 @@ def test_a_keyword_named_like_the_kwargs_parameter(tmp_path):
     # a dict can't be an FMU variable: it's a --const, passed through **kwargs
     data, _ = infer(f"{tmp_path / 'kw.py'}:load", starts={"model_kwargs": {"python": "{'task_name': 'r'}"}})
     assert data["model"]["constants"] == {"model_kwargs": {"python": "{'task_name': 'r'}"}}
-    with pytest.raises(InterfaceError, match="give a fixed value with --const model_kwargs"):
-        infer(f"{tmp_path / 'kw.py'}:load", starts={"model_kwargs": {"task_name": "r"}})
+    # the same given with --start: a fixed value too
+    data, comments = infer(f"{tmp_path / 'kw.py'}:load", starts={"model_kwargs": {"task_name": "r"}})
+    assert data["model"]["constants"] == {"model_kwargs": {"python": "{'task_name': 'r'}"}}
+    assert "fixed value" in comments[("constant", "constants.model_kwargs")]
+
+
+def test_an_array_documented_as_ndarray_is_passed_as_numpy(tmp_path):
+    # gym-pybullet-drones' step(action), "action : ndarray | dict[..]", reads action.shape: a list fails
+    (tmp_path / "env.py").write_text(textwrap.dedent('''
+        def step(action, gains):
+            """One step.
+
+            Parameters
+            ----------
+            action : ndarray | dict[..]
+                The action.
+            gains : array_like
+                The gains.
+            """
+            return {"y": float(action.shape[0]) + sum(gains)}
+    '''))
+    data, _ = infer(f"{tmp_path / 'env.py'}:step", fmi_version=3, starts={"action": [1.0, 2.0], "gains": [0.5, 0.5]})
+    assert data["inputs"]["action"]["numpy"] is True and "numpy" not in data["inputs"]["gains"]
+
+
+def test_a_start_that_cant_be_a_variable_is_a_fixed_value(tmp_path):
+    # gliner's predict_entities(text, labels=['person', 'organization']), pycalphad's comps: lists of strings
+    (tmp_path / "ner.py").write_text(textwrap.dedent('''
+        def entities(text, labels, threshold=0.5):
+            return {"n": float(len(labels)), "length": float(len(text))}
+    '''))
+    data, _comments = infer(f"{tmp_path / 'ner.py'}:entities", starts={"text": "Ada", "labels": ["person", "org"]})
+    assert data["model"]["constants"] == {"labels": ["person", "org"]}
+    assert "labels" not in data.get("inputs", {}) and data["inputs"]["text"]["start"] == "Ada"
+    with pytest.raises(InterfaceError, match="can't be an FMU variable"):   # not a literal: can't be written
+        infer(f"{tmp_path / 'ner.py'}:entities", starts={"text": "Ada", "labels": [object()]})
 
 
 def test_fmi3_integer_starts_beyond_int32_get_64_bit_types(tmp_path):
@@ -684,11 +731,13 @@ def test_requirements_are_the_installed_distributions_the_model_uses(tmp_path):
 
 def test_requirements_skip_a_venv_next_to_the_model(tmp_path):
     import importlib
-    import sys
-    from fmugen.interface import _local_sources
+
     # like cftoc/.venv beside cftoc/CFTOCSolverV2.py: its packages aren't the model's imports,
     # and one of them imports __main__, which has no spec under the fmugen console script
     import importlib.metadata
+    import sys
+
+    from fmugen.interface import _local_sources
     folder = tmp_path / "cftoc"
     (folder / ".venv" / "lib" / "site-packages").mkdir(parents=True)
     (folder / ".venv" / "pyvenv.cfg").write_text("home = /usr/bin\n")
@@ -774,7 +823,7 @@ def test_probe_timeout_stops_the_process(tmp_path):
     (tmp_path / "slow.py").write_text("import time\n\ndef slow(x: float = 1.0):\n    time.sleep(60)\n"
                                       "    return {'y': x}\n")
     result = subprocess.run([sys.executable, "-m", "fmugen", "init", str(tmp_path / "slow.py"), "--probe",
-                             "--probe-timeout", "2"], capture_output=True, text=True, timeout=50)
+                             "--probe-timeout", "2"], capture_output=True, text=True, timeout=50, check=False)
     assert result.returncode == 2 and "did not finish in 2 s" in result.stderr
 
 
@@ -925,7 +974,7 @@ def test_probe_reads_getters_when_the_step_returns_nothing(tmp_path):
             def get_label(self):
                 return {"name": "farm"}     # not an FMI value
     """))
-    data, comments = infer(f"{tmp_path / 'farm.py'}:Farm", call="run", fmi_version=3)
+    data, _comments = infer(f"{tmp_path / 'farm.py'}:Farm", call="run", fmi_version=3)
     outputs = data["outputs"]
     assert outputs["power"] == {"from": "get:get_power"}
     assert outputs["quat"]["from"] == "get:getQuat" and outputs["quat"]["dimensions"] == [4]

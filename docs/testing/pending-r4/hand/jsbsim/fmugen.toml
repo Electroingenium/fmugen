@@ -1,0 +1,16 @@
+# JSBSim: run() advances one integration step (1/120 s) and returns only whether it went on; the
+# state is read from the property tree, which FGFDMExec indexes by name (fdm["position/h-sl-ft"]).
+# The bundled Cessna 172 (c172x) from its initial conditions.
+[model]
+entry = "jsbsim:FGFDMExec"
+setup = ["load_model('c172x')", "run_ic"]
+call = "run"
+
+[model.constants]
+0 = { call = "jsbsim:get_default_root_dir()" }
+
+[outputs]
+sim_time = { from = "attr:simulation/sim-time-sec" }
+altitude_ft = { from = "attr:position/h-sl-ft" }
+airspeed_kts = { from = "attr:velocities/vc-kts" }
+pitch_rad = { from = "attr:attitude/theta-rad" }

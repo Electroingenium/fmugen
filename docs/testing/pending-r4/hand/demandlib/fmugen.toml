@@ -1,0 +1,16 @@
+# demandlib: get_scaled_power_profiles returns a DataFrame of 15-minute values for the year; `init` outputs it whole.
+# The household (h0) load on 1 January 2024 at 00:00, 12:00 and 18:00, for 3000 kWh a year (kW: conversion_factor 4 from kWh per quarter hour).
+[model]
+entry = "demandlib.bdew:ElecSlp"
+call = "get_scaled_power_profiles"  # get_profile is deprecated (a FutureWarning) in favour of it
+
+[parameters]
+year = { start = 2024 }
+
+[inputs]
+h0 = { start = 3000.0, to = "arg:ann_el_demand_per_sector[h0]" }
+
+[outputs]
+h0_0000 = { from = "return:h0.values.0" }
+h0_1200 = { from = "return:h0.values.48" }
+h0_1800 = { from = "return:h0.values.72" }

@@ -21,8 +21,8 @@ import subprocess
 import sys
 from pathlib import Path
 
-from fmugen.config import MODEL_DIR, InterfaceError
 from fmugen.arguments import _dotted_names
+from fmugen.config import MODEL_DIR, InterfaceError
 from fmugen.static import packages_distributions
 
 COMPILERS = {"pyinstaller": "PyInstaller", "nuitka": "nuitka"}   # --compile value -> module
@@ -87,6 +87,37 @@ def hf_models(interface, base_dir):
                    and not any((folder / t).exists() for folder in folders)})
 
 
+#: Keys of a Hugging Face config that name another model it loads (an encoder, a tokenizer, a base model).
+NAMED_MODEL_KEYS = {"model_name", "model_name_or_path", "base_model", "base_model_name_or_path",
+                    "encoder", "encoder_name", "tokenizer_name", "backbone", "pretrained_model_name_or_path"}
+
+
+def _named_models(folder):
+    """Hugging Face repo ids that a downloaded model's JSON configs name under :data:`NAMED_MODEL_KEYS`.
+
+    :param folder: the downloaded snapshot.
+    :type folder: str or pathlib.Path
+    :rtype: list[str]
+    """
+    found = []
+
+    def walk(value):
+        if isinstance(value, dict):
+            for key, item in value.items():
+                if key in NAMED_MODEL_KEYS and isinstance(item, str) and HF_REPO_ID.match(item)                         and Path(item).suffix.lower() not in DATA_SUFFIXES and item not in found:
+                    found.append(item)
+                walk(item)
+        elif isinstance(value, list):
+            for item in value:
+                walk(item)
+    for path in sorted(Path(folder).glob("*.json")):
+        try:
+            walk(json.loads(path.read_text(encoding="utf-8")))
+        except (OSError, ValueError):
+            continue
+    return found
+
+
 def bundle_hf_models(interface, base_dir, resources):
     """Download the Hugging Face models the model loads into ``resources/hf_cache``, so the FMU runs offline.
 
@@ -106,7 +137,9 @@ def bundle_hf_models(interface, base_dir, resources):
     :rtype: list[str]
     """
     ids = hf_models(interface, base_dir)
-    calls = [value["call"] for value in _constants(interface) if isinstance(value, dict) and "call" in value]
+    from fmugen.templates.fmugen_runtime import uses_self
+    calls = [value["call"] for value in _constants(interface)
+             if isinstance(value, dict) and "call" in value and not uses_self(value)]
     if not ids and not calls:
         return []
     try:
@@ -115,14 +148,21 @@ def bundle_hf_models(interface, base_dir, resources):
         return []
     cache = resources / HF_CACHE
     bundled = []
+    ids, named = list(ids), set()   # named: found in a downloaded config, not followed further
     for repo_id in ids:
         try:
-            snapshot_download(repo_id, cache_dir=cache)
+            folder = snapshot_download(repo_id, cache_dir=cache)
         except Exception as e:
             print(f"note: not bundling {repo_id!r} from Hugging Face ({type(e).__name__}): "
                   "the FMU will download it on first use if it is a model")
             continue
         bundled.append(repo_id)
+        if repo_id in named:
+            continue
+        for other in _named_models(folder):   # GLiNER's config names its encoder (microsoft/deberta-v3-small)
+            if other not in ids:
+                named.add(other)
+                ids.append(other)
     # constants computed by a call, e.g. huggingface_sb3's load_from_hub(repo_id=..., filename=...):
     # make the call once with the cache inside the FMU, so the same call finds its file there offline
     from fmugen.templates.fmugen_runtime import call_reference
@@ -183,13 +223,34 @@ def vendor(requirements, wheels_dir, platforms=(), python_versions=()):
                 cmd += ["--python-version", version] if version else []
                 commands.append(cmd + list(requirements))
     for cmd in commands:
-        result = subprocess.run(cmd, capture_output=True, text=True)
+        result = subprocess.run(cmd, capture_output=True, text=True, check=False)
         if result.returncode != 0:
             raise InterfaceError(f"vendoring {requirements} failed ({' '.join(cmd[len(pip):])}):\n"
                                  f"{result.stdout}{result.stderr}")
 
 
 # ---------------- --compile ----------------
+
+#: Put before the backend's main.py when it's frozen. Libraries that start worker processes run
+#: ``sys.executable -c CODE`` or ``-m MODULE`` (joblib's loky, used by interpret); frozen,
+#: sys.executable is the FMU's backend, which would start a second backend and wait for UniFMU
+#: forever. This runs the code or module instead, as Python would.
+FROZEN_INTERPRETER = """import sys as _sys
+if getattr(_sys, "frozen", False):
+    _args = _sys.argv[1:]
+    while _args and _args[0].startswith("-") and _args[0] not in ("-c", "-m"):
+        _args.pop(0)   # interpreter flags (-B, -s, -E, -I) that multiprocessing passes on
+    if len(_args) >= 2 and _args[0] == "-c":
+        _sys.argv = ["-c", *_args[2:]]
+        exec(compile(_args[1], "<string>", "exec"), {"__name__": "__main__"})
+        raise SystemExit(0)
+    if len(_args) >= 2 and _args[0] == "-m":
+        import runpy as _runpy
+        _sys.argv = [_args[1], *_args[2:]]
+        _runpy.run_module(_args[1], run_name="__main__", alter_sys=True)
+        raise SystemExit(0)
+"""
+
 
 def compile_fmu(compiler, resources, interface, work, requirements=()):
     """Freeze ``resources/main.py`` and everything it runs into ``resources/dist/main/``; drop the sources.
@@ -264,9 +325,11 @@ def compile_fmu(compiler, resources, interface, work, requirements=()):
         cmd += [f"--include-distribution-metadata={d}" for d in distributions]
         built = work / "main.dist"
         env = {**os.environ, "PYTHONPATH": os.pathsep.join(map(str, paths))}
-    cmd.append(str(resources / "main.py"))
+    main = resources / "main.py"
+    main.write_text(FROZEN_INTERPRETER + main.read_text(encoding="utf-8"), encoding="utf-8")
+    cmd.append(str(main))
 
-    result = subprocess.run(cmd, capture_output=True, text=True, cwd=work, env=env)
+    result = subprocess.run(cmd, capture_output=True, text=True, cwd=work, env=env, check=False)
     if result.returncode != 0 or not built.is_dir():
         # warnings (Nuitka writes hundreds about duplicate data files) would push the error out of the tail
         lines = [line for line in (result.stdout + result.stderr).splitlines()
@@ -401,7 +464,7 @@ def _modules(interface):
     refs += [c["call"] for c in interface.get("clocks", []) if c.get("call")]
     step = interface["entry"].get("call")
     if isinstance(step, str) and ":" in step:   # "module:function(self, ...)": the module, and dotted names in its arguments
-        refs += [step.partition("(")[0], *(name for name in _dotted_names(f"f({step.partition('(')[2]})")
+        refs += [step.partition("(")[0], *(name for name in _dotted_names(step.partition("(")[2])
                                             if name.split(".")[0] != "self")]
     for table in ("constants", "call_constants"):
         for value in interface.get(table, {}).values():
@@ -409,8 +472,10 @@ def _modules(interface):
                 refs.append(value["ref"])
             elif isinstance(value, dict) and isinstance(value.get("call"), str):
                 # "module:fn(numpy.linspace(...))": the module, and the dotted names in the arguments
+                # ("self.parse(...)": a method of the model object, no module)
                 call = value["call"]
-                refs += [call.partition("(")[0], *_dotted_names(f"f({call.partition('(')[2]})")]
+                refs += [*([] if call.strip().startswith("self") else [call.partition("(")[0]]),
+                         *(name for name in _dotted_names(call.partition("(")[2]) if name.split(".")[0] != "self")]
     for step in interface.get("setup", []):
         refs += [a["ref"] for a in [*step.get("args", []), *step.get("kwargs", {}).values()]
                  if isinstance(a, dict) and "ref" in a]
@@ -465,7 +530,7 @@ def _packages(modules, requirements=()):
     # The model's own distributions: their dependencies, and their optional ones when installed
     # here, are imported too, since libraries import them by name when needed (pybamm's anytree).
     roots = set(queue)
-    seen, imported = set(), set()
+    seen, imported, lazy = set(), set(), set()
     while queue:
         name = queue.pop()
         if name in seen or name in NOT_COLLECTED:
@@ -478,11 +543,16 @@ def _packages(modules, requirements=()):
         extras = (dist.metadata.get_all("Provides-Extra") or []) if name in roots else []
         deps = [dep for req in dist.requires or [] for dep in [_dependency(req, extras)] if dep]
         imported |= set(deps) if name in roots else set()
+        if "lazy-loader" in {_canonical(d) for d in deps}:
+            lazy.add(name)   # imports its submodules when first used (mne): no freezer follows that
         queue += deps
     usable = lambda top: top.isidentifier() and top not in sys.stdlib_module_names
     imports = {top for name in imported & seen for top in tops_of.get(name, ()) if usable(top)}
     packages = {top for name in seen for top in tops_of.get(name, ()) if usable(top)}
     direct |= packages & IMPORTS_OWN_SUBMODULES
+    direct |= {top for name in lazy for top in tops_of.get(name, ()) if usable(top)}
+    # mypyc's shared module, a top-level extension next to the compiled package, imported only from C (pysr's)
+    imports |= {top for top in packages if top.endswith("__mypyc")}
     return sorted(direct), sorted(packages | direct), sorted(seen), sorted(imports - direct)
 
 
@@ -519,6 +589,9 @@ def _editable_paths(tops):
 NEEDS_SOURCE = {"transformers", "torch"}
 #: Packages that use TorchScript without declaring torch as a dependency (matgl's torch_geometric).
 SOURCE_ALWAYS = {"torch_geometric"}
+#: Packages that open .py files of their own that nothing imports, by path (pettingzoo's atari
+#: environments, read by mpe2): all their .py files are collected as data.
+PY_FILES_AS_DATA = {"pettingzoo"}
 
 
 def _source_hooks(packages, hooks_dir):
@@ -542,7 +615,7 @@ def _source_hooks(packages, hooks_dir):
     for top in packages:
         if f"hook-{top}.py" in existing or top in NEEDS_SOURCE:
             continue
-        if top in SOURCE_ALWAYS:
+        if top in SOURCE_ALWAYS or top in PY_FILES_AS_DATA:
             names.append(top)
             continue
         for dist in by_top.get(top, []):
@@ -557,7 +630,11 @@ def _source_hooks(packages, hooks_dir):
         return None
     hooks_dir.mkdir(parents=True, exist_ok=True)
     for top in names:
-        (hooks_dir / f"hook-{top}.py").write_text("module_collection_mode = 'pyz+py'\n")
+        text = "module_collection_mode = 'pyz+py'\n"
+        if top in PY_FILES_AS_DATA:
+            text += ("from PyInstaller.utils.hooks import collect_data_files\n"
+                     f"datas = collect_data_files({top!r}, include_py_files=True)\n")
+        (hooks_dir / f"hook-{top}.py").write_text(text)
     return hooks_dir
 
 
