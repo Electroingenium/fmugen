@@ -13,8 +13,16 @@ import tempfile
 import zipfile
 from pathlib import Path
 
+from fmugen.arguments import assumptions, guessed_outputs, unfit_outputs
 from fmugen.compose import PARTS_DIR, Composite, combine, is_composite
-from fmugen.config import MODEL_DIR, RESERVED_MODULES, Config, InterfaceError, load_config, normalize
+from fmugen.config import (
+    MODEL_DIR,
+    RESERVED_MODULES,
+    Config,
+    InterfaceError,
+    load_config,
+    normalize,
+)
 from fmugen.description import build_time, stamp_guid, write_model_description
 from fmugen.distribute import (
     COMPILERS,
@@ -24,9 +32,8 @@ from fmugen.distribute import (
 )
 from fmugen.distribute import vendor as vendor_wheels
 from fmugen.interface import import_failure, infer_config, parse_target
-from fmugen.arguments import assumptions, guessed_outputs, unfit_outputs
-from fmugen.toml_output import render_toml
 from fmugen.templates.fmugen_runtime import setup_sys_path
+from fmugen.toml_output import render_toml
 
 #: The installed fmugen package folder.
 PACKAGE_DIR = Path(__file__).resolve().parent
@@ -157,7 +164,7 @@ def _template(args, check):
     if key not in _templates:
         folder = Path(tempfile.mkdtemp(prefix="fmugen-unifmu-"))
         atexit.register(shutil.rmtree, folder, ignore_errors=True)
-        result = subprocess.run([exe, *args], capture_output=True, text=True, cwd=folder)
+        result = subprocess.run([exe, *args], capture_output=True, text=True, cwd=folder, check=False)
         if result.returncode != 0 or not check(folder):
             shutil.rmtree(folder, ignore_errors=True)
             raise InterfaceError(f"`unifmu {' '.join(args)}` failed:\n{result.stdout}{result.stderr}")

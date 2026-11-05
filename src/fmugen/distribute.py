@@ -21,8 +21,8 @@ import subprocess
 import sys
 from pathlib import Path
 
-from fmugen.config import MODEL_DIR, InterfaceError
 from fmugen.arguments import _dotted_names
+from fmugen.config import MODEL_DIR, InterfaceError
 from fmugen.static import packages_distributions
 
 COMPILERS = {"pyinstaller": "PyInstaller", "nuitka": "nuitka"}   # --compile value -> module
@@ -223,7 +223,7 @@ def vendor(requirements, wheels_dir, platforms=(), python_versions=()):
                 cmd += ["--python-version", version] if version else []
                 commands.append(cmd + list(requirements))
     for cmd in commands:
-        result = subprocess.run(cmd, capture_output=True, text=True)
+        result = subprocess.run(cmd, capture_output=True, text=True, check=False)
         if result.returncode != 0:
             raise InterfaceError(f"vendoring {requirements} failed ({' '.join(cmd[len(pip):])}):\n"
                                  f"{result.stdout}{result.stderr}")
@@ -329,7 +329,7 @@ def compile_fmu(compiler, resources, interface, work, requirements=()):
     main.write_text(FROZEN_INTERPRETER + main.read_text(encoding="utf-8"), encoding="utf-8")
     cmd.append(str(main))
 
-    result = subprocess.run(cmd, capture_output=True, text=True, cwd=work, env=env)
+    result = subprocess.run(cmd, capture_output=True, text=True, cwd=work, env=env, check=False)
     if result.returncode != 0 or not built.is_dir():
         # warnings (Nuitka writes hundreds about duplicate data files) would push the error out of the tail
         lines = [line for line in (result.stdout + result.stderr).splitlines()

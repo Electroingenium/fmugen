@@ -190,7 +190,7 @@ def test_optional_from_typing_objects():
     import typing
 
     from fmugen.static import unwrap_optional
-    assert unwrap_optional(typing.Optional[bool]) is bool
+    assert unwrap_optional(typing.Optional[bool]) is bool  # noqa: UP045 (the old spelling is what's tested)
     assert unwrap_optional(int | None) is int
     assert unwrap_optional(int | str) == int | str
 
@@ -544,7 +544,7 @@ def test_factory_annotated_with_a_base_class(tmp_path):
 def test_bytes_dated_series_and_object_arrays_are_outputs(tmp_path):
     # rembg returns PNG bytes, pastas a Series indexed by dates, facenet-pytorch object arrays of
     # numbers: each was left out ("no outputs found")
-    pd = pytest.importorskip("pandas")
+    pytest.importorskip("pandas")
     (tmp_path / "res.py").write_text(textwrap.dedent('''
         import numpy as np, pandas as pd
         def png(n=3):
@@ -602,7 +602,7 @@ def test_a_start_that_cant_be_a_variable_is_a_fixed_value(tmp_path):
         def entities(text, labels, threshold=0.5):
             return {"n": float(len(labels)), "length": float(len(text))}
     '''))
-    data, comments = infer(f"{tmp_path / 'ner.py'}:entities", starts={"text": "Ada", "labels": ["person", "org"]})
+    data, _comments = infer(f"{tmp_path / 'ner.py'}:entities", starts={"text": "Ada", "labels": ["person", "org"]})
     assert data["model"]["constants"] == {"labels": ["person", "org"]}
     assert "labels" not in data.get("inputs", {}) and data["inputs"]["text"]["start"] == "Ada"
     with pytest.raises(InterfaceError, match="can't be an FMU variable"):   # not a literal: can't be written
@@ -731,11 +731,13 @@ def test_requirements_are_the_installed_distributions_the_model_uses(tmp_path):
 
 def test_requirements_skip_a_venv_next_to_the_model(tmp_path):
     import importlib
-    import sys
-    from fmugen.interface import _local_sources
+
     # like cftoc/.venv beside cftoc/CFTOCSolverV2.py: its packages aren't the model's imports,
     # and one of them imports __main__, which has no spec under the fmugen console script
     import importlib.metadata
+    import sys
+
+    from fmugen.interface import _local_sources
     folder = tmp_path / "cftoc"
     (folder / ".venv" / "lib" / "site-packages").mkdir(parents=True)
     (folder / ".venv" / "pyvenv.cfg").write_text("home = /usr/bin\n")
@@ -821,7 +823,7 @@ def test_probe_timeout_stops_the_process(tmp_path):
     (tmp_path / "slow.py").write_text("import time\n\ndef slow(x: float = 1.0):\n    time.sleep(60)\n"
                                       "    return {'y': x}\n")
     result = subprocess.run([sys.executable, "-m", "fmugen", "init", str(tmp_path / "slow.py"), "--probe",
-                             "--probe-timeout", "2"], capture_output=True, text=True, timeout=50)
+                             "--probe-timeout", "2"], capture_output=True, text=True, timeout=50, check=False)
     assert result.returncode == 2 and "did not finish in 2 s" in result.stderr
 
 
@@ -972,7 +974,7 @@ def test_probe_reads_getters_when_the_step_returns_nothing(tmp_path):
             def get_label(self):
                 return {"name": "farm"}     # not an FMI value
     """))
-    data, comments = infer(f"{tmp_path / 'farm.py'}:Farm", call="run", fmi_version=3)
+    data, _comments = infer(f"{tmp_path / 'farm.py'}:Farm", call="run", fmi_version=3)
     outputs = data["outputs"]
     assert outputs["power"] == {"from": "get:get_power"}
     assert outputs["quat"]["from"] == "get:getQuat" and outputs["quat"]["dimensions"] == [4]

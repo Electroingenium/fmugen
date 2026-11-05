@@ -194,7 +194,7 @@ def test_a_generative_model_steps_with_generate_when_forward_fails(tmp_path):
             def generate(self, inputs=None, **kwargs):
                 return [len(kwargs["pixel_values"]), 7]
     ''')
-    data, text = run(f"{path}:Model", tmp_path, starts={"name": "trocr", "pixel_values": [0.5, 0.25]}, probe=True)
+    data, _text = run(f"{path}:Model", tmp_path, starts={"name": "trocr", "pixel_values": [0.5, 0.25]}, probe=True)
     assert data["model"]["create"] == "from_pretrained" and data["model"]["call"] == "generate"
     assert "pixel_values" in data["inputs"]
 
@@ -428,6 +428,7 @@ def test_an_unannotated_argument_is_built_from_the_record_class_it_is_named_afte
 def test_the_runtime_rebuilds_the_record_class_an_argument_is_named_after(tmp_path, monkeypatch):
     import importlib
     import sys
+
     from fmugen.templates.fmugen_runtime._helpers import build_object
     write(tmp_path, "patient_rt.py", '''
         from collections import namedtuple
@@ -502,6 +503,7 @@ def test_the_runtime_file_keeps_every_import_made_inside_a_function(tmp_path):
     # an optional import (numpy) inside a function of one runtime module isn't redundant with the same line in a
     # function of another: dropping it broke every numpy = true array input
     import ast
+
     from fmugen.builder import RUNTIME_SOURCES, _concatenate_runtime
 
     def local_imports(text):

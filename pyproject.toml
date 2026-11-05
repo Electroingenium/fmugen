@@ -68,3 +68,14 @@ markers = [
     "slow: builds compiled FMUs (minutes); deselect with -m \"not slow\"",
     "fmu: runs a built FMU through UniFMU and an importer (seconds each); the in-process loop is -m \"not slow and not fmu\"",
 ]
+
+[tool.ruff.lint]
+ignore = [
+    # init --probe and the runtime call user models: any exception a model raises is information (a retry,
+    # a comment in the config, an FMI error status), so catching Exception, and skipping on it, is the design
+    "BLE001",   # blind-except
+    "S110",     # try-except-pass
+    "S112",     # try-except-continue
+    # long messages are split over lines inside tuples and lists (ASSUMPTIONS, the probe's tries)
+    "ISC004",   # implicit-string-concatenation-in-collection-literal
+]

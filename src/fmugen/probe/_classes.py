@@ -4,22 +4,50 @@ import types
 
 from fmugen import static
 from fmugen.arguments import (
-    PROBED, _apply_converts, _arguments, _fmi_value, _misfit, _only_varargs, _same, _typed, _unfit_value,
+    PROBED,
+    _apply_converts,
+    _arguments,
+    _fmi_value,
+    _misfit,
+    _only_varargs,
+    _same,
+    _typed,
+    _unfit_value,
     _valid_name,
 )
 from fmugen.config import InterfaceError
 from fmugen.probe._arguments import _check_picklable, _state_bytes, _step_method
 from fmugen.probe._base import ConstantError, _requested_outputs, _run_setup
 from fmugen.probe._calling import (
-    _build_set_up, _call_with_probe_inputs, _construct, _probe_call, _rebuild_made_up_as_zero, _rebuild_with_options,
+    _build_set_up,
+    _call_with_probe_inputs,
+    _construct,
+    _probe_call,
+    _rebuild_made_up_as_zero,
+    _rebuild_with_options,
 )
 from fmugen.probe._checks import (
-    _check_sizes, _check_tunable, _environment, _gekko_outputs, _made_up_actions, _made_up_feed,
-    _reset_first, _setup_first, _unfit_properties,
+    _check_sizes,
+    _check_tunable,
+    _environment,
+    _gekko_outputs,
+    _made_up_actions,
+    _made_up_feed,
+    _reset_first,
+    _setup_first,
+    _unfit_properties,
 )
 from fmugen.probe._reading import (
-    _descriptor_values, _dynamic_values, _getter_outputs, _numeric_attributes, _outputs_from_return,
-    _property_values, _snapshot, _table_children, _unreadable, _writable_attribute,
+    _descriptor_values,
+    _dynamic_values,
+    _getter_outputs,
+    _numeric_attributes,
+    _outputs_from_return,
+    _property_values,
+    _snapshot,
+    _table_children,
+    _unreadable,
+    _writable_attribute,
 )
 
 
@@ -101,7 +129,7 @@ def _probe_class(cls, method_name, data, comments, arrays, call_starts, create, 
                    constants_key="call_constants",
                    arrays=arrays, starts=call_starts, probe=True)
     _apply_converts(data, converts)
-    if method_name == "step" and _environment(obj):
+    if method_name == "step" and _environment(obj):  # noqa: SIM102 (the comment is on the inner call)
         # the Gym API resets an environment before its first step; some step without it, from a state that
         # isn't the episode's start (a gym distillation column: its outputs are left unset)
         if _reset_first(obj, method_name, data, comments,
@@ -254,7 +282,6 @@ def _forwarded(method, method_name, owner):
     :param owner: the class (unbound methods) or the object (bound ones).
     :return: ``owner.forward``, or ``method``.
     """
-    from fmugen.arguments import _only_varargs
     forward = getattr(owner, "forward", None)
     if method_name == "__call__" and callable(forward) \
             and _only_varargs(method, skip_self=not inspect.ismethod(method)) \

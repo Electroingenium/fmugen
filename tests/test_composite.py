@@ -46,7 +46,7 @@ def write_composite(tmp_path, connections=("valve.flow -> tank.inflow", "tank.le
 def closed_loop(steps, setpoint=2.0):
     """The same loop, run directly in Python."""
     namespace = {}
-    exec(TANK + VALVE, namespace)
+    exec(TANK + VALVE, namespace)  # noqa: S102 (the test's own model source)
     tank, levels = namespace["Tank"](), []
     for _ in range(steps):
         flow = namespace["valve"](level=tank.level, setpoint=setpoint)["flow"]

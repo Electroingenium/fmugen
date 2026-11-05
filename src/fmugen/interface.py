@@ -26,19 +26,44 @@ import typing
 from pathlib import Path
 
 from fmugen import static
-from fmugen.config import InterfaceError, stdlib_clash
-from fmugen.toml_output import render_toml
 from fmugen.arguments import (
-    SCALARS, POSITIONAL_STARTS, START_ERRORS, NO_SIGNATURE, PROBED,
-    _number_like, _array_info, _dotted_names, _arguments, _apply_converts,
-    _assign_starts, assumptions, guessed_outputs, unfit_outputs, class_called, _only_varargs, _time_source,
-    _extra_info, _given_constant, _const_entry,
+    NO_SIGNATURE,
+    POSITIONAL_STARTS,
+    PROBED,
+    SCALARS,
+    START_ERRORS,
+    _apply_converts,
+    _arguments,
+    _array_info,
+    _assign_starts,
+    _const_entry,
+    _dotted_names,
+    _extra_info,
+    _given_constant,
+    _number_like,
+    _only_varargs,
+    _time_source,
+    class_called,
 )
+from fmugen.config import InterfaceError, stdlib_clash
 from fmugen.probe import (
-    ConstantError, _run_setup, _probe_call, _probe_class, _forwarded,
-    _outputs_from_return, _add_returned, _add_attributes, _detect_states,
-    _taken, _split_varargs, _varargs_by_keyword, MADE_UP_TEXT, object_names,
-    _requested_outputs, REQUESTED_READS, READ_ERRORS,
+    MADE_UP_TEXT,
+    READ_ERRORS,
+    REQUESTED_READS,
+    ConstantError,
+    _add_attributes,
+    _add_returned,
+    _detect_states,
+    _forwarded,
+    _outputs_from_return,
+    _probe_call,
+    _probe_class,
+    _requested_outputs,
+    _run_setup,
+    _split_varargs,
+    _taken,
+    _varargs_by_keyword,
+    object_names,
 )
 
 #: Step method names tried in order when a class is given without ``--call``.
@@ -171,7 +196,7 @@ def infer_config(target, call=None, config_dir=None, fmi_version=None, starts=No
     REQUESTED_READS.update(reads or {})
     READ_ERRORS.clear()
     try:
-        with contextlib.chdir(config_dir), _source_reads() as reads:
+        with contextlib.chdir(config_dir), _source_reads() as source_reads:
             if probe is True or not probe:
                 data, comments = _infer_config(target, call, config_dir, fmi_version, starts, setup, kind, create,
                                                probe, converts)
@@ -186,8 +211,8 @@ def infer_config(target, call=None, config_dir=None, fmi_version=None, starts=No
         _factory_models.clear()
         REQUESTED_READS.clear()
         READ_ERRORS.clear()
-    if reads:
-        shown = ", ".join(sorted(reads)[:3]) + (f" and {len(reads) - 3} more" if len(reads) > 3 else "")
+    if source_reads:
+        shown = ", ".join(sorted(source_reads)[:3]) + (f" and {len(source_reads) - 3} more" if len(source_reads) > 3 else "")
         comments[("model", "#compile")] = (f"--compile won't work: the model's libraries read their own source files "
                                            f"by path ({shown}), and a compiled FMU has none; build without --compile, "
                                            "or with --vendor")
@@ -420,7 +445,7 @@ STRING_ATTRIBUTES = {"strip", "lower", "upper", "split", "startswith", "endswith
                      "isdigit", "isalpha", "rstrip", "lstrip", "partition", "format"}
 #: An error asking for a dict: river's "'float' object is not an instance of 'dict'".
 DICT_ASKED = re.compile(r"instance of '?dict|must be (?:a )?dict|expected (?:a )?dict|"
-                        r"'(?:float|int)' object has no attribute '(?:items|keys|get)'|not a mapping", re.I)
+                        r"'(?:float|int)' object has no attribute '(?:items|keys|get)'|not a mapping", re.IGNORECASE)
 #: "KeyError('n_estimators')": the argument is a dict with that key.
 MISSING_KEY = re.compile(r"KeyError\('(\w+)'\)")
 #: An error asking for a pandas object: pylife's "An accessor object needs to be either a pandas.Series or a
@@ -654,7 +679,7 @@ def _shaped_starts(data, comments, starts, shaped):
 
 
 #: The message inside a probe failure: "probe construction failed (TypeError('Could not interpret ...: 1.0'))".
-FAILURE_MESSAGE = re.compile(r"probe (?:construction|call) failed \(\w+\(['\"](.*?)(?:['\"]\)\)|$)", re.S)
+FAILURE_MESSAGE = re.compile(r"probe (?:construction|call) failed \(\w+\(['\"](.*?)(?:['\"]\)\)|$)", re.DOTALL)
 #: A string literal that may be a name an argument is compared with: "tanh", "Glorot normal", "fan_in".
 NAME_LITERAL = re.compile(r"^[A-Za-z][\w .-]{0,30}$")
 
@@ -718,7 +743,7 @@ TORCHSCRIPT_DECLARATION = re.compile(r"is missing value for argument '\w+'\. Dec
 TORCHSCRIPT_MADE_UP = {"Tensor": {"call": "torch:ones(1, 512)"}, "int": 1, "float": 1.0, "bool": False}
 #: An error listing the values a number may take: silero's "Supported sampling rates: [8000, 16000]".
 ALLOWED_VALUES = re.compile(r"(?:supported|one of|allowed|valid|must be in)[^\[\]()]{0,40}[\[(]((?:\s*-?\d+(?:\.\d+)?\s*,)+"
-                            r"\s*-?\d+(?:\.\d+)?\s*)[\])]", re.I)
+                            r"\s*-?\d+(?:\.\d+)?\s*)[\])]", re.IGNORECASE)
 
 
 def _example_value(entry_ref, name):
@@ -893,7 +918,7 @@ ATOMS_ATTRIBUTES = {"symbols", "pbc", "positions", "cell", "numbers", "get_posit
 #: A made-up ASE ``Atoms``: a water molecule in a 10 Å box.
 MADE_UP_ATOMS = "ase.build:molecule('H2O', vacuum=5.0)"
 #: An argument holding both a molecule's atoms and their positions: torchani's ``species_coordinates``.
-MOLECULE_NAME = re.compile(r"(species|numbers|atoms).*(coord|position)", re.I)
+MOLECULE_NAME = re.compile(r"(species|numbers|atoms).*(coord|position)", re.IGNORECASE)
 #: An annotation naming a pymatgen crystal structure: chgnet's ``structure: Structure | Sequence[Structure]``.
 STRUCTURE_ANNOTATION = re.compile(r"\bStructure\b")
 #: A made-up pymatgen ``Structure``: aluminium, face-centred cubic.
@@ -901,7 +926,7 @@ MADE_UP_STRUCTURE = "pymatgen.core:Structure.from_spacegroup('Fm-3m', pymatgen.c
 #: A made-up molecule as (atomic numbers, positions in Å), a batch of one: water.
 MADE_UP_MOLECULE = ([[8, 1, 1]], [[[0.0, 0.0, 0.0], [0.96, 0.0, 0.0], [-0.24, 0.93, 0.0]]])
 #: An error about a time series: pastas' "The dtype of the values of the series 'None' is not float".
-SERIES_ASKED = re.compile(r"\bseries\b|DatetimeIndex|PeriodIndex", re.I)
+SERIES_ASKED = re.compile(r"\bseries\b|DatetimeIndex|PeriodIndex", re.IGNORECASE)
 #: A made-up dated series (:data:`SERIES_ASKED`): 24 daily values going up and down.
 MADE_UP_SERIES = f"pandas:Series({[1.0, 1.5, 2.0, 2.5, 3.0, 2.5, 2.0, 1.5] * 3}, " \
                  "index=pandas.date_range('2020-01-01', periods=24))"
@@ -912,7 +937,7 @@ NOT_CALLABLE = re.compile(r"'(?:float|int)' object is not callable|must be (?:a 
 #: Names of arguments that are a function: numdifftools' ``fun``, scipy-like ``func``, ``callback``.
 FUNCTION_NAME = re.compile(r"^(fun|func|function|fn|f|callback|objective)$")
 #: An error asking for a jax random key: equinox's "invalid PRNG key data".
-PRNG_ASKED = re.compile(r"PRNG ?key", re.I)
+PRNG_ASKED = re.compile(r"PRNG ?key", re.IGNORECASE)
 #: A class name in an error or a docstring's type line: "a Transfer or a State", "Borehole object".
 CLASS_WORD = re.compile(r"\b([A-Z][a-z0-9]+(?:[A-Z][a-z0-9]*)*)\b")
 
@@ -2161,7 +2186,7 @@ def _pick_method(cls, starts=None, constructor=None):
                                         "calculate() only fills its results (pass --call METHOD to choose another)")
     forward = getattr(cls, "forward", None)
     if left and callable(forward) and _only_varargs(forward) and _only_varargs(getattr(cls, "__call__", None)) \
-            and all("forward" in m for m in fitting):
+            and all("forward" in m for m in fitting):  # noqa: B004 (fetches the method)
         # a torch module whose forward(*args) dispatches (spikingjelly's single_step_forward / multi_step_forward;
         # not gliner's, whose predict_entities(text, labels) the names fit)
         return "forward", f"forward(): {cls.__name__}() runs it, and it takes any arguments"
@@ -2405,7 +2430,7 @@ def _variant_of(name, other):
 
 
 #: A numpydoc section header: the name, then a line of dashes.
-_SECTION = re.compile(r"^(\w[\w ]*)\n-{3,}\n", re.M)
+_SECTION = re.compile(r"^(\w[\w ]*)\n-{3,}\n", re.MULTILINE)
 #: A numpydoc entry: ``name : type`` at the section's indentation (or ``name`` alone).
 _ENTRY = re.compile(r"^(\w+)\s*(?::\s*(.*))?$")
 #: A unit in square brackets: ``Temperature, [K]``.
@@ -2512,9 +2537,9 @@ def docstring_parameters(*objects):
 
 #: Words of a numpydoc type line that mean an array.
 _ARRAY_WORDS = re.compile(r"\b(array_like|array-like|ndarray|array|arrays|matrix|tensor|sequence of|list of|"
-                          r"iterable of|vector)\b", re.I)
+                          r"iterable of|vector)\b", re.IGNORECASE)
 #: A shape in a numpydoc entry: ``shape (4,)``, ``of shape (n_samples, n_features)``, ``shape=(n, 3)``.
-_SHAPE = re.compile(r"shape\s*(?:of\s*|=\s*|:\s*)?[(\[]([^)\]]*)[)\]]", re.I)
+_SHAPE = re.compile(r"shape\s*(?:of\s*|=\s*|:\s*)?[(\[]([^)\]]*)[)\]]", re.IGNORECASE)
 #: The size made up for a dimension a docstring names but doesn't fix (``n_samples``).
 MADE_UP_SIZE = 3
 
@@ -3245,7 +3270,7 @@ def _missing_data(data, comments, starts):
                 found.setdefault(name, f"made up as {value.get('call', value.get('python', value)) if isinstance(value, dict) else value}")
     if factory is not None and not data["model"].get("call"):
         # the model a factory returns, which the FMU never calls: its forward's (or __call__'s) data arguments
-        method = getattr(type(factory), "forward", None) or getattr(type(factory), "__call__", None)
+        method = getattr(type(factory), "forward", None) or getattr(type(factory), "__call__", None)  # noqa: B004 (fetches the method)
         try:
             params = inspect.signature(method).parameters
         except (TypeError, ValueError):

@@ -93,7 +93,7 @@ def run(cmd):
     :type cmd: list[str]
     :raises RuntimeError: a non-zero exit code; the message holds the combined output.
     """
-    result = subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True)
+    result = subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True, check=False)
     if result.returncode != 0:
         raise RuntimeError("command failed: " + " ".join(cmd) + "\n" + result.stdout)
 

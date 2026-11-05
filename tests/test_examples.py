@@ -65,7 +65,7 @@ def test_a_set_up_with_arithmetic_is_left_out_not_the_whole_example(tmp_path):
             h = t.advance(q=1.2)
         ```
     """)
-    data, text = run(f"{path}:Tank", tmp_path)
+    data, _text = run(f"{path}:Tank", tmp_path)
     assert data["model"]["call"] == "advance" and "setup" not in data["model"]
     assert data["parameters"]["area"]["start"] == 2.5
 
@@ -299,7 +299,7 @@ def test_sizes_are_made_up_as_integers_then_as_lists(tmp_path):
             def predict(self, x):
                 return {"y": sum(self.weights) * x}
     """)
-    data, text = run(f"{path}:Net", tmp_path, probe=True)
+    data, _text = run(f"{path}:Net", tmp_path, probe=True)
     assert data["parameters"]["hidden_size"]["start"] == 1 and data["outputs"]
     assert "dimensions" in data["parameters"]["n_modes"]   # a sequence: arrays of ones, else lists
 
@@ -642,7 +642,7 @@ def test_a_dict_argument_is_made_up_from_the_error(tmp_path):
                 self.total = sum(x.values())
                 return self.total
     """)
-    data, text = run(f"{path}:Learner", tmp_path, probe=True, call="learn")
+    data, _text = run(f"{path}:Learner", tmp_path, probe=True, call="learn")
     assert data["inputs"]["a"]["to"] == "arg:x[a]" and "y" in data["outputs"]
 
 
@@ -692,7 +692,7 @@ def test_a_made_up_number_the_model_refuses_is_tried_larger(tmp_path):
             def modulate(self, bits):
                 return bits * self.m
     """)
-    data, text = run(f"{path}:Modem", tmp_path, probe=True, call="modulate")
+    data, _text = run(f"{path}:Modem", tmp_path, probe=True, call="modulate")
     assert data["parameters"]["m"]["start"] == 4
 
 
@@ -728,7 +728,7 @@ def test_an_example_value_with_arithmetic_is_computed(tmp_path):
         f.fit(np.stack((2 * np.ones(3), np.zeros(3)), axis=-1))
         ```
     """)
-    data, text = run(f"{path}:Fitter", tmp_path, probe=True, call="fit")
+    data, _text = run(f"{path}:Fitter", tmp_path, probe=True, call="fit")
     assert data["inputs"]["x"]["start"] == [2.0, 0.0, 2.0, 0.0, 2.0, 0.0]
 
 
@@ -780,7 +780,7 @@ def test_a_name_argument_is_made_up_as_a_name_the_failing_code_looks_up(tmp_path
             def forward(self, x):
                 return self.f(x)
     """)
-    data, text = run(f"{path}:Net", tmp_path, probe=True, call="forward")
+    data, _text = run(f"{path}:Net", tmp_path, probe=True, call="forward")
     assert data["parameters"]["activation"]["start"] == "relu" and "y" in data["outputs"]
 
 
@@ -809,7 +809,7 @@ def test_a_function_argument_left_none_is_made_up_as_a_function(tmp_path):
                 assert self.fun is not None
                 return (self.fun(x + 1e-6) - self.fun(x)) / 1e-6
     """)
-    data, text = run(f"{path}:Derivative", tmp_path, probe=True, call="__call__")
+    data, _text = run(f"{path}:Derivative", tmp_path, probe=True, call="__call__")
     assert data["model"]["constants"]["fun"] == {"call": "numpy:sin"} and "y" in data["outputs"]
 
 
@@ -822,7 +822,7 @@ def test_a_time_argument_that_must_be_positive_is_made_up(tmp_path):
                 self.rate_ = x / t
                 return self
     """)
-    data, text = run(f"{path}:Identifier", tmp_path, probe=True, call="fit")
+    data, _text = run(f"{path}:Identifier", tmp_path, probe=True, call="fit")
     assert data["inputs"]["t"]["start"] == 1.0 and "rate_" in data["outputs"]
 
 
@@ -859,7 +859,7 @@ def test_a_set_up_the_step_needs_gets_made_up_arrays(tmp_path):
             def solve(self):
                 return self._size * 2.0
     """)
-    data, text = run(f"{path}:Solver", tmp_path, probe=True, call="solve")
+    data, _text = run(f"{path}:Solver", tmp_path, probe=True, call="solve")
     assert data["model"]["setup"] == ["setup(numpy.ones((1, 1)), numpy.ones(1))"] and "y" in data["outputs"]
 
 

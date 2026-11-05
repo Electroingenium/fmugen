@@ -31,7 +31,7 @@ _FENCE = re.compile(r"^[ \t]*(```+|~~~+)[ \t]*([\w+-]*)")
 #: The languages of a fenced block read as Python (none: often Python in a Python package's README).
 PYTHON_FENCES = ("", "python", "py", "python3", "pycon", "ipython")
 _RST = re.compile(r"^\.\. (?:code-block|code|sourcecode)::[ \t]*(?:python|py|python3|pycon)?[ \t]*\n"
-                  r"(?:[ \t]+:\w[\w-]*:.*\n)*\n?((?:[ \t]+.*\n|[ \t]*\n)+)", re.M)
+                  r"(?:[ \t]+:\w[\w-]*:.*\n)*\n?((?:[ \t]+.*\n|[ \t]*\n)+)", re.MULTILINE)
 
 
 @dataclass
@@ -305,9 +305,7 @@ def _statements(body, loop=0):
         elif isinstance(node, (ast.If, ast.With, ast.AsyncWith)):
             yield from _statements(node.body, loop)
             yield from _statements(getattr(node, "orelse", []), loop)
-        elif isinstance(node, ast.Try):
-            yield from _statements(node.body, loop)
-        elif isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)) and not node.args.args:
+        elif isinstance(node, ast.Try) or isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)) and not node.args.args:
             yield from _statements(node.body, loop)
         else:
             yield node, loop

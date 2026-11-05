@@ -1,7 +1,4 @@
 """Standalone utility functions used by Engine, CompositeEngine and the build-time tools."""
-from fmugen.templates.fmugen_runtime._constants import (
-    FLOAT_TYPES, INT_RANGES, TRUE_STRINGS, FALSE_STRINGS, SPEC_VERSION, DEFAULT_VALUES, Status,
-)
 import ast
 import builtins
 import contextlib
@@ -11,22 +8,24 @@ import datetime
 import importlib
 import inspect
 import itertools
-import json
 import logging
-import math
 import os
 import pickle
 import random
 import sys
 import tempfile
-import traceback
 import types
 import typing
-import warnings
 from collections.abc import Iterable, Iterator, Mapping
 from fractions import Fraction
 from pathlib import Path
 
+from fmugen.templates.fmugen_runtime._constants import (
+    FALSE_STRINGS,
+    FLOAT_TYPES,
+    INT_RANGES,
+    TRUE_STRINGS,
+)
 
 # ================= helpers =================
 
@@ -1044,7 +1043,7 @@ def _capture_output(enabled):
     for stream in (sys.stdout, sys.stderr):
         with contextlib.suppress(Exception):
             stream.flush()
-    sink = tempfile.TemporaryFile()
+    sink = tempfile.TemporaryFile()  # noqa: SIM115 (kept open until _release_output closes it)
     for fd in (1, 2):
         with contextlib.suppress(OSError):
             _CONSOLE.setdefault(fd, os.dup(fd))

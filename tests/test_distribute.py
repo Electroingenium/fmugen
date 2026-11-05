@@ -33,7 +33,7 @@ def test_nuitka_gets_package_options_only_for_packages():
     expected = ["--include-package-data=matplotlib", "--include-package=matplotlib", "--include-module=six"]
     packages, direct = ["matplotlib", "pylab", "six", "not_installed_anywhere"], ["matplotlib", "six"]
     assert _nuitka_package_args(packages, direct) == expected
-    import six   # once imported, six's spec has __path__ = [] (for six.moves), as during a build
+    import six  # once imported, six's spec has __path__ = [] (for six.moves), as during a build
     assert six.__spec__.submodule_search_locations == []
     assert _nuitka_package_args(packages, direct) == expected
 
@@ -109,7 +109,7 @@ def test_packages_that_import_their_own_submodules_are_collected_whole(monkeypat
     # pyomo.environ imports its plugins by name; pyomo is only a dependency of OpenHENS
     from fmugen import distribute
     monkeypatch.setattr(distribute, "IMPORTS_OWN_SUBMODULES", {"numpy"})
-    direct, packages, _, imports = distribute._packages(["fmpy.simulation"])
+    direct, _packages, _, imports = distribute._packages(["fmpy.simulation"])
     assert "numpy" in direct and "numpy" not in imports   # a dependency of fmpy, collected with its submodules
 
 
@@ -140,10 +140,10 @@ def test_libraries_built_on_torch_ship_their_sources(tmp_path, monkeypatch):
     # TorchScript compiles functions when mace or norse is imported, and reads their source to do it
     from fmugen import distribute
     monkeypatch.setattr(distribute, "packages_distributions", lambda: {"torchlib": ["torchlib"]})
-    monkeypatch.setattr(distribute, "_hook_dirs", lambda: [])
+    monkeypatch.setattr(distribute, "_hook_dirs", list)
 
     class Dist:
-        requires = ["torch>=2", "numpy"]
+        requires = ("torch>=2", "numpy")
 
     import importlib.metadata as md
     monkeypatch.setattr(md, "distribution", lambda name: Dist())
@@ -155,6 +155,7 @@ def test_editable_installs_are_put_on_the_freezer_path(tmp_path, monkeypatch):
     # pip install -e: an import hook finds the project, which isn't on sys.path (the debutanizer project)
     import importlib.machinery
     import sys
+
     from fmugen.distribute import _editable_paths
     project = tmp_path / "project"
     (project / "debutanizer_like").mkdir(parents=True)

@@ -4,7 +4,6 @@ import datetime
 from fmugen.arguments import _fmi_value, _scalar_of, _typed
 from fmugen.config import InterfaceError
 
-
 #: Step size (and end time) passed to a probe call's time arguments.
 PROBE_STEP_SIZE = 1.0
 

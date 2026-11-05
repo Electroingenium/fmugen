@@ -5,9 +5,9 @@ import textwrap
 
 import pytest
 
+from fmugen.__main__ import _parse_consts, _parse_starts, _starts_and_consts
 from fmugen.builder import init, isolated_imports
 from fmugen.config import InterfaceError
-from fmugen.__main__ import _parse_consts, _parse_starts, _starts_and_consts
 from fmugen.interface import infer_config
 
 

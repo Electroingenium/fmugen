@@ -624,7 +624,7 @@ def test_dotted_path_reads_items_of_objects_with_getitem():
     from fmugen.templates.fmugen_runtime import get_path
 
     class Solution:   # like pybamm's Solution: not a mapping, variables built on demand by key
-        t = [0.0, 100.0]
+        t = (0.0, 100.0)
 
         def __getitem__(self, key):
             if key != "Voltage [V]":

@@ -129,7 +129,6 @@ class InterfaceError(ValueError):
     The CLI prints its message and exits with an error; ``fmugen init`` turns some of them into
     warnings.
     """
-    pass
 
 
 class Config:
@@ -617,8 +616,8 @@ def normalize(config, entry_obj, module_name, sys_path, model_name=None, author=
     for var in variables:
         var["valueReference"] = vr
         vr += element_count(var) if version == 2 else 1   # FMI 2: an array takes one reference per element
-    for vr, clock in enumerate(clocks, start=vr):
-        clock["valueReference"] = vr
+    for ref, clock in enumerate(clocks, start=vr):
+        clock["valueReference"] = ref
 
     inputs = {v["name"] for v in variables if v["causality"] == "input"}
     for var in variables:

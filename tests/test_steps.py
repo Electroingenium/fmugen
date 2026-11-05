@@ -66,7 +66,7 @@ def test_discard_in_fmi3_reports_the_time_reached(tmp_path, make_fmu, adapter):
     fmu = adapter(make_fmu(tmp_path), fmi=3)
     fmu.initialize()
     assert fmu.set("x", -1.0) == OK
-    status, event_needed, terminate, early_return, last_time = fmu.fmi3DoStep(0.0, 1.0, False)
+    status, event_needed, _terminate, early_return, last_time = fmu.fmi3DoStep(0.0, 1.0, False)
     assert (status, event_needed, early_return, last_time) == (DISCARD, False, False, 0.0)
 
 

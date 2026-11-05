@@ -8,7 +8,6 @@ import json
 import logging
 import math
 import os
-import pickle
 import sys
 import traceback
 import warnings
@@ -16,16 +15,43 @@ from collections.abc import Mapping
 from pathlib import Path
 
 from fmugen.templates.fmugen_runtime._constants import (
-    DEFAULT_VALUES, INTERVAL_CHANGED, INTERVAL_NOT_YET_KNOWN, INTERVAL_UNCHANGED,
-    Status, StepRejected,
+    DEFAULT_VALUES,
+    INTERVAL_CHANGED,
+    INTERVAL_NOT_YET_KNOWN,
+    INTERVAL_UNCHANGED,
+    Status,
+    StepRejected,
 )
 from fmugen.templates.fmugen_runtime._helpers import (
-    _capture_output, _release_output, _clock_of, _is_number, _quiet_debug_logging,
-    assemble_items, coerce, converter, describe, dump_state,
-    flatten, get_path, is_literal_constant, keyword_constants,
-    load_entry, load_state, object_call, outside_bundle, pick, plain_number, reshape,
-    resolve_constant, resolve_reference, results_of, rng_states, set_path,
-    set_rng_states, split_global, uses_self,
+    _capture_output,
+    _clock_of,
+    _is_number,
+    _quiet_debug_logging,
+    _release_output,
+    assemble_items,
+    coerce,
+    converter,
+    describe,
+    dump_state,
+    flatten,
+    get_path,
+    is_literal_constant,
+    keyword_constants,
+    load_entry,
+    load_state,
+    object_call,
+    outside_bundle,
+    pick,
+    plain_number,
+    reshape,
+    resolve_constant,
+    resolve_reference,
+    results_of,
+    rng_states,
+    set_path,
+    set_rng_states,
+    split_global,
+    uses_self,
 )
 
 
@@ -704,7 +730,7 @@ class Engine:
                     return self.error(f"{name}: the model object has no attribute {var['attr']!r} to tune; "
                                       f"set attr = \"...\" in the config to the attribute that holds {name}")
                 status = self.run(f"setting {name}",
-                                  lambda: setattr(self.obj, var["attr"], self._to_python(var, self.values[name])))
+                                  lambda var=var, name=name: setattr(self.obj, var["attr"], self._to_python(var, self.values[name])))
                 if status != Status.ok:
                     return status
                 self.run("updating calculated parameters", self._refresh_calculated_parameters)
@@ -1654,7 +1680,7 @@ class Engine:
             result = self._call(t, step_size)
             derivatives = []
             for v, n in zip(states, sizes):
-                found, value = self._source_value(v["der"], result, True)
+                _found, value = self._source_value(v["der"], result, True)
                 value = plain_number(value)
                 flat = flatten(value.tolist() if hasattr(value, "tolist") else value)
                 if len(flat) != n:

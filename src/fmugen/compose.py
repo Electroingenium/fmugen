@@ -15,7 +15,13 @@ import keyword
 import tomllib
 from pathlib import Path
 
-from fmugen.config import FMI_VERSIONS, INT_TYPES, InterfaceError, element_count, load_config
+from fmugen.config import (
+    FMI_VERSIONS,
+    INT_TYPES,
+    InterfaceError,
+    element_count,
+    load_config,
+)
 from fmugen.templates.fmugen_runtime import SPEC_VERSION
 
 #: Keys allowed in ``[composite]``.
@@ -243,8 +249,8 @@ def combine(composite, interfaces, version, model_name=None, author=None):
     # clocks for FMI 2)
     clocks = [dict(clock, name=f"{part}.{clock['name']}", part=part, local=clock["valueReference"])
               for part, interface in interfaces.items() for clock in interface.get("clocks", [])]
-    for vr, clock in enumerate(clocks, start=vr):
-        clock["valueReference"] = vr
+    for ref, clock in enumerate(clocks, start=vr):
+        clock["valueReference"] = ref
 
     experiment = dict(composite.experiment)
     fixed = {i.get("experiment", {}).get("step_size") for i in interfaces.values()

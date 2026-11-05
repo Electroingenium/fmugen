@@ -43,7 +43,7 @@ def test_large_console_output_reaches_the_log_instead_of_crashing(tmp_path):
     with log.open("w") as out:   # a file, not a pipe: a hung backend would keep a pipe open past the timeout
         try:
             subprocess.run([sys.executable, str(tmp_path / "simulate.py"), str(fmu)],
-                           stdout=out, stderr=subprocess.STDOUT, timeout=120)
+                           stdout=out, stderr=subprocess.STDOUT, timeout=120, check=False)
         except subprocess.TimeoutExpired:
             pass
     text = log.read_text(errors="replace")
@@ -85,7 +85,7 @@ def test_an_import_error_at_instantiation_is_not_captured_away(tmp_path):
     with log.open("w") as out:   # a file, not a pipe: a backend left running would keep a pipe open
         try:
             subprocess.run([sys.executable, str(tmp_path / "simulate.py"), str(fmu)],
-                           stdout=out, stderr=subprocess.STDOUT, timeout=120)
+                           stdout=out, stderr=subprocess.STDOUT, timeout=120, check=False)
         except subprocess.TimeoutExpired:
             pass
     text = log.read_text(errors="replace")
@@ -132,7 +132,7 @@ def test_fmi2_log_messages_with_percent_signs_reach_the_importer(tmp_path):
     with log.open("w") as out:   # a file, not a pipe: a backend left running would keep a pipe open
         try:
             subprocess.run([sys.executable, str(tmp_path / "simulate.py"), str(fmu)],
-                           stdout=out, stderr=subprocess.STDOUT, timeout=120)
+                           stdout=out, stderr=subprocess.STDOUT, timeout=120, check=False)
         except subprocess.TimeoutExpired:
             pass
     text = log.read_text(errors="replace")

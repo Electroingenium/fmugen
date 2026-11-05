@@ -11,12 +11,10 @@
 """
 import argparse
 import re
-import sys
 
 from fmugen.builder import FORMATS, build, init
 from fmugen.config import InterfaceError
 from fmugen.distribute import COMPILERS
-
 
 #: An output name for ``--read``: dotted names are allowed, as the probe writes them.
 _OUTPUT_NAME = re.compile(r"[A-Za-z_]\w*(\.\w+)*")

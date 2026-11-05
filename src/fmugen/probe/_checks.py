@@ -9,13 +9,29 @@ from collections.abc import Mapping
 
 from fmugen import static
 from fmugen.arguments import (
-    _array_info, _fmi_value, _same, _scalar_of, _typed, _unfit, _unfit_value, _valid_name,
+    _array_info,
+    _fmi_value,
+    _same,
+    _scalar_of,
+    _typed,
+    _unfit,
+    _unfit_value,
+    _valid_name,
 )
 from fmugen.probe._arguments import _step_method
-from fmugen.probe._calling import _build_set_up, _call_with_probe_inputs, _made_up_training, _probe_call
-from fmugen.probe._reading import _numeric_attributes, _property_values, _snapshot, _writable_attribute
+from fmugen.probe._calling import (
+    _build_set_up,
+    _call_with_probe_inputs,
+    _made_up_training,
+    _probe_call,
+)
+from fmugen.probe._reading import (
+    _numeric_attributes,
+    _property_values,
+    _snapshot,
+    _writable_attribute,
+)
 from fmugen.toml_output import _key
-
 
 #: ONNX element types (``tensor(float)``) as numpy dtypes.
 ONNX_TYPES = {"float": "float32", "double": "float64", "float16": "float16", "int64": "int64", "int32": "int32",
@@ -30,7 +46,7 @@ def _made_up_feed(obj, method_name, call_starts, comments):
     if method_name != "run" or "input_feed" in call_starts or importlib.util.find_spec("numpy") is None:
         return
     try:
-        params = inspect.signature(getattr(obj, "run")).parameters
+        params = inspect.signature(obj.run).parameters
         specs = list(obj.get_inputs())
         feed = {}
         for spec in specs:
@@ -58,7 +74,7 @@ def _made_up_actions(obj, method_name, call_starts, comments):
     if method_name != "step" or "actions" in call_starts:
         return
     try:
-        if "actions" not in inspect.signature(getattr(obj, "step")).parameters:
+        if "actions" not in inspect.signature(obj.step).parameters:
             return
         agents = list(getattr(obj, "possible_agents", None) or getattr(obj, "agents", None) or [])
         actions = {}
@@ -142,7 +158,7 @@ def _reset_first(obj, method_name, data, comments, why=None):
 #: "not fitted yet. Call 'fit'", "not initialized yet. Call 'initialize'".
 SET_UP_ASKED = re.compile(r"\bfirst\b|\bbefore\b|\bthen\b|not (?:yet )?(?:been )?(?:fit|fitted|initiali[sz]ed|compiled|set ?up)\b"
                           r"|\bhas not been\b|\bmust (?:first )?(?:call|run)\b"
-                          r"|\bnot having (?:been )?(?:fit|fitted|trained)\b|\bnot (?:yet )?(?:been )?trained\b", re.I)
+                          r"|\bnot having (?:been )?(?:fit|fitted|trained)\b|\bnot (?:yet )?(?:been )?trained\b", re.IGNORECASE)
 
 
 #: Method names (or prefixes, ending in _) that train the model on the user's data: a set-up the user
@@ -208,8 +224,8 @@ def _setup_first(build, obj, method_name, error, data, comments):
         # a seed it takes is given, so the FMU gives the same results every run (gymnasium's reset(seed=None))
         seeded = "seed" in signature and signature["seed"].default is None
         worked = False
-        for made in (m for made in _made_up_variants(getattr(obj, name), params)
-                     for m in ([*made, "seed=0"], made)[0 if seeded else 1:]):
+        for made in (m for variant in _made_up_variants(getattr(obj, name), params)
+                     for m in ([*variant, "seed=0"], variant)[0 if seeded else 1:]):
             step = f"{name}({', '.join(made)})"
             setup = [*data["model"].get("setup", []), step]
             trial = dict(data, model=dict(data["model"], setup=setup))

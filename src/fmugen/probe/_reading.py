@@ -8,7 +8,15 @@ import types
 from collections.abc import Mapping
 
 from fmugen.arguments import (
-    _array_info, _dotted_name, _fmi_value, _misfit, _same, _scalar_of, _state_base, _typed, _unfit_value,
+    _array_info,
+    _dotted_name,
+    _fmi_value,
+    _misfit,
+    _same,
+    _scalar_of,
+    _state_base,
+    _typed,
+    _unfit_value,
     _valid_name,
 )
 

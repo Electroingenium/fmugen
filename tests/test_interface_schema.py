@@ -3,10 +3,9 @@ from importlib.resources import files
 
 import jsonschema
 import pytest
-
-from fmugen.builder import build
 from test_composite import write_composite
 
+from fmugen.builder import build
 
 SCHEMA = json.loads(files("fmugen").joinpath("interface.schema.json").read_text())
 

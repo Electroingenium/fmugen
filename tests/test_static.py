@@ -5,8 +5,8 @@ import tomllib
 
 import pytest
 
-from fmugen.builder import init, isolated_imports
 from fmugen.__main__ import _parse_converts
+from fmugen.builder import init, isolated_imports
 from fmugen.config import InterfaceError
 from fmugen.interface import infer_config
 from fmugen.toml_output import render_toml

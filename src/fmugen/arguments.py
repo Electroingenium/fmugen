@@ -4,18 +4,17 @@ import dataclasses
 import datetime
 import enum
 import inspect
-import types
-import json
 import keyword
 import math
 import re
 import sys
 import textwrap
+import types
 import typing
 
 from fmugen import static
 from fmugen.config import InterfaceError
-from fmugen.toml_output import _key, _value
+from fmugen.toml_output import _key
 
 #: Argument names (lower case, without ``_``) taken as ``[time]`` arguments, and their source.
 TIME_NAMES = {"t": "time", "time": "time", "currenttime": "time", "tcurrent": "time", "tnow": "time",
@@ -55,7 +54,7 @@ def _horizon(p):
     return bool(annotation_ints) or default is None or isinstance(default, int) and not isinstance(default, bool)
 
 #: Words in a docstring's text of an argument that make it an array: ``t : np.ndarray``, ``Vector of times``.
-_ARRAY_WORDS = re.compile(r"\b(?:nd)?arrays?\b|array[_-]like|\bvectors?\b|\bsequence\b|\blist\b|linspace", re.I)
+_ARRAY_WORDS = re.compile(r"\b(?:nd)?arrays?\b|array[_-]like|\bvectors?\b|\bsequence\b|\blist\b|linspace", re.IGNORECASE)
 
 
 def _time_vector(fn, p):
@@ -79,7 +78,7 @@ def _time_vector(fn, p):
     except Exception:   # an odd object: no docstring
         return False
     entry = re.compile(rf"^[ \t]*(?::(?:param|type)\s+(?:\S+\s+)?)?{re.escape(p.name)}\b[^:\n]{{0,40}}:(.*)(\n.*)?",
-                       re.M)
+                       re.MULTILINE)
     return any(_ARRAY_WORDS.search(m.group(1) + (m.group(2) or "")) for m in entry.finditer(doc))
 
 
@@ -770,7 +769,7 @@ def _documented_ndarray(fn, name):
     :rtype: bool
     """
     doc = inspect.getdoc(fn) or ""
-    line = re.search(rf"^{re.escape(name)}\s*:\s*(.+)$", doc, re.M)
+    line = re.search(rf"^{re.escape(name)}\s*:\s*(.+)$", doc, re.MULTILINE)
     return bool(line) and re.search(r"\b(?:np\.|numpy\.)?ndarray\b", line.group(1)) is not None
 
 
@@ -1117,7 +1116,7 @@ def _made_up_array(fn, p):
 
 #: A documented default: ``default 1e-6``, ``defaults to 0.5``, ``(default: 3)``, ``default=300``.
 _DOCUMENTED_DEFAULT = re.compile(r"\bdefaults?(?:\s+value)?(?:\s+is|\s+to|\s+of)?\s*[:=]?\s*`*([-+]?(?:\d+\.?\d*|\.\d+)"
-                                 r"(?:[eE][-+]?\d+)?)(?![\w.])", re.I)
+                                 r"(?:[eE][-+]?\d+)?)(?![\w.])", re.IGNORECASE)
 #: A typical value for a quantity in a unit a docstring gives, where 1.0 is far from any real one.
 TYPICAL_BY_UNIT = {"K": 293.15, "degC": 20.0, "°C": 20.0, "Pa": 101325.0, "kPa": 101.325, "MPa": 0.101325,
                    "bar": 1.01325, "mbar": 1013.25, "hPa": 1013.25, "psi": 14.696}

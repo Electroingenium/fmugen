@@ -6,7 +6,6 @@ import textwrap
 import pytest
 
 from fmugen.builder import init, isolated_imports
-from fmugen.config import InterfaceError
 
 
 def write(tmp_path, name, source):
@@ -152,7 +151,7 @@ def test_const_values_are_fixed_and_their_files_copied(tmp_path):
             def predict(self, source):
                 return self.k * float(open(source).read())
     """)
-    data, text = probe(f"{path}:Detector", tmp_path, call="predict",
+    data, _text = probe(f"{path}:Detector", tmp_path, call="predict",
                        starts={"model": {"python": "'w.bin'"}, "source": "img.txt"})
     assert data["model"]["constants"] == {"model": "w.bin"}   # a plain TOML value, not a variable
     assert "parameters" not in data and data["inputs"] == {"source": {"start": "img.txt"}}
@@ -670,7 +669,7 @@ def test_a_const_shared_with_the_step_method_goes_to_the_constructor(tmp_path):
             def solve(self, x0, Xm):
                 return {"u": float(sum(x0)) + self.x0[0] + Xm[0]}
     """)
-    data, text = probe(f"{path}:Ctrl", tmp_path, call="solve", fmi_version=3,
+    data, _text = probe(f"{path}:Ctrl", tmp_path, call="solve", fmi_version=3,
                        starts={"x0": {"call": "builtins:list([1.0])"}, "solve_x0": [2.0], "Xm": [3.0]})
     assert data["model"]["constants"] == {"x0": {"call": "builtins:list([1.0])"}}
     assert "call_constants" not in data["model"]
@@ -813,6 +812,7 @@ def test_a_staticmethod_returning_the_class_builds_it():
 
 def test_an_ase_calculator_steps_with_its_energy():
     import types
+
     from fmugen.interface import _pick_method
 
     Calculator = types.new_class("Calculator", exec_body=lambda ns: ns.update(
@@ -915,7 +915,7 @@ def test_a_documented_array_without_default_is_made_up_as_ones(tmp_path):
                     raise TypeError("q must be given as an array")
                 return float(q.sum() + gyr.sum())
     ''')
-    data, text = probe(f"{path}:Filter", tmp_path)
+    data, _text = probe(f"{path}:Filter", tmp_path)
     assert data["inputs"]["q"] == {"dimensions": [4], "start": [1.0] * 4, "numpy": True}
     assert data["inputs"]["gyr"]["dimensions"] == [3]
     assert data["outputs"]
@@ -1020,7 +1020,7 @@ def test_a_set_up_the_error_names_is_found(tmp_path):
                     raise RuntimeError("call connect() before read()")
                 return 1.5
     """)
-    data, text = probe(f"{path}:Device", tmp_path, call="read")
+    data, _text = probe(f"{path}:Device", tmp_path, call="read")
     assert data["model"]["setup"] == ["connect()"] and data["outputs"]
 
 
@@ -1098,7 +1098,7 @@ def test_a_documented_array_that_takes_a_number_stays_a_number(tmp_path):
             """
             return 1000.0 + 0.8 * SA - 0.2 * CT
     ''')
-    data, text = probe(f"{path}:rho", tmp_path)
+    data, _text = probe(f"{path}:rho", tmp_path)
     assert data["inputs"]["SA"] == {"start": 1.0} and data["inputs"]["CT"] == {"start": 1.0}
 
 
@@ -1117,7 +1117,7 @@ def test_a_fitted_model_gets_its_number_of_features(tmp_path):
                     raise ValueError(f"Feature count mismatch: expecting {self.n_features_in_} features")
                 return X.sum(axis=1)
     """)
-    data, text = probe(f"{path}:Regressor", tmp_path, call="predict",
+    data, _text = probe(f"{path}:Regressor", tmp_path, call="predict",
                        setup=["fit(numpy.ones((5, 4)), numpy.ones(5))"])
     assert data["inputs"]["X"]["dimensions"] == [1, 4] and data["outputs"]
 

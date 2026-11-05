@@ -12,7 +12,6 @@ from fmugen.arguments import DATETIME_BY_NAME, MADE_UP, _only_varargs, _shape_ke
 from fmugen.probe._arguments import _owner, _probe_args, _probe_constants, _step_method
 from fmugen.probe._base import ConstantError, _run_setup, _time_kwargs
 
-
 #: The made-up training data :func:`_fit_made_up` tries: samples, features.
 MADE_UP_TRAINING = (64, 4)   # more samples than a batch (pyod trains in batches of 32)
 
@@ -110,7 +109,7 @@ def _probe_call(fn, data, comments, constants_key="constants"):
             raise error from None
         if not data["time"]:
             del data["time"]
-        for arg, source in dropped.items():
+        for arg in dropped:
             comments.pop(("time", arg), None)
             comments[("model", f"{constants_key}.{arg}")] = {"python": "None"}
         comments.setdefault(("model", "entry"), (
@@ -339,7 +338,7 @@ def _probe_attempt(fn, data, comments, constants_key="constants"):
 
 #: An error asking for text: sentence-transformers' "Expected one of: str, dict, ...", transformers' "text input
 #: must be of type `str`".
-TEXT_ASKED = re.compile(r"\bstr\b|\bstring\b|\btext\b", re.I)
+TEXT_ASKED = re.compile(r"\bstr\b|\bstring\b|\btext\b", re.IGNORECASE)
 
 
 #: The text a made-up input that must be text is tried with.
@@ -414,7 +413,6 @@ def _retry_positional(call, fn, data, comments, error):
     :type error: Exception
     :return: the result, or :data:`_FAILED`.
     """
-    from fmugen.arguments import _only_varargs
     if data.get("inputs") or not _only_varargs(fn, skip_self=False):
         return _FAILED
     text = str(error)
@@ -426,7 +424,7 @@ def _retry_positional(call, fn, data, comments, error):
         parts = [p.strip() for p in prototype.split(",") if p.strip()]
         if parts and all(NUMBER_PARAMETER.match(p) for p in parts):
             counts.append(len(parts))
-    for count in sorted(set(c for c in counts if 0 < c <= 8)):
+    for count in sorted({c for c in counts if 0 < c <= 8}):
         inputs = data.setdefault("inputs", {})
         for i in range(count):
             inputs[f"x{i}"] = {"start": 1.0, "to": f"pos:{i}"}
@@ -544,7 +542,7 @@ def _retry_options(call, fn, data, comments, section="inputs"):
 
 
 #: An error asking for a quantity with units: fluids.units' "1.0 has no quantity", "dimensionless".
-QUANTITY_ASKED = re.compile(r"quantit|dimensionless|\bunits?\b", re.I)
+QUANTITY_ASKED = re.compile(r"quantit|dimensionless|\bunits?\b", re.IGNORECASE)
 
 
 def _converted_retry(call, data, comments, error):
@@ -787,7 +785,7 @@ MADE_UP_SHAPES = ([3], [1, 1], [1, 3], [3, 3], [4])
 
 
 #: An error asking for an integer: "'float' object cannot be interpreted as an integer", "must be int".
-INTEGER_ASKED = re.compile(r"\binteger\b|\bmust be int\b|expected int\b|\bint64\b", re.I)
+INTEGER_ASKED = re.compile(r"\binteger\b|\bmust be int\b|expected int\b|\bint64\b", re.IGNORECASE)
 
 
 #: Channels-first batches on a grid, tried last for a torch module: neuraloperator's FNO(n_modes=[1, 1]) takes
