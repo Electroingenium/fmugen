@@ -22,6 +22,7 @@ _NOT_MODELS = {"setup.py", "conftest.py", "noxfile.py"}
 _OTHER = "Something else (a path, or package.module:Name)"
 _OWN_ENTRY = "Write my own"
 _OWN_METHOD = "Write my own"
+_USE_RETURNED = "None: read what the function returns on every step"
 _BUILD_EACH_STEP = "None: build the object on every step and read its results"
 
 
@@ -241,12 +242,14 @@ def _draft(args, parsed_values):
             data, comments = infer_config(args.model, call=args.call, config_dir=config_dir, fmi_version=args.fmi,
                                           starts=parsed_values(), setup=args.setup, kind=args.kind, create=args.create,
                                           probe=args.probe, converts=converts, reads=reads)
-            return data, comments, None if args.kind else step_candidates(args.model, parsed_values())
+            methods, comments[("init", "factory")] = (None, False) if args.kind else step_candidates(
+                args.model, parsed_values())
+            return data, comments, methods
     finally:
         assume_yes(False)
 
 
-def _ask_method(picked, candidates, cls_name):
+def _ask_method(picked, candidates, cls_name, none_label=None):
     """Ask which method runs a step: the one ``init`` picked first, then the others, or one typed.
 
     :param picked: the method ``init`` picked, or None when it builds the object on every step instead.
@@ -255,14 +258,17 @@ def _ask_method(picked, candidates, cls_name):
     :type candidates: list[str]
     :param cls_name: the class's name.
     :type cls_name: str
-    :return: the method, or None to build the object on every step.
+    :param none_label: the choice of no method, shown first when ``picked`` is None (default: building the object).
+    :type none_label: str or None
+    :return: the method, or None for no method.
     :rtype: str or None
     """
-    choices = [picked or _BUILD_EACH_STEP, *(m for m in candidates if m != picked), _OWN_METHOD]
+    none_label = none_label or _BUILD_EACH_STEP
+    choices = [picked or none_label, *(m for m in candidates if m != picked), _OWN_METHOD]
     long_list = {"use_search_filter": True, "use_jk_keys": False} if len(choices) > 15 else {}
     answer = _ask("select", f"Which method of {cls_name} runs a step?"
                             + (" (type to filter)" if long_list else ""), choices=choices, **long_list)
-    if answer == _BUILD_EACH_STEP:
+    if answer == none_label:
         return None
     return _ask("text", "Method name:", validate=_check_name).strip() if answer == _OWN_METHOD else answer
 
@@ -391,7 +397,10 @@ def _ask_outputs(args, data, comments, command, probed):
     commented = {n: c for n, c in commented_outputs(comments).items() if n not in outputs}
     kept = [item.partition("=")[0] for item in args.keep] or outputs
     if (probed or commented) and len(outputs) + len(commented) > 1 and not args.keep:
-        choices = [questionary.Choice(n, checked=True) for n in outputs]
+        # what the object holds inside it, rather than what it computes, unless that's all there is
+        inner = {n for n in outputs if "." in n and str(data["outputs"][n].get("from", "attr:")).startswith("attr:")}
+        inner = inner if len(inner) < len(outputs) else set()
+        choices = [questionary.Choice(n, checked=n not in inner) for n in outputs]
         choices += [questionary.Choice(f"{n}  (left commented out: {c['why'].partition(';')[0] or 'unchecked'})", value=n)
                     for n, c in commented.items()]
         kept = _ask("checkbox", "Which outputs to keep? (space toggles, a toggles all)", choices=choices,
@@ -452,8 +461,11 @@ def fill_in(args, argv, parsed_values):
     data, comments, candidates = _draft(args, parsed_values)
     if candidates is not None and not args.call:
         # the probe can settle on building the object every step: it's the first choice then, and the methods follow
-        picked = None if data["model"].get("kind") == "function" else data["model"].get("call", "__call__")
-        args.call = _ask_method(picked, candidates, data["model"]["entry"].rpartition(":")[2])
+        name = data["model"]["entry"].rpartition(":")[2]
+        factory = comments.get(("init", "factory"))
+        default = None if factory or data["model"].get("kind") == "function" else "__call__"
+        picked = data["model"].get("call", default)
+        args.call = _ask_method(picked, candidates, name, _USE_RETURNED if factory else None)
         if args.call:
             command += ["--call", args.call]
         if args.call != picked:   # another method has other arguments

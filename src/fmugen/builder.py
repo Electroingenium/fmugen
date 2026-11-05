@@ -9,7 +9,9 @@ import re
 import shutil
 import subprocess
 import sys
+import sysconfig
 import tempfile
+import time
 import tomllib
 import zipfile
 from pathlib import Path
@@ -309,6 +311,8 @@ def isolated_imports():
     """
     saved_path = list(sys.path)
     saved_modules = set(sys.modules)
+    # never forgotten, even with a virtual environment inside an added folder: numpy can't load twice in a process
+    installed = [Path(p).resolve() for p in (sysconfig.get_path("purelib"), sysconfig.get_path("platlib"), sys.base_prefix)]
     try:
         yield
     finally:
@@ -323,7 +327,10 @@ def isolated_imports():
                 locations = [attrs.get("__file__"), *(attrs.get("__path__") or [])]
             except KeyError:
                 locations = [attrs.get("__file__")]
-            if any(loc and Path(loc).resolve().is_relative_to(p) for loc in locations for p in added):
+            resolved = [Path(loc).resolve() for loc in locations if loc]
+            if any(loc.is_relative_to(p) for loc in resolved for p in installed):
+                continue
+            if any(loc.is_relative_to(p) for loc in resolved for p in added):
                 to_forget.append(name)
         for name in to_forget:
             del sys.modules[name]
@@ -492,11 +499,34 @@ def _replace(output, write):
         shutil.rmtree(new, ignore_errors=True) if new.is_dir() else new.unlink(missing_ok=True)
         raise
     if output.is_dir():
-        output.rename(old)
-        new.rename(output)
+        _retrying(os.rename, output, old)
+        _retrying(os.rename, new, output)
         shutil.rmtree(old)
     else:
-        os.replace(new, output)
+        _retrying(os.replace, new, output)
+
+
+def _retrying(move, source, target, tries=20):
+    """Rename a path, waiting while it is held open: on Windows, a virus scanner or the search indexer
+    opens what was just written, and the rename then fails for a moment with a PermissionError.
+
+    :param move: :func:`os.rename` or :func:`os.replace`.
+    :type move: callable
+    :param source: the path.
+    :type source: pathlib.Path
+    :param target: its new path.
+    :type target: pathlib.Path
+    :param tries: how many times to try, 0.25 s apart.
+    :type tries: int
+    :raises PermissionError: it stays held open.
+    """
+    for attempt in range(tries):
+        try:
+            return move(source, target)
+        except PermissionError:
+            if attempt == tries - 1:
+                raise
+            time.sleep(0.25)
 
 
 def build(target, output, model_name=None, author=None, output_format="fmu", call=None, fmi_version=None,
@@ -807,6 +837,9 @@ def _init_warnings(data, comments, probe):
     """
     warnings = assumptions(comments) + list(comments.get(("init", "data_arguments"), []))
     outputs = data.get("outputs", {})
+    if not any(data.get(s) for s in ("parameters", "inputs", "states", "outputs", "locals", "calculated_parameters")):
+        warnings.append("no FMU variables found, so build will refuse this config: add them by hand, "
+                        "or give the model what it needs with --start or --const")
     if not outputs:
         warnings.append(NO_OUTPUTS)
         comments.setdefault(("outputs", None), NO_OUTPUTS)

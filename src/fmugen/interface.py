@@ -184,6 +184,8 @@ def infer_config(target, call=None, config_dir=None, fmi_version=None, starts=No
     """
     path, _module_name, name = parse_target(target)
     config_dir = Path(config_dir or (path.parent if path else ".")).resolve()
+    if not path and str(config_dir) not in sys.path:
+        sys.path.append(str(config_dir))   # a local package next to the config; an installed one still comes first
     if path and not path.resolve().is_relative_to(config_dir):
         raise InterfaceError(
             f"the config must be in the folder of {path.name} or a folder above it, since it names the model "
@@ -208,6 +210,7 @@ def infer_config(target, call=None, config_dir=None, fmi_version=None, starts=No
                 comments[("init", "data_arguments")] = missing
         _unread_requests(data, comments, probe)
     finally:
+        _last_factory_models[:] = _factory_models.values()
         _factory_models.clear()
         REQUESTED_READS.clear()
         READ_ERRORS.clear()
@@ -2274,6 +2277,10 @@ NOT_STEP = ("close", "stop", "shutdown", "terminate", "release", "dispose", "dis
             "get_params", "set_params", "to_", "from_", "set_", "plot_", "save_", "load_", "print_", "add_", "remove_")
 
 
+#: The objects the factories called by the last :func:`infer_config` returned, for :func:`step_candidates`.
+_last_factory_models = []
+
+
 def step_candidates(target, starts=None):
     """The methods that may run a step of a target that is a class, best first, for ``init``'s questions.
 
@@ -2281,8 +2288,9 @@ def step_candidates(target, starts=None):
     :type target: str
     :param starts: the ``--start`` / ``--const`` values.
     :type starts: dict or None
-    :return: the methods, or None when the entry isn't a class.
-    :rtype: list[str] or None
+    :return: the methods, or None when the entry isn't a class or a function known to return an object,
+        and whether it is such a function.
+    :rtype: tuple[list[str] or None, bool]
     """
     path, module_name, name = parse_target(target)
     if path:
@@ -2290,7 +2298,16 @@ def step_candidates(target, starts=None):
     else:
         module = importlib.import_module(module_name)
     entry = _pick_entry(module, name)
-    return _rank_methods(entry, starts, None) if inspect.isclass(entry) else None
+    if inspect.isclass(entry):
+        return _rank_methods(entry, starts, None), False
+    returned = type(_last_factory_models[0]) if _last_factory_models else static.factory_class(entry)
+    if not inspect.isclass(returned):
+        return None, False
+    ranked = _rank_methods(returned, starts, None)
+    callable_object = any("__call__" in vars(c) for c in returned.__mro__[:-1])
+    if not ranked and not callable_object:   # a plain record it returns: nothing to choose
+        return None, False
+    return (["__call__", *ranked] if callable_object else ranked), True
 
 
 def _rank_methods(cls, starts, constructor, fitting=()):

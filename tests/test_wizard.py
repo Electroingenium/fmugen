@@ -177,6 +177,73 @@ def test_building_the_object_every_step_is_a_choice_among_the_methods(monkeypatc
     assert shown["options"]["use_search_filter"]
 
 
+FACTORY = """
+    class Engine:
+        def run(self, x: float = 1.0):
+            return {"y": x}
+
+        def stop(self):
+            pass
+
+    def make(n: int = 1) -> Engine:
+        return Engine()
+"""
+
+
+def test_the_method_of_what_a_factory_returns_is_asked(run, tmp_path, capsys):
+    (tmp_path / "plant.py").write_text(textwrap.dedent(FACTORY))
+    run(["plant.py:make", "--fmi", "2", "-o", "fmugen.toml"], "n" + ENTER)   # listed first: None, or run
+    assert "--call" not in capsys.readouterr().err
+    run(["plant.py:make", "--fmi", "2", "-o", "fmugen.toml", "--force"], "n" + DOWN + ENTER)
+    assert 'call = "run"' in (tmp_path / "fmugen.toml").read_text()
+
+
+def test_a_local_package_is_found_in_the_current_folder(run, tmp_path):
+    (tmp_path / "localpkg").mkdir()
+    (tmp_path / "localpkg" / "__init__.py").write_text("")
+    (tmp_path / "localpkg" / "core.py").write_text("def f(x: float = 1.0):\n    return {'y': x}\n")
+    run(["localpkg.core:f", "--yes"], "")
+    assert 'entry = "localpkg.core:f"' in (tmp_path / "fmugen.toml").read_text()
+
+
+def test_installed_modules_stay_loaded_with_their_folder_added():
+    import sys
+    import sysconfig
+
+    from fmugen.builder import isolated_imports
+    purelib = sysconfig.get_path("purelib")
+    with isolated_imports():
+        sys.path.append(purelib)
+        sys.modules["fake_installed"] = type(textwrap)("fake_installed")
+        sys.modules["fake_installed"].__file__ = str(__import__("pathlib").Path(purelib) / "fake_installed.py")
+    assert "fake_installed" in sys.modules
+    del sys.modules["fake_installed"]
+
+
+def test_a_config_with_no_variables_warns():
+    from fmugen.builder import _init_warnings
+    assert any("no FMU variables" in w for w in _init_warnings({"model": {}}, {}, True))
+
+
+def test_what_an_object_holds_inside_starts_unticked(run, tmp_path, monkeypatch):
+    seen = {}
+    real = wizard._ask
+
+    def spy(kind, message, **options):
+        if kind == "checkbox":
+            seen[message] = {c.value: c.checked for c in options["choices"]}
+        return real(kind, message, **options)
+
+    monkeypatch.setattr(wizard, "_ask", spy)
+    args = type("A", (), {"keep": [], "integer": []})()
+    data = {"outputs": {"y": {"from": "return"}, "inner.x": {"from": "attr:inner.x"}, "r.x": {"from": "return:r.x"}}}
+    with create_pipe_input() as pipe, create_app_session(input=pipe, output=DummyOutput()):
+        pipe.send_text(ENTER)
+        wizard._ask_outputs(args, data, {}, [], True)
+    assert next(iter(seen.values())) == {"y": True, "inner.x": False, "r.x": True}
+    assert args.keep == ["y", "r.x"]
+
+
 NONE_RESULT ='def f(x: float = 1.0):\n    return {"a": 1.5, "b": 2.5, "maybe": None}\n'
 
 
@@ -259,3 +326,18 @@ def test_entries_read_without_importing(tmp_path):
     path.write_text("raise SystemExit\nclass Mode(Enum): ...\nclass Bad(ValueError): ...\nclass Oops(MyError): ...\n"
                     "def _private(): ...\ndef f(): ...\nclass C: ...\n")
     assert wizard.entries_in_file(path) == ["f", "C"]
+
+
+def test_a_rename_waits_while_the_path_is_held_open(tmp_path):
+    from fmugen.builder import _retrying
+    calls = []
+
+    def held_twice(source, target):
+        calls.append(source)
+        if len(calls) < 3:
+            raise PermissionError
+        return "moved"
+
+    assert _retrying(held_twice, "a", "b") == "moved" and len(calls) == 3
+    with pytest.raises(PermissionError):
+        _retrying(lambda s, t: (_ for _ in ()).throw(PermissionError()), "a", "b", tries=2)
