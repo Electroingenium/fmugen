@@ -4,8 +4,8 @@
 [model]
 entry = "pybamm:Simulation"
 call = "step"
-init_call = true  # step() changed nothing in the probe, so it also runs at initialization: outputs have values at the start time
 requirements = ["pybamm==26.10.1.1"]  # the versions installed here; installed by --vendor
+# no init_call: a second step() with the same inputs changed t, t_eval, t_event and 4 more, so running it at initialization would put the outputs a step ahead
 
 # Arguments whose code default is not an FMI value; the default is used.
 # To override one, uncomment the line.
@@ -41,13 +41,13 @@ save = { start = true }
 [outputs]
 hermite_interpolation = { from = "return:hermite_interpolation", type = "Boolean" }
 observable = { from = "return:observable", type = "Boolean" }
-t_eval = { from = "return:t_eval.-1" }  # its last entry: the whole return:t_eval grows each step ([2] then [4]), and an FMI array has a fixed size
+t_eval = { from = "return:t_eval.-1" }  # its last entry: the whole return:t_eval grows each step ([2] then [6]), and an FMI array has a fixed size
 t_event = { from = "return:t_event.0" }
 termination = { from = "return:termination", type = "String" }
 y_event = { from = "return:y_event", dimensions = [42, 1] }
 t = { from = "return:t.-1" }  # --read; np.float64(100.0) in the probe
 voltage = { from = "return:Voltage [V].entries.-1" }  # --read; np.float64(3.760580026848197) in the probe
-# y: its size changed from [42, 25] to [42, 41] on a second probe call, and an FMI array has a fixed size
+# y: its size changed from [42, 25] to [42, 55] on a second probe call, and an FMI array has a fixed size
 # y = { from = "return:y", dimensions = [...] }
-# yp: its size changed from [42, 25] to [42, 41] on a second probe call, and an FMI array has a fixed size
+# yp: its size changed from [42, 25] to [42, 55] on a second probe call, and an FMI array has a fixed size
 # yp = { from = "return:yp", dimensions = [...] }

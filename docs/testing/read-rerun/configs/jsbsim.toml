@@ -5,9 +5,9 @@
 entry = "jsbsim:FGFDMExec"
 setup = ["load_model('c172x')", "run_ic"]
 call = "run"
-init_call = true  # run() changed nothing in the probe, so it also runs at initialization: outputs have values at the start time
 save_state = false  # the model object can't be pickled (TypeError: no default __reduce__ due to non-trivial __cinit__): the FMU can't save and restore its state
 requirements = ["jsbsim==1.3.3"]  # the versions installed here; installed by --vendor
+# no init_call: a second run() with the same inputs changed airspeed_kts, altitude_ft, pitch_rad and 1 more, so running it at initialization would put the outputs a step ahead
 
 [model.constants]
 0 = { call = "jsbsim:get_default_root_dir()" }  # computed when the FMU initializes
