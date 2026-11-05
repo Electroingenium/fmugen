@@ -10,10 +10,11 @@ import shutil
 import subprocess
 import sys
 import tempfile
+import tomllib
 import zipfile
 from pathlib import Path
 
-from fmugen.arguments import assumptions, guessed_outputs, unfit_outputs
+from fmugen.arguments import UNFIT, assumptions, guessed_outputs, unfit_outputs
 from fmugen.compose import PARTS_DIR, Composite, combine, is_composite
 from fmugen.config import (
     MODEL_DIR,
@@ -651,7 +652,7 @@ NO_OUTPUTS = "no outputs found: add [outputs] by hand (e.g. attributes or proper
 
 
 def init(target, output=None, call=None, force=False, fmi_version=None, starts=None, setup=None, kind=None,
-         create=None, probe=False, converts=None, reads=None):
+         create=None, probe=False, converts=None, reads=None, keep=None, integers=None):
     """Write the inferred config for a model (``fmugen init``).
 
     Warnings about assumptions are printed to stderr.
@@ -680,9 +681,15 @@ def init(target, output=None, call=None, force=False, fmi_version=None, starts=N
     :type converts: dict or None
     :param reads: ``--read`` options: ``{output name: "attr:..." or "return[:...]"}``.
     :type reads: dict or None
+    :param keep: ``--keep``: the only outputs to write, ``{name: keys it needs}`` (default: all, and those
+        left commented out stay so).
+    :type keep: dict or None
+    :param integers: ``--integer``: outputs to type Integer.
+    :type integers: list[str] or None
     :return: ``(written path or None when printed, config dict)``.
     :rtype: tuple
     :raises FileExistsError: the config exists and ``force`` is false.
+    :raises InterfaceError: ``keep`` or ``integers`` name an output that wasn't found.
     """
     model_path, _, _ = parse_target(target)
     default_dir = model_path.parent if model_path else Path.cwd()
@@ -694,6 +701,7 @@ def init(target, output=None, call=None, force=False, fmi_version=None, starts=N
         data, comments = infer_config(target, call=call, config_dir=output.parent, fmi_version=fmi_version,
                                       starts=starts, setup=setup, kind=kind, create=create, probe=probe,
                                       converts=converts, reads=reads)
+    _choose_outputs(data, comments, keep or {}, integers or [])
     warnings = _init_warnings(data, comments, probe)
     if model_path and model_path.stem in RESERVED_MODULES:
         warnings.insert(0, f"{model_path.name} clashes with a UniFMU backend module, so build will refuse it; "
@@ -707,6 +715,83 @@ def init(target, output=None, call=None, force=False, fmi_version=None, starts=N
     output.parent.mkdir(parents=True, exist_ok=True)
     output.write_text(text, encoding="utf-8")
     return output, data
+
+
+def commented_outputs(comments):
+    """The outputs ``init`` left commented out in the config.
+
+    :param comments: the comments of an inferred config.
+    :type comments: dict
+    :return: ``{name: {"info": its keys, "needs": what it still needs ("type", "dimensions"), "why": the reason}}``.
+    :rtype: dict
+    """
+    found = {}
+    unfit = comments.get(UNFIT, {})
+    for (section, key), line in comments.items():
+        if section != "outputs" or not str(key).startswith("#") or str(key).endswith("#why") or not isinstance(line, str):
+            continue
+        needs = {need for need, text in (("type", "type = ..."), ("dimensions", "dimensions = [...]")) if text in line}
+        text = re.sub(r",?\s*(type = \.\.\.|dimensions = \[\.\.\.\])", "", line)
+        try:
+            parsed = tomllib.loads(text)
+        except tomllib.TOMLDecodeError:   # a note, not a variable
+            continue
+        for name, info in parsed.items():
+            if isinstance(info, dict):
+                why = unfit.get(str(key)[1:].partition("#")[0]) or line.partition("  # ")[2]
+                found[name] = {"info": info, "needs": needs, "why": why}
+    return found
+
+
+def _choose_outputs(data, comments, keep, integers):
+    """Apply ``--keep`` and ``--integer`` to an inferred config.
+
+    With ``keep``, an output left commented out that it names is written as a real one, and the others
+    are gone from the config and the warnings: they have been decided on.
+
+    :param data: the inferred config; updated in place.
+    :type data: dict
+    :param comments: its comments; those of outputs dropped or typed are removed.
+    :type comments: dict
+    :param keep: the only outputs to write, ``{name: keys to set}``; empty keeps all.
+    :type keep: dict
+    :param integers: the outputs to type Integer.
+    :type integers: list[str]
+    :raises InterfaceError: a name that isn't an output found, or one still needing a type or size.
+    """
+    outputs = data.get("outputs", {})
+    commented = commented_outputs(comments)
+    unknown = [n for n in (*keep, *integers) if n not in outputs and n not in commented]
+    if unknown:
+        found = _names([*outputs, *commented]) or "none"
+        raise InterfaceError(f"{_names(unknown)}: no such output (found: {found})")
+    for name, keys in keep.items():
+        if name in commented:
+            missing = commented[name]["needs"] - set(keys)
+            if missing:
+                raise InterfaceError(f"--keep {name}: it was left commented out, and needs a {' and a '.join(sorted(missing))}: "
+                                     f"--keep {name}=Real, {name}=[3] or {name}=Real[3]")
+            outputs[name] = {**commented[name]["info"], **keys}
+            data["outputs"] = outputs
+        elif keys:
+            outputs[name].update(keys)
+    if keep:
+        for name in list(outputs):
+            if name not in keep:
+                del outputs[name]
+                comments.pop(("outputs", name), None)
+        for key in [k for k in comments if k[0] == "outputs" and str(k[1]).startswith("#")]:
+            del comments[key]
+        unfit = comments.get(UNFIT, {})
+        for name in list(unfit):
+            if ("locals", f"#{name}#why") not in comments:
+                del unfit[name]
+        if str(comments.get(("outputs", None), "")).startswith("results that can be None"):
+            del comments[("outputs", None)]
+    for name in integers:
+        if name in outputs:
+            outputs[name]["type"] = "Integer"
+            comments.pop(("outputs", name), None)
 
 
 def _init_warnings(data, comments, probe):

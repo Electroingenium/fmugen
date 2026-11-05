@@ -118,6 +118,106 @@ def test_without_the_probe_it_isnt_called(run, tmp_path):
     assert "probe" not in (tmp_path / "fmugen.toml").read_text()
 
 
+def test_a_start_from_an_example_is_asked(run, tmp_path, capsys):
+    (tmp_path / "plant.py").write_text('def f(x):\n    """Double.\n\n    >>> f(2.5)\n    """\n    return {"y": 2.0 * x}\n')
+    run(["plant.py", "--fmi", "2", "-o", "fmugen.toml"], "n" + "\x7f" * 3 + "7.5" + ENTER)
+    assert "start = 7.5" in (tmp_path / "fmugen.toml").read_text()
+    assert "--start x=7.5" in capsys.readouterr().err
+
+
+OUTPUTS = 'def f(x: float = 1.0):\n    return {"a": 1, "b": 2, "c": 2.5}\n'
+
+
+def test_outputs_are_chosen_after_the_probe(run, tmp_path, capsys):
+    (tmp_path / "plant.py").write_text(OUTPUTS)
+    # c unchecked; then of a and b, the ints: a is a count
+    run(["plant.py", "--fmi", "2", "-o", "fmugen.toml"], "y" + DOWN * 2 + " " + ENTER + " " + ENTER)
+    text = (tmp_path / "fmugen.toml").read_text()
+    assert "\nc = " not in text and 'type = "Integer"' in text.split("\na = ")[1].splitlines()[0]
+    assert text.split("\nb = ")[1].startswith("{}")
+    assert "--keep a --keep b --integer a" in capsys.readouterr().err
+
+
+def test_outputs_arent_asked_without_the_probe(run, tmp_path):
+    (tmp_path / "plant.py").write_text(OUTPUTS)
+    run(["plant.py", "--fmi", "2", "-o", "fmugen.toml"], "n")
+    assert "\nc = " in (tmp_path / "fmugen.toml").read_text()
+
+
+def test_keep_and_integer_are_options(run, tmp_path):
+    (tmp_path / "plant.py").write_text(OUTPUTS)
+    run(["plant.py", "--yes", "--probe", "--keep", "a", "--integer", "a"], "")
+    text = (tmp_path / "fmugen.toml").read_text()
+    assert "\nb = " not in text and 'type = "Integer"' in text
+
+
+def test_a_computed_start_value_becomes_a_constant(run, tmp_path, capsys):
+    run(["plant.py:gain", "--fmi", "2", "-o", "fmugen.toml"], "n" + "\x7f" * 3 + "call:builtins:float(3)" + ENTER)
+    assert 'x = { call = "builtins:float(3)" }' in (tmp_path / "fmugen.toml").read_text()
+    assert "--const 'x=call:builtins:float(3)'" in capsys.readouterr().err
+
+
+def test_a_variable_bound_under_another_name_isnt_asked():
+    data = {"inputs": {"b": {"start": 2.0, "to": "arg:x[b]"}, "c": {"start": 1.0}}}
+    comments = {("inputs", "b"): "made up", ("inputs", "c"): "made up"}
+    assert list(wizard.guessed_starts(data, comments)) == ["c"]
+
+
+def test_building_the_object_every_step_is_a_choice_among_the_methods(monkeypatch):
+    shown = {}
+
+    def choose(kind, message, choices, **options):
+        shown.update(choices=choices, options=options)
+        return choices[0]
+
+    monkeypatch.setattr(wizard, "_ask", choose)
+    assert wizard._ask_method(None, ["apply"], "Fit") is None
+    assert shown["choices"][1:] == ["apply", "Write my own"] and not shown["options"]
+    assert wizard._ask_method("m0", [f"m{i}" for i in range(20)], "Fit") == "m0"
+    assert shown["options"]["use_search_filter"]
+
+
+NONE_RESULT ='def f(x: float = 1.0):\n    return {"a": 1.5, "b": 2.5, "maybe": None}\n'
+
+
+def test_outputs_left_commented_out_can_be_chosen(run, tmp_path, capsys):
+    (tmp_path / "plant.py").write_text(NONE_RESULT)
+    # a, b, then maybe, unticked: ticked; its type is unknown: the second, Integer
+    run(["plant.py", "--fmi", "2", "-o", "fmugen.toml"], "y" + DOWN * 2 + " " + ENTER + DOWN + ENTER)
+    text = (tmp_path / "fmugen.toml").read_text()
+    assert '\nmaybe = { from = "return:maybe", type = "Integer" }' in text
+    err = capsys.readouterr().err
+    assert "--keep a --keep b --keep maybe=Integer" in err and "None in the probe" not in err
+
+
+def test_outputs_left_commented_out_and_not_chosen_are_gone(run, tmp_path, capsys):
+    (tmp_path / "plant.py").write_text(NONE_RESULT)
+    run(["plant.py", "--fmi", "2", "-o", "fmugen.toml"], "y" + ENTER)
+    assert "maybe" not in (tmp_path / "fmugen.toml").read_text()
+    assert "maybe" not in capsys.readouterr().err
+
+
+def test_yes_leaves_them_commented_out(run, tmp_path):
+    (tmp_path / "plant.py").write_text(NONE_RESULT)
+    run(["plant.py", "--yes", "--probe"], "")
+    assert "# maybe = " in (tmp_path / "fmugen.toml").read_text()
+
+
+def test_keep_asks_for_what_a_commented_output_needs(run, tmp_path, capsys):
+    (tmp_path / "plant.py").write_text(NONE_RESULT)
+    with pytest.raises(SystemExit) as stop:
+        run(["plant.py", "--yes", "--probe", "--keep", "maybe"], "")
+    assert stop.value.code == 2 and "needs a type" in capsys.readouterr().err
+
+
+def test_keep_names_an_output_found(run, tmp_path, capsys):
+    (tmp_path / "plant.py").write_text(OUTPUTS)
+    with pytest.raises(SystemExit) as stop:
+        run(["plant.py", "--yes", "--probe", "--keep", "nope"], "")
+    assert stop.value.code == 2 and "nope: no such output" in capsys.readouterr().err
+    assert not (tmp_path / "fmugen.toml").exists()
+
+
 def test_a_data_argument_can_be_skipped(run, tmp_path, capsys):
     (tmp_path / "plant.py").write_text("def f(signal=None, k: float = 1.0):\n    return {'y': k}\n")
     run(["plant.py", "--fmi", "2", "-o", "fmugen.toml"], "n" + ENTER)

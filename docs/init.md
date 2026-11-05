@@ -57,7 +57,9 @@ fmugen init
 | Which function or class | The file defines several and the target has no `:Name`. Lists those found, or you write your own. | `MODEL` with `:Name` |
 | Which method runs a step | The model is a class. Lists the candidates, the one `init` would pick first, or you write your own. | `--call` |
 | Files and data | An argument looks like a file or data the model runs on and wasn't given. Type a value or `call:module:function(...)`; Enter skips it, and `init` warns. | `--start`, `--const` |
-| The start value of each other argument with no default | `init` would have to make one up. | `--start` |
+| The start value of each other argument `init` chose a value for | The value is made up, or comes from an example, a docstring or the code's checks. It's pre-filled, and Enter keeps it. | `--start` |
+| Which outputs to keep | You chose the probe and it found several, or some were left commented out. Those it found start checked; those left commented out start unchecked, with the reason. Checking one of those makes it a real output, asking for its type or size if unknown, and it can fail the step for that reason. Those you leave unchecked are removed from the config. | `--keep` |
+| Which ints are counts | You chose the probe and it read ints it typed Real. Those you check become Integer. | `--integer` |
 | Which FMI version | No `--fmi`. | `--fmi` |
 | Where to write the config, and whether to overwrite one that exists | No `-o`. | `-o`, `--force` |
 

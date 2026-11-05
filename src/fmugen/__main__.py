@@ -64,6 +64,29 @@ def _parse_converts(items):
     return converts
 
 
+def _parse_keeps(items):
+    """Parse ``--keep`` options.
+
+    :param items: ``NAME``, ``NAME=TYPE``, ``NAME=[3]`` or ``NAME=TYPE[3,2]`` strings.
+    :type items: list[str]
+    :return: ``{NAME: {"type": TYPE, "dimensions": [3]}}``, with the keys given.
+    :rtype: dict
+    :raises InterfaceError: a malformed option.
+    """
+    keeps = {}
+    for item in items:
+        name, sep, spec = item.partition("=")
+        match = re.fullmatch(r"(\w+)?(?:\[(\d+(?:,\s*\d+)*)\])?", spec)
+        if not _OUTPUT_NAME.fullmatch(name) or not match or (sep and not spec):
+            raise InterfaceError(f"--keep {item!r}: expected NAME, NAME=TYPE, NAME=[SIZE] or NAME=TYPE[SIZE]")
+        keeps[name] = {}
+        if match.group(1):
+            keeps[name]["type"] = match.group(1)
+        if match.group(2):
+            keeps[name]["dimensions"] = [int(n) for n in match.group(2).split(",")]
+    return keeps
+
+
 def _literal(text):
     """A ``--start`` / ``--const`` VALUE: a Python literal (:func:`ast.literal_eval`, never executed),
     ``true`` / ``false`` in any case as Booleans, anything else a string.
@@ -227,6 +250,12 @@ def main(argv=None):
                    help="an output at a path the probe doesn't search: attr:PATH on the object after a step, "
                         "return[:PATH] in what it returns, e.g. V='return:Voltage [V].entries.-1'; with --probe "
                         "its type is read and the path checked; repeatable")
+    i.add_argument("--keep", action="append", default=[], metavar="NAME[=TYPE][[SIZE]]",
+                   help="write only these outputs (default: all, and those left commented out stay so). One left "
+                        "commented out becomes a real output; if its type or size is unknown, give it: "
+                        "x=Real, x=[3], x=Real[3]. Repeatable")
+    i.add_argument("--integer", action="append", default=[], metavar="NAME",
+                   help="type this output Integer, e.g. a count the probe typed Real; repeatable")
     i.add_argument("--convert", action="append", default=[], metavar="NAME=module:function",
                    help="how an argument is passed to the model, e.g. x=torch:tensor or x=numpy; repeatable")
 
@@ -295,7 +324,7 @@ def main(argv=None):
                 raise InterfaceError("no model given: fmugen init MODEL (it is only asked in a terminal)")
             output, _data = init(args.model, args.output, args.call, args.force, args.fmi, values(),
                                 args.setup, args.kind, args.create, args.probe, _parse_converts(args.convert),
-                                _parse_reads(args.read))
+                                _parse_reads(args.read), _parse_keeps(args.keep), args.integer)
             if output:
                 print(f"Wrote {output.resolve()}; review it, then run: fmugen build {output}")
             return

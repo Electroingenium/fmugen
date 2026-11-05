@@ -22,6 +22,7 @@ _NOT_MODELS = {"setup.py", "conftest.py", "noxfile.py"}
 _OTHER = "Something else (a path, or package.module:Name)"
 _OWN_ENTRY = "Write my own"
 _OWN_METHOD = "Write my own"
+_BUILD_EACH_STEP = "None: build the object on every step and read its results"
 
 
 def assume_yes(value=True):
@@ -187,20 +188,25 @@ def _ask_output(default, force):
             return output, True
 
 
-def made_up_starts(data, comments):
-    """The variables whose start value was made up, for lack of a default in the code.
+def guessed_starts(data, comments):
+    """The variables whose start value ``init`` chose: made up, or from a docstring, the code's checks or an example.
 
     :param data: the inferred config.
     :type data: dict
     :param comments: its comments.
     :type comments: dict
-    :return: ``{name: start}``, without those the docstring or the code's checks gave.
+    :return: ``{name: (start, where it came from)}``.
     :rtype: dict
     """
-    from fmugen.arguments import MADE_UP
-    return {name: data[section][name].get("start") for (section, name), text in comments.items()
-            if isinstance(text, str) and (text == MADE_UP or text.startswith("no default in the code: made up"))
-            and name in data.get(section, {})}
+    found = {}
+    for section in ("structural_parameters", "parameters", "inputs", "states"):
+        for name, info in data.get(section, {}).items():
+            why = comments.get((section, name))
+            # one with "to" is bound under another name (an item of an argument): --start can't name it
+            if isinstance(why, str) and "start" in info and "to" not in info and any(
+                    mark in why for mark in ("no default", "start from the example", "made up")):
+                found[name] = (info["start"], " ".join(why.splitlines()))
+    return found
 
 
 def _check_value(text):
@@ -211,9 +217,7 @@ def _check_value(text):
     :return: True, or what's wrong with it.
     :rtype: bool or str
     """
-    if not text.strip():
-        return "Give a value"
-    return "A computed value can't be a start value: give it with --const" if text.strip().startswith("call:") else True
+    return bool(text.strip()) or "Give a value"
 
 
 def _draft(args, parsed_values):
@@ -237,8 +241,7 @@ def _draft(args, parsed_values):
             data, comments = infer_config(args.model, call=args.call, config_dir=config_dir, fmi_version=args.fmi,
                                           starts=parsed_values(), setup=args.setup, kind=args.kind, create=args.create,
                                           probe=args.probe, converts=converts, reads=reads)
-            function_like = args.kind or data["model"].get("kind")
-            return data, comments, None if function_like else step_candidates(args.model, parsed_values())
+            return data, comments, None if args.kind else step_candidates(args.model, parsed_values())
     finally:
         assume_yes(False)
 
@@ -246,16 +249,21 @@ def _draft(args, parsed_values):
 def _ask_method(picked, candidates, cls_name):
     """Ask which method runs a step: the one ``init`` picked first, then the others, or one typed.
 
-    :param picked: the method ``init`` picked.
-    :type picked: str
+    :param picked: the method ``init`` picked, or None when it builds the object on every step instead.
+    :type picked: str or None
     :param candidates: the other candidates.
     :type candidates: list[str]
     :param cls_name: the class's name.
     :type cls_name: str
-    :rtype: str
+    :return: the method, or None to build the object on every step.
+    :rtype: str or None
     """
-    choices = [picked, *(m for m in candidates if m != picked), _OWN_METHOD]
-    answer = _ask("select", f"Which method of {cls_name} runs a step?", choices=choices)
+    choices = [picked or _BUILD_EACH_STEP, *(m for m in candidates if m != picked), _OWN_METHOD]
+    long_list = {"use_search_filter": True, "use_jk_keys": False} if len(choices) > 15 else {}
+    answer = _ask("select", f"Which method of {cls_name} runs a step?"
+                            + (" (type to filter)" if long_list else ""), choices=choices, **long_list)
+    if answer == _BUILD_EACH_STEP:
+        return None
     return _ask("text", "Method name:", validate=_check_name).strip() if answer == _OWN_METHOD else answer
 
 
@@ -331,6 +339,77 @@ def _add_value(args, command, option, item):
     command += [f"--{option}", item]
 
 
+def _ask_needs(name, needs):
+    """Ask what an output left commented out needs to become a real one.
+
+    :param name: the output.
+    :type name: str
+    :param needs: ``"type"`` and / or ``"dimensions"``.
+    :type needs: set[str]
+    :return: what follows its name in ``--keep``: ``=Real``, ``=[3]``, ``=Real[3]`` or nothing.
+    :rtype: str
+    """
+    kind = _ask("select", f"Type of {name}?", choices=["Real", "Integer", "Boolean", "String"]) if "type" in needs else ""
+    size = ""
+    if "dimensions" in needs:
+        answer = _ask("text", f"Size of {name} (e.g. 3, or 3,2):", validate=_check_size)
+        size = f"[{answer.replace(' ', '')}]"
+    return f"={kind}{size}" if kind or size else ""
+
+
+def _check_size(text):
+    """Validate an array size for a prompt.
+
+    :param text: the answer.
+    :type text: str
+    :return: True, or what's wrong with it.
+    :rtype: bool or str
+    """
+    return all(part.strip().isdigit() for part in text.split(",")) or "Give numbers separated by commas"
+
+
+def _ask_outputs(args, data, comments, command, probed):
+    """Ask which outputs to keep, those left commented out among them, and which of the probe's ints are counts.
+
+    Without the probe, only when some are commented out: that's the choice they were left for.
+
+    :param args: the options; ``keep`` and ``integer`` are added to.
+    :type args: argparse.Namespace
+    :param data: the config of a draft.
+    :type data: dict
+    :param comments: its comments.
+    :type comments: dict
+    :param command: the equivalent command; added to.
+    :type command: list[str]
+    :param probed: whether the probe was chosen.
+    :type probed: bool or float
+    """
+    import questionary
+
+    from fmugen.builder import commented_outputs
+    outputs = list(data.get("outputs", {}))
+    commented = {n: c for n, c in commented_outputs(comments).items() if n not in outputs}
+    kept = [item.partition("=")[0] for item in args.keep] or outputs
+    if (probed or commented) and len(outputs) + len(commented) > 1 and not args.keep:
+        choices = [questionary.Choice(n, checked=True) for n in outputs]
+        choices += [questionary.Choice(f"{n}  (left commented out: {c['why'].partition(';')[0] or 'unchecked'})", value=n)
+                    for n, c in commented.items()]
+        kept = _ask("checkbox", "Which outputs to keep? (space toggles, a toggles all)", choices=choices,
+                    validate=lambda chosen: bool(chosen) or "Keep at least one")
+        if len(kept) < len(outputs) or commented:   # those not kept are decided on: gone from the config
+            for name in kept:
+                item = name + _ask_needs(name, commented[name]["needs"]) if name in commented else name
+                args.keep.append(item)
+                command += ["--keep", item]
+    ints = [n for n in kept if "an int in the probe; Real" in str(comments.get(("outputs", n), ""))
+            and n not in args.integer]
+    if ints:
+        for name in _ask("checkbox", "These were ints in the probe, and are typed Real. Which are counts, to type "
+                                     "Integer? (space toggles)", choices=ints):
+            args.integer.append(name)
+            command += ["--integer", name]
+
+
 def _parsed(args):
     """The ``--convert`` and ``--read`` options as ``infer_config`` takes them.
 
@@ -372,9 +451,11 @@ def fill_in(args, argv, parsed_values):
 
     data, comments, candidates = _draft(args, parsed_values)
     if candidates is not None and not args.call:
-        picked = data["model"].get("call", "__call__")
+        # the probe can settle on building the object every step: it's the first choice then, and the methods follow
+        picked = None if data["model"].get("kind") == "function" else data["model"].get("call", "__call__")
         args.call = _ask_method(picked, candidates, data["model"]["entry"].rpartition(":")[2])
-        command += ["--call", args.call]
+        if args.call:
+            command += ["--call", args.call]
         if args.call != picked:   # another method has other arguments
             data, comments, _ = _draft(args, parsed_values)
 
@@ -384,12 +465,18 @@ def fill_in(args, argv, parsed_values):
     while _ask_data(args, comments, command, asked) and args.probe:
         data, comments, _ = _draft(args, parsed_values)
         _show_probe_failure(comments)
-    for name, start in made_up_starts(data, comments).items():
+    changed = False
+    for name, (start, why) in guessed_starts(data, comments).items():
         if name not in asked:
-            answer = _ask("text", f"Start value of {name} (no default in the code):", default=repr(start),
+            answer = _ask("text", f"Start value of {name} ({why}):", default=repr(start),
                           validate=_check_value).strip()
             if answer != repr(start):
-                _add_value(args, command, "start", f"{name}={answer}")
+                # a computed value is fixed, not a variable
+                _add_value(args, command, "const" if answer.startswith("call:") else "start", f"{name}={answer}")
+                changed = True
+    if args.probe and changed:   # other values can give other outputs
+        data, comments, _ = _draft(args, parsed_values)
+    _ask_outputs(args, data, comments, command, args.probe)
 
     if args.fmi is None:
         args.fmi = _ask("select", "Which FMI version?", choices=_fmi_choices())
