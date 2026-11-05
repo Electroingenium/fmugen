@@ -514,3 +514,38 @@ def test_the_runtime_file_keeps_every_import_made_inside_a_function(tmp_path):
     _concatenate_runtime(tmp_path / "fmugen_runtime.py")
     expected = sum(local_imports(p.read_text(encoding="utf-8")) for p in RUNTIME_SOURCES)
     assert local_imports((tmp_path / "fmugen_runtime.py").read_text(encoding="utf-8")) == expected
+
+
+def test_no_init_call_when_a_second_step_advances_a_state_the_probe_cant_compare(tmp_path):
+    # like pybamm's Simulation: it can't be pickled, and step() advances a solution object, not a number
+    path = write(tmp_path, "sim.py", '''
+        import threading
+
+
+        class Solution:
+            def __init__(self, t):
+                self.t = t
+
+
+        class Simulation:
+            def __init__(self):
+                self.lock = threading.Lock()
+                self.solution = Solution(0.0)
+
+            def step(self, dt=100.0):
+                self.solution = Solution(self.solution.t + dt)
+                return self.solution
+
+
+        class Lookup:
+            def __init__(self):
+                self.lock = threading.Lock()
+
+            def step(self, x=2.0):
+                return {"y": x * 3}
+    ''')
+    data, text = run(f"{path}:Simulation", tmp_path, probe=True, reads={"t": "return:t"})
+    assert "init_call" not in data["model"]
+    assert "a second step() with the same inputs changed t" in text
+    data, _ = run(f"{path}:Lookup", tmp_path, probe=True)
+    assert data["model"]["init_call"] is True   # a step that changes nothing still runs at initialization

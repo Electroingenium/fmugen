@@ -48,6 +48,8 @@ def render_toml(data, comments=None):
         lines.append(f"# {comments[('model', '#save_state')]}")
     if "setup" not in data["model"] and ("model", "#setup") in comments:   # training the user gives
         lines.append(f"# {comments[('model', '#setup')]}")
+    if "init_call" not in data["model"] and ("model", "#init_call") in comments:   # a second step changed outputs
+        lines.append(f"# {comments[('model', '#init_call')]}")
     for note in ("#requirements", "#compile"):
         if ("model", note) in comments:
             lines.append(f"# {comments[('model', note)]}")

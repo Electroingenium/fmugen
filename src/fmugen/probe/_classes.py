@@ -11,7 +11,7 @@ from fmugen.config import InterfaceError
 from fmugen.probe._arguments import _check_picklable, _state_bytes, _step_method
 from fmugen.probe._base import ConstantError, _requested_outputs, _run_setup
 from fmugen.probe._calling import (
-    _build_set_up, _construct, _probe_call, _rebuild_made_up_as_zero, _rebuild_with_options,
+    _build_set_up, _call_with_probe_inputs, _construct, _probe_call, _rebuild_made_up_as_zero, _rebuild_with_options,
 )
 from fmugen.probe._checks import (
     _check_sizes, _check_tunable, _environment, _gekko_outputs, _made_up_actions, _made_up_feed,
@@ -19,7 +19,7 @@ from fmugen.probe._checks import (
 )
 from fmugen.probe._reading import (
     _descriptor_values, _dynamic_values, _getter_outputs, _numeric_attributes, _outputs_from_return,
-    _property_values, _table_children, _unreadable, _writable_attribute,
+    _property_values, _snapshot, _table_children, _unreadable, _writable_attribute,
 )
 
 
@@ -162,6 +162,9 @@ def _probe_class(cls, method_name, data, comments, arrays, call_starts, create, 
         data["model"]["init_call"] = True
         comments[("model", "init_call")] = (f"{method_name}() changed nothing in the probe, so it also runs at "
                                             "initialization: outputs have values at the start time")
+    # the object couldn't be pickled to compare, so "nothing changed" rests on its numbers only
+    # (pybamm's Simulation keeps its state in a solution object): a second step confirms it
+    unconfirmed = data["model"].get("init_call") and (state_before is None or state_after is None)
     _check_picklable(obj, data, comments)
 
     returned = set()
@@ -234,6 +237,8 @@ def _probe_class(cls, method_name, data, comments, arrays, call_starts, create, 
             comments[("outputs", attr)] = f"changed by {method_name}(); an output, since the probe found no other"
             comments.pop(("locals", attr), None)
     _requested_outputs(data, comments, arrays, obj=obj, result=result)
+    if unconfirmed:
+        _confirm_unchanged(obj, method_name, result, data, comments)
     _check_sizes(obj, method_name, data, comments)
     _check_tunable(obj, method_name, data, comments, arrays)
     return obj, returned, set(getattr(obj, "__dict__", {})) | set(_property_values(obj, arrays)) | unfit
@@ -256,3 +261,62 @@ def _forwarded(method, method_name, owner):
             and not _only_varargs(forward, skip_self=not inspect.ismethod(forward)):
         return forward
     return method
+
+
+def _output_values(obj, result, data):
+    """``{output: value}`` of the outputs found so far, read as the FMU reads them; unreadable ones left out.
+
+    :param obj: the model object.
+    :param result: what the step returned.
+    :param data: the config being inferred.
+    :type data: dict
+    :rtype: dict
+    """
+    from fmugen.templates.fmugen_runtime import get_path, pick
+    values = {}
+    for name, info in data.get("outputs", {}).items():
+        kind, _, path = info.get("from", f"attr:{name}").partition(":")
+        try:
+            if kind == "return":
+                value = pick(result, path or None)
+            else:
+                value = get_path(obj, path)
+                if kind == "get":
+                    value = value()
+            values[name] = _snapshot(value)
+        except Exception:
+            continue
+    return values
+
+
+def _confirm_unchanged(obj, method_name, result, data, comments):
+    """Undo ``init_call`` when a second step with the same inputs gives other outputs.
+
+    Running the step at initialization is right only for a step that changes nothing; one that
+    advances a state hidden from the probe (pybamm's ``step()``: the solution's time) would put every
+    output one step ahead.
+
+    :param obj: the model object, after the probe's step.
+    :param method_name: the step method.
+    :type method_name: str
+    :param result: what that step returned.
+    :param data: the config being inferred; updated in place.
+    :type data: dict
+    :param comments: ``(section, key) -> text`` for :func:`render_toml`; updated in place.
+    :type comments: dict
+    """
+    first = _output_values(obj, result, data)
+    if not first:
+        return
+    try:
+        again = _call_with_probe_inputs(_step_method(obj, method_name, data), data, "call_constants")
+    except Exception:
+        return
+    second = _output_values(obj, None if again is obj else again, data)
+    changed = sorted(n for n in first if n in second and not _same(first[n], second[n]))
+    if changed:
+        del data["model"]["init_call"]
+        comments.pop(("model", "init_call"), None)
+        shown = ", ".join(changed[:3]) + (f" and {len(changed) - 3} more" if len(changed) > 3 else "")
+        comments[("model", "#init_call")] = (f"no init_call: a second {method_name}() with the same inputs changed "
+                                              f"{shown}, so running it at initialization would put the outputs a step ahead")
