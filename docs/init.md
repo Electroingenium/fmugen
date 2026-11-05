@@ -42,6 +42,31 @@ Rules that hold everywhere in the file:
 - **One variable per line:** `name = { key = value, ... }`. The name on the left is the variable name the FMU shows to the importer.
 - **Lines starting with `#` are comments.** `init` writes many commented-out lines for you to *uncomment* (delete the `# `) when they apply.
 
+### The questions `init` asks
+
+In a terminal, `init` asks for what the options leave open, using the arrow keys and Enter. Run it with no arguments to be asked everything:
+
+```bash
+fmugen init
+```
+
+| Question | Asked when | Option that skips it |
+|---|---|---|
+| Which model | No `MODEL` is given. Lists the `.py` files in the current folder, or takes a path or `package.module:Name`. | `MODEL` |
+| Whether to call the model once | No `--probe`. The answer defaults to no. | `--probe` |
+| Which function or class | The file defines several and the target has no `:Name`. Lists those found, or you write your own. | `MODEL` with `:Name` |
+| Which method runs a step | The model is a class. Lists the candidates, the one `init` would pick first, or you write your own. | `--call` |
+| Files and data | An argument looks like a file or data the model runs on and wasn't given. Type a value or `call:module:function(...)`; Enter skips it, and `init` warns. | `--start`, `--const` |
+| The start value of each other argument with no default | `init` would have to make one up. | `--start` |
+| Which FMI version | No `--fmi`. | `--fmi` |
+| Where to write the config, and whether to overwrite one that exists | No `-o`. | `-o`, `--force` |
+
+To ask these, `init` reads the model, which runs its top-level code. If you choose the probe, the questions use what it finds: its step method comes first in the list, it says why a call failed, and it asks for the data that failure names. The model is then called several times: once before the questions, again after each data value you give (which may reveal another argument) or a different step method, and once to write the config. If you don't choose it, the model is never called.
+
+Ctrl-C stops without writing anything (exit code 130). At the end, `init` prints the command that gives the same config with no questions.
+
+`--yes` (`-y`) asks nothing, and so does any run whose stdin or stderr isn't a terminal, such as a script or CI. What isn't given is then inferred, and `MODEL` is required.
+
 Use `-o -` to print the config without writing it, and `--force` to overwrite an existing one. Once you have edited a config by hand, rerunning `init` with `--force` throws your edits away, so keep a copy, or use `-o -` and copy the parts you need.
 
 ---

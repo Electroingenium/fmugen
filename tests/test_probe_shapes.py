@@ -676,7 +676,7 @@ def test_a_const_shared_with_the_step_method_goes_to_the_constructor(tmp_path):
     assert data["inputs"]["solve_x0"] == {"dimensions": [1], "start": [2.0], "to": "arg:x0"}
 
 
-def test_an_unclear_step_method_is_asked_in_a_terminal(tmp_path, monkeypatch, capsys):
+def test_an_unclear_step_method_is_asked_in_a_terminal(tmp_path, monkeypatch):
     path = write(tmp_path, "soil.py", """
         class Soil:
             def theta(self, h):
@@ -688,11 +688,10 @@ def test_an_unclear_step_method_is_asked_in_a_terminal(tmp_path, monkeypatch, ca
     import sys
     monkeypatch.setattr(sys.stdin, "isatty", lambda: True, raising=False)
     monkeypatch.setattr(sys.stderr, "isatty", lambda: True, raising=False)
-    answers = iter(["7", "2"])   # out of range, then theta
-    monkeypatch.setattr("builtins.input", lambda: next(answers))
+    asked = []
+    monkeypatch.setattr("fmugen.wizard.select_method", lambda cls, ranked: asked.append(ranked) or "theta")
     data, text = probe(f"{path}:Soil", tmp_path, starts={"h": 1.0})
-    err = capsys.readouterr().err
-    assert "  1. k\n  2. theta" in err and "not one of the candidates" in err
+    assert asked == [["k", "theta"]]
     assert data["model"]["call"] == "theta" and "theta() chosen at the prompt" in text
 
 

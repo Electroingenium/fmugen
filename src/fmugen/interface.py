@@ -2241,40 +2241,23 @@ def _ase_calculator(cls):
 
 
 def _ask_method(cls, ranked):
-    """Ask which method runs a step, when ``init`` runs in a terminal: the candidates numbered, best first.
-
-    Enter takes the first; a number or a method name (any public one) picks another.
+    """Ask which method runs a step, when ``init`` runs in a terminal: the candidates, best first.
 
     :param cls: the class.
     :type cls: type
     :param ranked: the candidates, best first (:func:`_rank_methods`).
     :type ranked: list[str]
-    :return: the method, or None when not in a terminal (stdin or stderr redirected) or at end of input.
+    :return: the method, or None when nothing can be asked (stdin or stderr redirected, ``--yes``).
     :rtype: str or None
+    :raises InterfaceError: Ctrl-C or the end of input at the prompt.
     """
-    if not (sys.stdin and sys.stdin.isatty() and sys.stderr.isatty()):
+    from fmugen import wizard
+    if not wizard.interactive():
         return None
-    shown = ranked[:9]
-    lines = [f"Which method of {cls.__name__} runs a step? (pass --call METHOD to skip this)"]
-    lines += [f"  {i}. {m}" for i, m in enumerate(shown, 1)]
-    if len(ranked) > len(shown):
-        lines.append(f"  (or type another: {', '.join(ranked[len(shown):])})")
-    sys.stderr.write("\n".join(lines) + "\n")
-    while True:
-        sys.stderr.write(f"Method [1: {shown[0]}]: ")
-        sys.stderr.flush()
-        try:
-            answer = input().strip()
-        except (EOFError, KeyboardInterrupt):
-            sys.stderr.write("\n")
-            raise InterfaceError(f"no step method chosen for {cls.__name__}; pass --call METHOD") from None
-        if not answer:
-            return shown[0]
-        if answer.isdigit() and 1 <= int(answer) <= len(shown):
-            return shown[int(answer) - 1]
-        if answer in ranked:
-            return answer
-        sys.stderr.write(f"  not one of the candidates: type 1–{len(shown)} or a method name\n")
+    try:
+        return wizard.select_method(cls.__name__, ranked)
+    except (EOFError, KeyboardInterrupt):
+        raise InterfaceError(f"no step method chosen for {cls.__name__}; pass --call METHOD") from None
 
 
 #: Method names that usually run a model, best first: picked when nothing else tells the step method
@@ -2289,6 +2272,25 @@ SETUP_IF_STEP = ("fit", "train", "update", "fit_", "train_")
 #: copy or close it: a step last.
 NOT_STEP = ("close", "stop", "shutdown", "terminate", "release", "dispose", "disconnect", "cleanup", "clear", "reset", "load", "save", "copy", "plot", "show", "summary", "describe", "score",
             "get_params", "set_params", "to_", "from_", "set_", "plot_", "save_", "load_", "print_", "add_", "remove_")
+
+
+def step_candidates(target, starts=None):
+    """The methods that may run a step of a target that is a class, best first, for ``init``'s questions.
+
+    :param target: the model target, already imported or importable.
+    :type target: str
+    :param starts: the ``--start`` / ``--const`` values.
+    :type starts: dict or None
+    :return: the methods, or None when the entry isn't a class.
+    :rtype: list[str] or None
+    """
+    path, module_name, name = parse_target(target)
+    if path:
+        module = sys.modules.get(path.stem) or load_module(path)
+    else:
+        module = importlib.import_module(module_name)
+    entry = _pick_entry(module, name)
+    return _rank_methods(entry, starts, None) if inspect.isclass(entry) else None
 
 
 def _rank_methods(cls, starts, constructor, fitting=()):
