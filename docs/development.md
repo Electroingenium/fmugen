@@ -106,7 +106,6 @@ To move to a newer UniFMU:
 - **FMPy is the only importer used.** Add [fmusim from the Reference FMUs](https://github.com/modelica/Reference-FMUs) and, optionally, OMSimulator: importers call functions in different orders.
 - **The published-model tests are manual.** An opt-in `pytest -m pypi` suite built from the configs in `models/r3/*/fmugen.toml` would keep them checked.
 - **Property-based tests** (Hypothesis) for `render_toml` → `load_config` round trips and for `coerce` / `reshape` / `flatten`.
-- **No linter, formatter or type checker.** Add `ruff` and `pre-commit`; `pyright` or `mypy` in basic mode, plus a `TypedDict` for the interface spec.
 
 ---
 
