@@ -28,10 +28,10 @@ def run(tmp_path, monkeypatch):
     monkeypatch.setattr(wizard, "interactive", lambda: not wizard._assume_yes)
     monkeypatch.setattr(wizard, "_output", DummyOutput)
 
-    def run_init(argv, keys):
+    def run_init(argv, keys, plain=False):
         with create_pipe_input() as pipe, create_app_session(input=pipe, output=DummyOutput()):
             pipe.send_text(keys)
-            main(["init", *argv])
+            main(["init", *([] if plain else ["--wizard"]), *argv])
     yield run_init
     wizard.assume_yes(False)
 
@@ -41,7 +41,7 @@ def test_every_question_with_its_default(run, tmp_path, capsys):
     run([], ENTER + "n" + ENTER * 4)
     text = (tmp_path / "fmugen.toml").read_text()
     assert 'plant.py:gain"' in text and "fmi_version = 2" in text and "start = 1.0" in text
-    assert "fmugen init plant.py:gain --fmi 2 --yes" in capsys.readouterr().err
+    assert "fmugen init plant.py:gain --fmi 2" in capsys.readouterr().err
 
 
 def test_answers_become_options(run, tmp_path, capsys):
@@ -49,7 +49,7 @@ def test_answers_become_options(run, tmp_path, capsys):
     run(["plant.py"], "y" + DOWN + ENTER + DOWN + ENTER + ENTER)
     text = (tmp_path / "fmugen.toml").read_text()
     assert 'plant.py:offset"' in text and "fmi_version = 3" in text
-    assert "fmugen init plant.py:offset --probe --fmi 3 --yes" in capsys.readouterr().err
+    assert "fmugen init plant.py:offset --probe --fmi 3" in capsys.readouterr().err
 
 
 def test_a_start_value_typed_is_written(run, tmp_path, capsys):
@@ -146,7 +146,7 @@ def test_outputs_arent_asked_without_the_probe(run, tmp_path):
 
 def test_keep_and_integer_are_options(run, tmp_path):
     (tmp_path / "plant.py").write_text(OUTPUTS)
-    run(["plant.py", "--yes", "--probe", "--keep", "a", "--integer", "a"], "")
+    run(["plant.py", "--probe", "--keep", "a", "--integer", "a"], "", plain=True)
     text = (tmp_path / "fmugen.toml").read_text()
     assert "\nb = " not in text and 'type = "Integer"' in text
 
@@ -202,7 +202,7 @@ def test_a_local_package_is_found_in_the_current_folder(run, tmp_path):
     (tmp_path / "localpkg").mkdir()
     (tmp_path / "localpkg" / "__init__.py").write_text("")
     (tmp_path / "localpkg" / "core.py").write_text("def f(x: float = 1.0):\n    return {'y': x}\n")
-    run(["localpkg.core:f", "--yes"], "")
+    run(["localpkg.core:f"], "", plain=True)
     assert 'entry = "localpkg.core:f"' in (tmp_path / "fmugen.toml").read_text()
 
 
@@ -264,23 +264,23 @@ def test_outputs_left_commented_out_and_not_chosen_are_gone(run, tmp_path, capsy
     assert "maybe" not in capsys.readouterr().err
 
 
-def test_yes_leaves_them_commented_out(run, tmp_path):
+def test_without_the_flag_they_stay_commented_out(run, tmp_path):
     (tmp_path / "plant.py").write_text(NONE_RESULT)
-    run(["plant.py", "--yes", "--probe"], "")
+    run(["plant.py", "--probe"], "", plain=True)
     assert "# maybe = " in (tmp_path / "fmugen.toml").read_text()
 
 
 def test_keep_asks_for_what_a_commented_output_needs(run, tmp_path, capsys):
     (tmp_path / "plant.py").write_text(NONE_RESULT)
     with pytest.raises(SystemExit) as stop:
-        run(["plant.py", "--yes", "--probe", "--keep", "maybe"], "")
+        run(["plant.py", "--probe", "--keep", "maybe"], "", plain=True)
     assert stop.value.code == 2 and "needs a type" in capsys.readouterr().err
 
 
 def test_keep_names_an_output_found(run, tmp_path, capsys):
     (tmp_path / "plant.py").write_text(OUTPUTS)
     with pytest.raises(SystemExit) as stop:
-        run(["plant.py", "--yes", "--probe", "--keep", "nope"], "")
+        run(["plant.py", "--probe", "--keep", "nope"], "", plain=True)
     assert stop.value.code == 2 and "nope: no such output" in capsys.readouterr().err
     assert not (tmp_path / "fmugen.toml").exists()
 
@@ -309,8 +309,8 @@ def test_ctrl_c_writes_nothing(run, tmp_path, capsys):
     assert not (tmp_path / "fmugen.toml").exists()
 
 
-def test_yes_asks_nothing(run, tmp_path):
-    run(["plant.py:offset", "--yes"], "")
+def test_without_the_flag_nothing_is_asked(run, tmp_path):
+    run(["plant.py:offset"], "", plain=True)
     assert 'plant.py:offset"' in (tmp_path / "fmugen.toml").read_text()
 
 
@@ -341,3 +341,10 @@ def test_a_rename_waits_while_the_path_is_held_open(tmp_path):
     assert _retrying(held_twice, "a", "b") == "moved" and len(calls) == 3
     with pytest.raises(PermissionError):
         _retrying(lambda s, t: (_ for _ in ()).throw(PermissionError()), "a", "b", tries=2)
+
+
+def test_the_wizard_needs_a_terminal(tmp_path, monkeypatch, capsys):
+    monkeypatch.chdir(tmp_path)
+    with pytest.raises(SystemExit) as stop:
+        main(["init", "--wizard", "x.py"])
+    assert stop.value.code == 2 and "needs a terminal" in capsys.readouterr().err

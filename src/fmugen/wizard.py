@@ -1,4 +1,4 @@
-"""The questions ``fmugen init`` asks in a terminal.
+"""The questions ``fmugen init --wizard`` asks.
 
 They fill in the same arguments as the command-line options, so an option given is never asked, and
 what the wizard answers is exactly what those options would do. Prompts go to stderr, like the warnings,
@@ -14,7 +14,7 @@ from pathlib import Path
 
 from fmugen.config import InterfaceError
 
-#: Set by ``--yes``: nothing is asked, also by the inference (see :func:`interactive`).
+#: Set while the wizard reads the model: the inference asks nothing then (see :func:`interactive`).
 _assume_yes = False
 
 #: Python files in the folder that are not models, left out of the first question.
@@ -27,7 +27,7 @@ _BUILD_EACH_STEP = "None: build the object on every step and read its results"
 
 
 def assume_yes(value=True):
-    """Never ask: every question takes its default (``--yes``).
+    """Never ask: the inference takes its own pick.
 
     :param value: whether to assume yes.
     :type value: bool
@@ -37,7 +37,7 @@ def assume_yes(value=True):
 
 
 def interactive():
-    """Whether questions can be asked: a terminal on stdin and stderr, without ``--yes``.
+    """Whether questions can be asked: a terminal on stdin and stderr.
 
     :rtype: bool
     """
@@ -502,7 +502,7 @@ def fill_in(args, argv, parsed_values):
         if overwrite and not args.force:
             args.force = True
             command.append("--force")
-    print("To repeat this without questions: " + shlex.join(["fmugen", "init", *command, "--yes"]), file=sys.stderr)
+    print("To repeat this without questions: " + shlex.join(["fmugen", "init", *command]), file=sys.stderr)
 
 
 def _fmi_choices():

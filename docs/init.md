@@ -42,12 +42,12 @@ Rules that hold everywhere in the file:
 - **One variable per line:** `name = { key = value, ... }`. The name on the left is the variable name the FMU shows to the importer.
 - **Lines starting with `#` are comments.** `init` writes many commented-out lines for you to *uncomment* (delete the `# `) when they apply.
 
-### The questions `init` asks
+### The wizard
 
-In a terminal, `init` asks for what the options leave open, using the arrow keys and Enter. Run it with no arguments to be asked everything:
+With `--wizard`, `init` asks in a terminal for what the options leave open, using the arrow keys and Enter. Without a model, it asks for that too:
 
 ```bash
-fmugen init
+fmugen init --wizard
 ```
 
 | Question | Asked when | Option that skips it |
@@ -67,7 +67,7 @@ To ask these, `init` reads the model, which runs its top-level code. If you choo
 
 Ctrl-C stops without writing anything (exit code 130). At the end, `init` prints the command that gives the same config with no questions.
 
-`--yes` (`-y`) asks nothing, and so does any run whose stdin or stderr isn't a terminal, such as a script or CI. What isn't given is then inferred, and `MODEL` is required.
+`--wizard` needs a terminal on stdin and stderr, and stops with an error otherwise. Without it, what isn't given is inferred and `MODEL` is required; the only question is which method runs a step, when that's unclear and `init` is in a terminal.
 
 Use `-o -` to print the config without writing it, and `--force` to overwrite an existing one. Once you have edited a config by hand, rerunning `init` with `--force` throws your edits away, so keep a copy, or use `-o -` and copy the parts you need.
 

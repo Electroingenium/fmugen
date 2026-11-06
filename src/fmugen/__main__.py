@@ -1,8 +1,7 @@
 """fmugen CLI.
 
-    fmugen init                                              # asks for the model and the options
     fmugen init path/to/model.py[:Name]                      # write path/to/fmugen.toml for review
-    fmugen init path/to/model.py[:Name] --yes                # same, without asking anything
+    fmugen init --wizard                                     # same, asking for the model and the options
     fmugen build path/to/fmugen.toml -o out/model.fmu        # packaged FMU (default)
     fmugen build path/to/model.py -o out/model.fmu           # same, with the config inferred in memory
     fmugen build path/to/fmugen.toml -o out/model --format folder
@@ -218,10 +217,11 @@ def main(argv=None):
     i = sub.add_parser("init", help="write a fmugen.toml by inspecting a model",
                        description="Import the model, read its signatures and source code, and write a commented "
                                    "fmugen.toml to review. The model is not called unless --probe is given. "
-                                   "In a terminal, it asks for what the options leave open. See docs/init.md.")
-    i.add_argument("model", nargs="?", help="model.py, model.py:Name, or package.module:Name (asked in a terminal if left out)")
-    i.add_argument("-y", "--yes", action="store_true",
-                   help="ask nothing: what isn't given is inferred, as when not in a terminal")
+                                   "--wizard asks for what the options leave open. See docs/init.md.")
+    i.add_argument("model", nargs="?", help="model.py, model.py:Name, or package.module:Name (--wizard asks for it if left out)")
+    i.add_argument("--wizard", action="store_true",
+                   help="ask, in a terminal, for what the options leave open: whether to probe, the step method, "
+                        "files and data, start values, outputs, FMI version and path")
     i.add_argument("-o", "--output", help="config path (default: fmugen.toml next to the model; - prints it)")
     i.add_argument("--call", help="method run on each step, for classes (default: step, do_step, update or __call__, else the likeliest; asked in a terminal)")
     i.add_argument("--force", action="store_true", help="overwrite an existing config")
@@ -313,15 +313,16 @@ def main(argv=None):
                 return _starts_and_consts(_parse_starts(args.start), _parse_consts(args.const),
                                           list(dict.fromkeys(args.value_order)))
 
-            wizard.assume_yes(args.yes)
-            if wizard.interactive():
+            if args.wizard:
+                if not wizard.interactive():
+                    raise InterfaceError("--wizard asks questions, so it needs a terminal; give the options instead")
                 try:
                     given = sys.argv[1:] if argv is None else argv
-                    wizard.fill_in(args, given[given.index("init") + 1:], values)
+                    wizard.fill_in(args, [a for a in given[given.index("init") + 1:] if a != "--wizard"], values)
                 except KeyboardInterrupt:
                     parser.exit(130, "fmugen: cancelled; nothing written\n")
             elif args.model is None:
-                raise InterfaceError("no model given: fmugen init MODEL (it is only asked in a terminal)")
+                raise InterfaceError("no model given: fmugen init MODEL, or fmugen init --wizard to be asked")
             output, _data = init(args.model, args.output, args.call, args.force, args.fmi, values(),
                                 args.setup, args.kind, args.create, args.probe, _parse_converts(args.convert),
                                 _parse_reads(args.read), _parse_keeps(args.keep), args.integer)

@@ -2250,7 +2250,7 @@ def _ask_method(cls, ranked):
     :type cls: type
     :param ranked: the candidates, best first (:func:`_rank_methods`).
     :type ranked: list[str]
-    :return: the method, or None when nothing can be asked (stdin or stderr redirected, ``--yes``).
+    :return: the method, or None when nothing can be asked (stdin or stderr redirected).
     :rtype: str or None
     :raises InterfaceError: Ctrl-C or the end of input at the prompt.
     """

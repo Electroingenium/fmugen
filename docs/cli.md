@@ -22,7 +22,7 @@ fmugen build MODEL -o OUTPUT [options]
 Imports the model, reads its signatures and **its source code**, and writes a commented `fmugen.toml`. **The model is not called**: no object is built and no step is run, so models that need a device, a network or a licence can be configured anywhere. Importing the module still runs its top-level code, as any import does. With `--probe`, `init` also calls the model once, to find what the code doesn't show.
 
 ```
-fmugen init [MODEL] [-y] [-o OUTPUT] [--call METHOD] [--fmi {2,3}]
+fmugen init [MODEL] [--wizard] [-o OUTPUT] [--call METHOD] [--fmi {2,3}]
                   [--start NAME=VALUE ...] [--const NAME=VALUE ...] [--setup CALL ...] [--kind function] [--create CLASSMETHOD]
                   [--probe [--probe-timeout SECONDS]] [--convert NAME=module:function ...] [--read NAME=PATH ...]
                   [--force] [--debug]
@@ -30,8 +30,8 @@ fmugen init [MODEL] [-y] [-o OUTPUT] [--call METHOD] [--fmi {2,3}]
 
 | Option | Default | Description |
 |---|---|---|
-| `MODEL` | asked in a terminal, otherwise required | A [model target](#model-targets): `model.py`, `model.py:Name` or `package.module:Name`. |
-| `-y`, `--yes` | off | Ask nothing, as when not in a terminal: what isn't given is inferred. See [the questions](init.md#the-questions-init-asks). |
+| `MODEL` | required, unless `--wizard` asks for it | A [model target](#model-targets): `model.py`, `model.py:Name` or `package.module:Name`. |
+| `--wizard` | off | Ask, in a terminal, for what the options leave open. See [the wizard](init.md#the-wizard). |
 | `-o`, `--output PATH` | `fmugen.toml` next to the model (current directory for an installed module) | Where to write the config; missing folders are created. `-o -` prints it instead. A model file must be inside the config's folder. |
 | `--call METHOD` | `step`, `do_step`, `update`, `__call__`, the method the `--start` names fit, or the only public method; when still unclear, `init` asks in a terminal (candidates best first), and otherwise picks the first and warns with the candidates | Classes: the method run on each step. |
 | `--fmi {2,3}` | none (FMI 2) | Writes `fmi_version` into the config. With `3`, list/tuple/numpy values are inferred as arrays, `bytes` as Binary and numpy `float32` as Float32. |
