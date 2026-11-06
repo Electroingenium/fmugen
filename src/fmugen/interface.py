@@ -1731,6 +1731,28 @@ def _add_requirements(data, comments, module_name, config_dir, entry_file):
 
 
 
+def public_entries(module):
+    """The public functions and classes a module defines (enums and exceptions don't count); for a package's
+    ``__init__`` that only re-exports, those in its ``__all__``.
+
+    :param module: the imported module.
+    :type module: types.ModuleType
+    :rtype: list
+    """
+    own = [
+        obj for attr, obj in vars(module).items()
+        if not attr.startswith("_")
+        and (inspect.isfunction(obj) or inspect.isclass(obj))
+        and getattr(obj, "__module__", None) == module.__name__
+        and not (inspect.isclass(obj) and issubclass(obj, (enum.Enum, BaseException)))
+    ]
+    if not own:   # a package's __init__ that only re-exports (from .core import Model): its __all__
+        own = [obj for attr in getattr(module, "__all__", ())
+               if (inspect.isfunction(obj := getattr(module, attr, None)) or inspect.isclass(obj))
+               and not (inspect.isclass(obj) and issubclass(obj, (enum.Enum, BaseException)))]
+    return own
+
+
 def _pick_entry(module, name):
     """The model's function or class in a module.
 
@@ -1748,17 +1770,7 @@ def _pick_entry(module, name):
         if not hasattr(module, name):
             raise InterfaceError(f"{module.__name__} has no {name!r}")
         return getattr(module, name)
-    own = [
-        obj for attr, obj in vars(module).items()
-        if not attr.startswith("_")
-        and (inspect.isfunction(obj) or inspect.isclass(obj))
-        and getattr(obj, "__module__", None) == module.__name__
-        and not (inspect.isclass(obj) and issubclass(obj, (enum.Enum, BaseException)))
-    ]
-    if not own:   # a package's __init__ that only re-exports (from .core import Model): its __all__
-        own = [obj for attr in getattr(module, "__all__", ())
-               if (inspect.isfunction(obj := getattr(module, attr, None)) or inspect.isclass(obj))
-               and not (inspect.isclass(obj) and issubclass(obj, (enum.Enum, BaseException)))]
+    own = public_entries(module)
     if len(own) != 1:
         found = ", ".join(o.__name__ for o in own) or "none"
         raise InterfaceError(
@@ -2308,6 +2320,20 @@ def step_candidates(target, starts=None):
     if not ranked and not callable_object:   # a plain record it returns: nothing to choose
         return None, False
     return (["__call__", *ranked] if callable_object else ranked), True
+
+
+def create_candidates(target):
+    """The public classmethods that build a target that is a class, for ``init``'s questions.
+
+    :param target: the model target, already imported or importable.
+    :type target: str
+    :return: their names; empty when the entry isn't a class.
+    :rtype: list[str]
+    """
+    path, module_name, name = parse_target(target)
+    module = (sys.modules.get(path.stem) or load_module(path)) if path else importlib.import_module(module_name)
+    entry = _pick_entry(module, name)
+    return [m for m in dir(entry) if not m.startswith("_") and _builds(entry, m)] if inspect.isclass(entry) else []
 
 
 def _rank_methods(cls, starts, constructor, fitting=()):

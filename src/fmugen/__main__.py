@@ -224,8 +224,8 @@ def main(argv=None):
                                    "--wizard asks for what the options leave open. See docs/init.md.")
     i.add_argument("model", nargs="?", help="model.py, model.py:Name, or package.module:Name (--wizard asks for it if left out)")
     i.add_argument("--wizard", action="store_true",
-                   help="ask, in a terminal, for what the options leave open: whether to probe, the step method, "
-                        "files and data, start values, outputs, FMI version and path")
+                   help="ask, in a terminal, for what the options leave open: how the model is read, how it's built, the step method, "
+                        "files and data, start values, other options, outputs, FMI version and path")
     i.add_argument("-o", "--output", help="config path (default: fmugen.toml next to the model; - prints it)")
     i.add_argument("--call", help="method run on each step, for classes (default: step, do_step, update or __call__, else the likeliest; asked in a terminal)")
     i.add_argument("--force", action="store_true", help="overwrite an existing config")
@@ -340,15 +340,16 @@ def main(argv=None):
                 if not wizard.interactive():
                     raise InterfaceError("--wizard asks questions, so it needs a terminal; give the options instead")
                 try:
-                    given = sys.argv[1:] if argv is None else argv
-                    wizard.fill_in(args, [a for a in given[given.index("init") + 1:] if a != "--wizard"], values)
-                except KeyboardInterrupt:
+                    wizard.fill_in(args, values)
+                except (KeyboardInterrupt, EOFError):
                     parser.exit(130, "fmugen: cancelled; nothing written\n")
+                wizard.assume_yes(True)   # all is answered: what's left is inferred, not asked again
             elif args.model is None:
                 raise InterfaceError("no model given: fmugen init MODEL, or fmugen init --wizard to be asked")
             output, _data = init(args.model, args.output, args.call, args.force, args.fmi, values(),
                                 args.setup, args.kind, args.create, args.probe, _parse_converts(args.convert),
                                 _parse_reads(args.read), _parse_keeps(args.keep), args.integer)
+            wizard.assume_yes(False)
             if output:
                 print(f"Wrote {output.resolve()}; review it, then run: fmugen build {output}")
             return
@@ -360,6 +361,8 @@ def main(argv=None):
                                   args.format, args.call, args.fmi, args.vendor, args.platform,
                                   args.python_version, args.compile, args.capture_output, args.probe,
                                   args.hf_weights, args.distributed, args.endpoint, args.private_output)
+    except KeyboardInterrupt:
+        parser.exit(130, "fmugen: cancelled\n")
     except (FileExistsError, InterfaceError) as e:
         parser.exit(2, f"fmugen: error: {e}\n")
     except Exception as e:

@@ -50,20 +50,27 @@ With `--wizard`, `init` asks in a terminal for what the options leave open, usin
 fmugen init --wizard
 ```
 
+The questions come in this order, those that change how the model is read first:
+
 | Question | Asked when | Option that skips it |
 |---|---|---|
-| Which model | No `MODEL` is given. Lists the `.py` files in the current folder, or takes a path or `package.module:Name`. | `MODEL` |
+| Which model | No `MODEL` is given. Lists the `.py` files in the current folder, or takes a path or `package.module[:Name]`. | `MODEL` |
+| Which function or class | The file or module defines several and the target has no `:Name`. Lists those found, or you write your own. | `MODEL` with `:Name` |
+| Which FMI version | No `--fmi`. Asked this early because arrays and Binary are read differently in FMI 3. | `--fmi` |
+| Where to write the config, and whether to overwrite one that exists | No `-o`, or it can't be used: a file that exists, or a folder the config can't name the model from. A folder means `fmugen.toml` in it, and `-` prints the config. | `-o`, `--force` |
 | Whether to call the model once | No `--probe`. The answer defaults to no. | `--probe` |
-| Which function or class | The file defines several and the target has no `:Name`. Lists those found, or you write your own. | `MODEL` with `:Name` |
-| Which method runs a step | The model is a class, or a function known to return an object (a factory). Lists the candidates, what `init` would pick first (which can be no method: building the object every step, or reading what the function returns), or you write your own. | `--call` |
+| How the object is built | The class has classmethods that build it. Lists what `init` would use first. | `--create` |
+| Which method runs a step | The model is a class, or a function known to return an object (a factory), and there's more than one way to run it. Lists what `init` would pick first (which can be no method: building the object every step, or reading what the function returns), the other candidates, or you write your own. For a class, the last choice is building the object every step (`--kind function`). | `--call`, `--kind` |
 | Files and data | An argument looks like a file or data the model runs on and wasn't given. Type a value or `call:module:function(...)`; Enter skips it, and `init` warns. | `--start`, `--const` |
-| The start value of each other argument `init` chose a value for | The value is made up, or comes from an example, a docstring or the code's checks. It's pre-filled, and Enter keeps it. | `--start` |
+| The start value of each other argument `init` chose a value for | The value is made up, or comes from an example, a docstring or the code's checks. It's pre-filled, and Enter keeps it. A number can't be replaced by something that isn't one unless it's quoted, and a whole number for a Real value asks whether it's a real number or a count. | `--start` |
+| Anything else to set | Always; Enter ends it. Adds a `--start`, `--const`, `--setup`, `--read` or `--convert`. Each is tried on the model, and left out, with the reason, if it fails. | |
+| Whether to call the model after all | You didn't choose the probe and the code shows no outputs. | `--probe` |
 | Which outputs to keep | You chose the probe and it found several, or some were left commented out. Those it found start checked, except what an object holds inside it (`decay_data.bfs`); those left commented out start unchecked, with the reason. Checking one of those makes it a real output, asking for its type or size if unknown, and it can fail the step for that reason. Those you leave unchecked are removed from the config. | `--keep` |
 | Which ints are counts | You chose the probe and it read ints it typed Real. Those you check become Integer. | `--integer` |
-| Which FMI version | No `--fmi`. | `--fmi` |
-| Where to write the config, and whether to overwrite one that exists | No `-o`. | `-o`, `--force` |
 
-To ask these, `init` reads the model, which runs its top-level code. If you choose the probe, the questions use what it finds: its step method comes first in the list, it says why a call failed, and it asks for the data that failure names. The model is then called several times: once before the questions, again after each data value you give (which may reveal another argument) or a different step method, and once to write the config. If you don't choose it, the model is never called.
+To ask these, `init` reads the model, which runs its top-level code, and reads it again after an answer that can change the result. If you choose the probe, each of those readings calls the model, so it is called several times; the questions then use what it finds: its step method comes first in the list, it says why a call failed, and it asks for the data that failure names. If you don't choose it, the model is never called.
+
+A model, step method, classmethod or value that doesn't work says why and is asked again, so one wrong answer doesn't lose the others. An option given on the command line that doesn't work stops `init`, as it does without `--wizard`.
 
 Ctrl-C stops without writing anything (exit code 130). At the end, `init` prints the command that gives the same config with no questions.
 
