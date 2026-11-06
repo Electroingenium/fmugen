@@ -3,11 +3,19 @@ import json
 import math
 import os
 import pickle
+import subprocess
+import sys
+import threading
+from collections import defaultdict
+from multiprocessing.connection import Listener
 from pathlib import Path
 
 from fmugen.templates.fmugen_runtime._constants import SPEC_VERSION, Status
 from fmugen.templates.fmugen_runtime._engine import Engine
 from fmugen.templates.fmugen_runtime._helpers import outside_bundle
+
+#: This machine's OS, as an isolated part's ``launch.json`` names it.
+_THIS_OS = {"win32": "windows", "darwin": "macos"}.get(sys.platform, "linux")
 
 
 def make_engine(resources_dir, log, info_category="logAll"):
@@ -48,6 +56,169 @@ def check_spec_version(interface):
     if found != SPEC_VERSION:
         raise RuntimeError(f"interface.json has spec_version {found!r}, but this fmugen runtime reads version "
                            f"{SPEC_VERSION}: rebuild the FMU with one fmugen version")
+
+
+#: What an engine method returns when its part's process is gone, for those that don't return a status alone.
+_FAILED = {"get_values": (Status.error, []), "do_step": (Status.error, False),
+           "update_discrete_states": (Status.error, False, None), "serialize": (Status.error, b""),
+           "get_clocks": (Status.error, []), "get_intervals": (Status.error, [], []), "get_shifts": (Status.error, [])}
+
+
+class PartProxy:
+    """One isolated part of a composite FMU: an :class:`Engine` running in a process of its own.
+
+    Has what :class:`CompositeEngine` uses of an engine; each call goes to the part's process
+    (``fmugen_part_main.py``, the part's ``main.py``), started with the command in its
+    ``launch.json``, so the part has its own Python, packages and modules. The two talk over a local
+    socket with a random key, which keeps the model's printing out of the protocol. Log records come
+    back before each answer, so they reach the importer during the call. When the process dies, the
+    call returns an error status, and so does every later one.
+
+    :ivar name: the part's name.
+    :ivar by_reference: the part's value reference -> variable entry.
+    :ivar discard_on: whether the part can discard a step.
+    """
+
+    def __init__(self, name, folder, log, info_category):
+        """Start the part's process and wait for its engine.
+
+        :param name: the part's name.
+        :type name: str
+        :param folder: the part's folder, ``resources/parts/<name>``.
+        :type folder: str or pathlib.Path
+        :param log: ``log(message, status, category)`` to the importer.
+        :type log: callable
+        :param info_category: log category for informational messages.
+        :type info_category: str
+        :raises RuntimeError: the process exited, or the part's model failed to import.
+        """
+        self.name, self.log, self.connection = name, log, None
+        folder = outside_bundle(folder).resolve()
+        command = json.loads((folder / "launch.json").read_text())[_THIS_OS]
+        if command[0].startswith("dist/"):   # Windows looks for a relative executable outside the new cwd
+            command = [str(folder / command[0]), *command[1:]]
+        key = os.urandom(32)
+        env = {**os.environ, "FMUGEN_PART_KEY": key.hex(), "FMUGEN_PART_CATEGORY": info_category}
+        if "LD_LIBRARY_PATH_ORIG" in env:   # a frozen backend's own libraries aren't the part's
+            env["LD_LIBRARY_PATH"] = env["LD_LIBRARY_PATH_ORIG"]
+        else:
+            env.pop("LD_LIBRARY_PATH", None) if getattr(sys, "frozen", False) else None
+        with Listener(("127.0.0.1", 0), authkey=key) as listener:
+            self.process = subprocess.Popen([*command, listener.address[0], str(listener.address[1])], cwd=folder, env=env)
+            accepted = []
+            thread = threading.Thread(target=lambda: accepted.append(listener.accept()), daemon=True)
+            thread.start()
+            while thread.is_alive():   # a vendored part's first run installs its packages: no time limit
+                thread.join(0.2)
+                if self.process.poll() is not None and not accepted:
+                    raise RuntimeError(f"part {name}: its process exited with status {self.process.returncode} "
+                                       "before connecting")
+            self.connection = accepted[0]
+        frame = self.connection.recv()
+        while frame[0] == "log":
+            self.log(*frame[1:])
+            frame = self.connection.recv()
+        if frame[0] != "ready":
+            raise RuntimeError(f"part {name} failed to start:\n{frame[1]}")
+        self.discard_on = frame[1]["discard_on"]
+        self.by_reference = frame[1]["by_reference"]
+        self._logging_on = frame[1]["logging_on"]
+
+    def _ask(self, kind, method, args, failed):
+        """Send one request and wait for its answer, passing on log records that come first.
+
+        :param kind: ``"call"``, ``"get"`` or ``"set"``.
+        :type kind: str
+        :param method: the engine's method or attribute.
+        :type method: str
+        :param args: the call's arguments, or the value to set.
+        :param failed: what to return when the process is gone.
+        :return: the answer.
+        """
+        if self.connection is None:
+            return failed
+        try:
+            self.connection.send((kind, method, args))
+            while True:
+                frame = self.connection.recv()
+                if frame[0] == "log":
+                    self.log(*frame[1:])
+                elif frame[0] == "result":
+                    return frame[1]
+                else:
+                    self.log(f"part {self.name}: {frame[1]}", Status.error, "logStatusError")
+                    return failed
+        except (EOFError, OSError):
+            self.connection = None
+            code = self.process.wait()
+            self.log(f"part {self.name}: its process ended with status {code} during {method}",
+                     Status.error, "logStatusError")
+            return failed
+
+    def __getattr__(self, name):
+        """An engine method, called in the part's process.
+
+        :param name: the method's name.
+        :type name: str
+        :rtype: callable
+        """
+        if name.startswith("_"):
+            raise AttributeError(name)
+        return lambda *args: self._ask("call", name, args, _FAILED.get(name, Status.error))
+
+    def size(self, var):
+        """Number of scalar values of a variable, asked of the part only for an array.
+
+        :param var: an entry of the part's variables.
+        :type var: dict
+        :rtype: int or None
+        """
+        return self._ask("call", "size", (var,), None) if var.get("dimensions") else None
+
+    @property
+    def logging_on(self):
+        """Whether the part sends its log records.
+
+        :rtype: bool
+        """
+        return self._logging_on
+
+    @logging_on.setter
+    def logging_on(self, on):
+        """Turn the part's log records on or off.
+
+        :param on: the new value.
+        :type on: bool
+        """
+        self._logging_on = on
+        self._ask("set", "logging_on", on, None)
+
+    @property
+    def terminate_requested(self):
+        """Whether the part asked to end the simulation.
+
+        :rtype: bool
+        """
+        return self._ask("get", "terminate_requested", (), False)
+
+    @property
+    def clock_active(self):
+        """The part's clock name -> whether it is ticking.
+
+        :rtype: dict[str, bool]
+        """
+        return self._ask("get", "clock_active", (), defaultdict(bool))
+
+    def close(self):
+        """End the part's process: closing the connection makes it exit."""
+        if self.connection is not None:
+            self.connection.close()
+            self.connection = None
+        try:
+            self.process.wait(timeout=5)
+        except subprocess.TimeoutExpired:
+            self.process.kill()
+            self.process.wait()
 
 
 class CompositeEngine:
@@ -99,10 +270,15 @@ class CompositeEngine:
         hf_cache = outside_bundle(self.resources_dir) / "hf_cache"
         if hf_cache.is_dir():   # Hugging Face models bundled by fmugen build, shared by the parts
             os.environ.update(HF_HUB_CACHE=str(hf_cache), HF_HUB_OFFLINE="1", TRANSFORMERS_OFFLINE="1")
-        for p in self.interface["parts"]:
-            check_spec_version(json.loads((self.resources_dir / p["dir"] / "interface.json").read_text()))
-        self.parts = {p["name"]: Engine(self.resources_dir / p["dir"], log, info_category)
-                      for p in self.interface["parts"]}
+        if self.interface.get("isolated"):   # each part checks its own spec_version, in its own process
+            self.parts = {}
+            for p in self.interface["parts"]:
+                self.parts[p["name"]] = PartProxy(p["name"], self.resources_dir / p["dir"], log, info_category)
+        else:
+            for p in self.interface["parts"]:
+                check_spec_version(json.loads((self.resources_dir / p["dir"] / "interface.json").read_text()))
+            self.parts = {p["name"]: Engine(self.resources_dir / p["dir"], log, info_category)
+                          for p in self.interface["parts"]}
         self.variables = self.interface["variables"]
         self.by_reference = {v["valueReference"]: v for v in self.variables}
         self.elements = {} if self.interface.get("fmi_version") != 2 else {
@@ -115,6 +291,12 @@ class CompositeEngine:
         self.clocks = {c["name"]: c for c in self.interface.get("clocks", [])}
         self.clock_by_reference = {c["valueReference"]: c for c in self.clocks.values()}
         self.time = self.interface.get("experiment", {}).get("start_time", 0.0)
+
+    def close(self):
+        """End the processes of isolated parts (they also end when this process does)."""
+        for engine in self.parts.values():
+            if isinstance(engine, PartProxy):
+                engine.close()
 
     # ---- helpers ----
 

@@ -56,6 +56,8 @@ RUNTIME_SOURCES = [
 ]
 #: The launcher of vendored FMUs (``--vendor``).
 LAUNCHER = TEMPLATES_DIR / "fmugen_launch.py"
+#: The process of an isolated part of a composite FMU.
+PART_MAIN = TEMPLATES_DIR / "fmugen_part_main.py"
 #: Files never copied into an FMU.
 IGNORE = shutil.ignore_patterns("__pycache__", "*.pyc", "venv", ".venv")
 #: ``--format`` values.
@@ -429,6 +431,114 @@ def _prepare(config, resources, version, model_name, author, capture_output):
     return interface
 
 
+def build_part(target, output, fmi_version=None, vendor=False, platforms=(), python_versions=(), compiler=None,
+               capture_output=False, hf_weights=None):
+    """Build one isolated part of a composite FMU, run with the part's own Python (``build --part``).
+
+    The folder holds what a part's process needs, not UniFMU's backend or binaries. Its ``main.py`` is
+    ``fmugen_part_main.py``, so it is vendored and compiled as a whole FMU's backend is. The
+    interface goes next to the folder too, as ``<folder>.interface.json``, since a compiled part
+    keeps its own inside the executable.
+
+    :param target: the part's fmugen.toml.
+    :type target: str or pathlib.Path
+    :param output: the part's folder.
+    :type output: str or pathlib.Path
+    :param fmi_version: the composite's FMI version.
+    :type fmi_version: int or None
+    :param vendor: ``--vendor``.
+    :type vendor: bool
+    :param platforms: ``--platform``.
+    :type platforms: list[str] or tuple
+    :param python_versions: ``--python-version``.
+    :type python_versions: list[str] or tuple
+    :param compiler: ``--compile``.
+    :type compiler: str or None
+    :param capture_output: ``--capture-output``.
+    :type capture_output: bool
+    :param hf_weights: ``--hf-weights``.
+    :type hf_weights: bool or None
+    :raises InterfaceError: an invalid config, or the model can't be imported.
+    """
+    output, config = Path(output), load_config(target)
+    version = config.fmi_version(fmi_version)
+    output.mkdir(parents=True, exist_ok=True)
+    shutil.copy2(ADAPTERS[version], output / "model.py")   # the freezer is told to include it, as for any FMU
+    shutil.copy2(PART_MAIN, output / "main.py")
+    _concatenate_runtime(output / "fmugen_runtime.py")
+    (output / "requirements.txt").write_text("\n".join([*BACKEND_REQUIREMENTS, *config.requirements]) + "\n")
+    interface = _prepare(config, output, version, None, None, capture_output)
+    write_interface(interface, output.with_name(output.name + ".interface.json"))
+    if hf_weights if hf_weights is not None else (vendor or compiler):
+        for repo_id in bundle_hf_models(interface, config.base_dir, output):
+            print(f"note: bundled the Hugging Face model {repo_id!r}; the FMU loads it offline")
+    if vendor:
+        shutil.copy2(LAUNCHER, output / "fmugen_launch.py")
+        vendor_wheels([*BACKEND_REQUIREMENTS, *config.requirements], output / "wheels", platforms, python_versions)
+    if compiler:
+        with tempfile.TemporaryDirectory() as tmp:
+            compile_fmu(compiler, output, interface, Path(tmp) / "compile", config.requirements)
+        commands = {system: ["sh", "-c", 'chmod -R u+x dist/main && exec ./dist/main/main "$@"', "sh"] for system in OSES}
+        commands["windows"] = ["dist/main/main.exe"]
+    elif vendor:
+        commands = {system: [DEFAULT_PYTHON[system], "fmugen_launch.py"] for system in OSES}
+    else:
+        commands = {system: [{**DEFAULT_PYTHON, CURRENT_OS: sys.executable}[system], "main.py"] for system in OSES}
+    (output / "launch.json").write_text(json.dumps(commands, indent=2))
+
+
+def _build_isolated_part(config_path, python, folder, version, vendor, platforms, python_versions, compiler,
+                         capture_output, hf_weights):
+    """Run :func:`build_part` with a part's own Python, which has the packages its model imports.
+
+    :param config_path: the part's fmugen.toml.
+    :type config_path: pathlib.Path
+    :param python: the part's Python; None for the one running fmugen.
+    :type python: str or None
+    :param folder: the part's folder in the composite FMU.
+    :type folder: pathlib.Path
+    :param version: the FMI version.
+    :type version: int
+    :param vendor: ``--vendor``.
+    :type vendor: bool
+    :param platforms: ``--platform``.
+    :type platforms: list[str] or tuple
+    :param python_versions: ``--python-version``.
+    :type python_versions: list[str] or tuple
+    :param compiler: ``--compile``.
+    :type compiler: str or None
+    :param capture_output: ``--capture-output``.
+    :type capture_output: bool
+    :param hf_weights: ``--hf-weights``.
+    :type hf_weights: bool or None
+    :return: the part's interface.
+    :rtype: dict
+    :raises InterfaceError: its Python can't run fmugen, or the part fails to build.
+    """
+    python = python or sys.executable
+    command = [python, "-m", "fmugen", "build", str(config_path), "-o", str(folder), "--part", "--fmi", str(version)]
+    command += ["--vendor"] if vendor else []
+    command += [arg for tag in platforms for arg in ("--platform", tag)]
+    command += [arg for v in python_versions for arg in ("--python-version", v)]
+    command += ["--compile", compiler] if compiler else []
+    command += ["--capture-output"] if capture_output else []
+    command += [] if hf_weights is None else ["--hf-weights" if hf_weights else "--no-hf-weights"]
+    folder.parent.mkdir(parents=True, exist_ok=True)
+    try:
+        result = subprocess.run(command, capture_output=True, text=True, check=False)
+    except OSError as e:
+        raise InterfaceError(f"[composite] part {folder.name}: can't run its Python, {python}: {e}") from e
+    if result.returncode != 0:
+        hint = (": install fmugen in that environment" if "No module named fmugen" in result.stderr else "")
+        raise InterfaceError(f"[composite] part {folder.name} failed to build with {python}{hint}:\n"
+                             f"{result.stdout}{result.stderr}")
+    print(result.stdout, end="")
+    saved = folder.with_name(folder.name + ".interface.json")
+    interface = json.loads(saved.read_text())
+    saved.unlink()
+    return interface
+
+
 def _flat(interface, resources):
     """The parts' variables and constants together (for ``--hf-weights``), for a composite FMU.
 
@@ -613,7 +723,9 @@ def build(target, output, model_name=None, author=None, output_format="fmu", cal
         configs, base_dir = {None: config}, config.base_dir
     if version not in ADAPTERS:
         raise InterfaceError(f"unknown FMI version {version!r}, expected one of {sorted(ADAPTERS)}")
-    requirements = list(dict.fromkeys(r for c in configs.values() for r in c.requirements))
+    # an isolated part has its requirements in its own folder: the composite's process doesn't import them
+    requirements = [] if composite_path and composite.isolate else list(
+        dict.fromkeys(r for c in configs.values() for r in c.requirements))
     backend_requirements = BACKEND_REQUIREMENTS + (DISTRIBUTED_REQUIREMENTS if distributed else [])
 
     with tempfile.TemporaryDirectory() as tmp:
@@ -629,7 +741,15 @@ def build(target, output, model_name=None, author=None, output_format="fmu", cal
             "# UniFMU backend\n" + "\n".join(backend_requirements) + "\n"
             + ("# model requirements\n" + "\n".join(requirements) + "\n" if requirements else "")
         )
-        if composite_path:
+        if composite_path and composite.isolate:
+            interfaces = {
+                name: _build_isolated_part(composite.paths[name], composite.pythons.get(name),
+                                           resources / PARTS_DIR / name, version, vendor, platforms, python_versions,
+                                           compiler, capture_output, hf_weights)
+                for name in configs
+            }
+            interface = combine(composite, interfaces, version, model_name, author)
+        elif composite_path:
             parts = list(configs)
             interfaces = {
                 name: _prepare(cfg, resources / PARTS_DIR / name, version, None, None,
@@ -642,7 +762,8 @@ def build(target, output, model_name=None, author=None, output_format="fmu", cal
         write_interface(interface, resources / "interface.json")
 
         write_model_description(interface, fmu_dir / "modelDescription.xml")
-        if hf_weights if hf_weights is not None else (vendor or compiler):
+        isolated = bool(composite_path and composite.isolate)   # each part bundled its own
+        if not isolated and (hf_weights if hf_weights is not None else (vendor or compiler)):
             for repo_id in bundle_hf_models(_flat(interface, resources), base_dir, resources):
                 print(f"note: bundled the Hugging Face model {repo_id!r}; the FMU loads it offline")
         if vendor:

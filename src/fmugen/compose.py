@@ -26,7 +26,9 @@ from fmugen.templates.fmugen_runtime import SPEC_VERSION
 from fmugen.units import AMBIGUOUS, display_unit, parse
 
 #: Keys allowed in ``[composite]``.
-COMPOSITE_KEYS = {"name", "description", "author", "parts", "connections", "fmi_version"}
+COMPOSITE_KEYS = {"name", "description", "author", "parts", "connections", "fmi_version", "isolate"}
+#: Keys of a part written as a table.
+PART_KEYS = {"path", "python"}
 #: Tables allowed in a composite config.
 TOP_KEYS = {"composite", "experiment"}
 #: Folder under ``resources/`` holding one subfolder per part.
@@ -41,6 +43,9 @@ class Composite:
     :ivar experiment: the ``[experiment]`` table.
     :ivar fmi_version: the FMI version of the FMU.
     :ivar parts: part name -> its :class:`fmugen.config.Config`, in run order.
+    :ivar paths: part name -> its fmugen.toml.
+    :ivar pythons: part name -> its own Python, for an isolated part that has one.
+    :ivar isolate: whether each part runs in a process of its own.
     :ivar connections: ``((src part, src variable), (dst part, dst variable))`` pairs.
     """
     def __init__(self, path):
@@ -72,27 +77,41 @@ class Composite:
         parts = table.get("parts")
         if not isinstance(parts, dict) or len(parts) < 2:
             raise InterfaceError('[composite] parts must name two or more configs: { a = "a/fmugen.toml", ... }')
-        self.parts = {}
+        self.isolate = table.get("isolate", False)
+        if not isinstance(self.isolate, bool):
+            raise InterfaceError("[composite] isolate must be true or false")
+        self.parts, self.paths, self.pythons = {}, {}, {}
         for name, rel in parts.items():
             if not name.isidentifier() or keyword.iskeyword(name):
                 raise InterfaceError(f"[composite] parts: {name!r} must be a Python identifier")
+            if isinstance(rel, dict):
+                if set(rel) - PART_KEYS or "path" not in rel:
+                    raise InterfaceError(f"[composite] parts.{name}: a table has path and, optionally, python")
+                if "python" in rel:
+                    if not self.isolate:
+                        raise InterfaceError(f"[composite] parts.{name}: python needs isolate = true")
+                    python = str(rel["python"])
+                    local = "/" in python or "\\" in python
+                    self.pythons[name] = str((self.path.parent / python).resolve()) if local else python
+                rel = rel["path"]
             part_path = (self.path.parent / rel).resolve()
             if part_path.is_dir():
                 part_path = part_path / "fmugen.toml"
             if not part_path.is_file():
                 raise InterfaceError(f"[composite] parts.{name}: {rel!r} is not a fmugen.toml")
             self.parts[name] = load_config(part_path)
+            self.paths[name] = part_path
         self.connections = [_connection(text) for text in table.get("connections", [])]
         owners = {}
         for name, config in self.parts.items():
             for module in config.local_modules():
                 owners.setdefault(module, []).append(name)
         clashes = {module: names for module, names in sorted(owners.items()) if len(names) > 1}
-        if clashes:
+        if clashes and not self.isolate:
             shown = "; ".join(f"{m} (in {', '.join(names)})" for m, names in clashes.items())
             raise InterfaceError(f"[composite] parts have modules with the same name: {shown}. All parts run in "
                                  "one Python process, which imports a module name once, so one part would run "
-                                 "the other's code: rename one of them")
+                                 "the other's code: rename one of them, or set isolate = true")
 
 
 def is_composite(target):
@@ -298,6 +317,7 @@ def combine(composite, interfaces, version, model_name=None, author=None):
     return {
         "spec_version": SPEC_VERSION,
         "composite": True,
+        **({"isolated": True} if composite.isolate else {}),
         "fmi_version": version,
         "model_name": model_name or composite.data.get("name") or composite.path.parent.name,
         "description": composite.data.get("description", "fmugen composite of " + ", ".join(interfaces)),

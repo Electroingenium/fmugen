@@ -105,6 +105,7 @@
       "properties": {
         "spec_version": { "const": 1 },
         "composite": { "const": true },
+        "isolated": { "const": true },
         "fmi_version": { "$ref": "#/$defs/fmiVersion" },
         "model_name": { "type": "string" },
         "description": { "type": "string" },

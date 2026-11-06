@@ -168,6 +168,8 @@ This builds the FMU in two halves with UniFMU's `generate-distributed` (FMI 2 an
 - **The proxy**, `out/model.fmu` (or a folder with `--format folder`): UniFMU's native binaries, the `modelDescription.xml`, and a `resources/launch.toml` that only says `location = "Remote"`. It contains no Python and none of the model. The importer loads it like any other FMU.
 - **The private folder**, `out/model_private/` (`--private-output PATH` to choose it): what is normally the FMU's `resources/`, i.e. the model, `interface.json`, fmugen's adapter and runtime, and UniFMU's backend. Its `main.py` is UniFMU's `main_remote.py`, which connects to the proxy instead of being started by it. `endpoint.toml` holds the proxy host's IP address, from `--endpoint` (default `127.0.0.1`). Copy this folder to the host or container that runs the model. Its `README.md` gives the exact start command.
 
+An [isolated composite](models.md#isolated-parts) keeps its parts in the private folder, and they run on that host; any `python` a part names must exist there too.
+
 `fmugen init` and `fmugen.toml` are the same as for any other FMU. `--distributed` works with composite FMUs, `--vendor` and `--compile`:
 
 | Build | Start the private side, in its folder | Needs there |

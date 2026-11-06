@@ -219,7 +219,8 @@ A config with `[composite]` instead of `[model]` builds one FMU from several fmu
 
 | Key | Type | Default | Meaning |
 |---|---|---|---|
-| `parts` | table `{ name = "path" }` | required | The parts, in the order they run each step. A path is a `fmugen.toml` or a folder containing one, relative to this file. Two or more. |
+| `parts` | table `{ name = "path" }` | required | The parts, in the order they run each step. A path is a `fmugen.toml` or a folder containing one, relative to this file. Two or more. With `isolate`, a part can also be `{ path = "...", python = "..." }`: the Python it builds and runs with, which needs fmugen and the part's packages. |
+| `isolate` | bool | `false` | Run each part in a process of its own, so parts can have modules of the same name, or conflicting packages through their own `python` ([details](models.md#isolated-parts)). |
 | `connections` | list of strings | `[]` | `"part.output -> part.input"`. Values are converted between units of the same quantity; different quantities are refused ([details](models.md#several-models-in-one-fmu)). |
 | `name`, `description`, `author` | string | the folder name, a list of the parts, empty | As in `[model]`. |
 | `fmi_version` | 2 or 3 | 2 | As in `[model]`. |

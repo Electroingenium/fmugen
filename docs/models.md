@@ -577,6 +577,23 @@ connections = [
 - **State:** saving and restoring the FMU state covers every part; reset resets them all.
 - **Clocks and structural parameters (FMI 3):** a part's clocks become the FMU's clocks, named `<part>.<clock>`; its structural parameters (`<part>.n`) size its own arrays, and configuration mode reaches the parts that have them. Arrays sized by a structural parameter can be connected: each part keeps its own parameter, so set both, and the sizes are checked when configuration mode and initialization end (a mismatch is an error status naming the connection). Clocked variables can't be connected.
 - **Discard:** a part that rejects its step (`[model] discard_on`) undoes the whole step: the parts that ran before it are put back too.
+
+### Isolated parts
+
+By default all parts run in one Python process, with one set of packages. `isolate = true` runs each part in a process of its own, for parts with modules of the same name, or, each with its own `python`, parts that need conflicting packages:
+
+```toml
+[composite]
+isolate = true
+parts = { a = "a", b = { path = "b", python = "b/.venv/Scripts/python.exe" } }
+connections = ["a.y -> b.x"]
+```
+
+- **Environments:** `python` is the part's interpreter, relative to this file, and it needs fmugen and the part's packages installed, because the part is built with it too. Without `python`, a part uses the Python running `fmugen build`.
+- **Packaging:** `--vendor`, `--compile`, `--distributed`, `--capture-output` and `--hf-weights` apply to each part. A vendored part has its own wheels and cached environment; a compiled part has its own executable, so with `--compile` each part's environment needs the compiler.
+- **Results:** the same as without `isolate`: state, rollback, reset, clocks and connections all work the same way.
+- **Failures:** if a part's process dies, the FMU returns an error status naming the part and its exit code, and keeps returning it.
+- **Cost:** every value and call crosses a local socket, about 3 ms per step for two small parts and two connections (measured on one Windows machine), plus one Python startup per part at instantiation. Leave `isolate` off unless parts need it.
 - **Limits:** all parts run in one Python process, so a module name is imported once: no two parts may have local files (entry files or `sources`) with the same module name, e.g. a `utils.py` in each. Installed packages can be shared. `--vendor` and `--compile` work as for one model.
 
 ---

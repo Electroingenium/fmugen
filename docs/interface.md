@@ -189,6 +189,7 @@ A composite FMU (`[composite]`) has one full single-model file per part, in `res
 |---|---|
 | `spec_version`, `fmi_version`, `model_name`, `description`, `author` | As above |
 | `composite` | `true` |
+| `isolated` | `true` when each part runs in its own process (only then present). Each part's folder then has its own `main.py`, runtime and `launch.json`, the command that starts it per OS. A compiled part keeps its `interface.json` inside its executable |
 | `parts` | `[{"name": part, "dir": "parts/<part>"}]` |
 | `connections` | `[{"from": [part, vr], "to": [part, vr]}]`, value references inside each part. Between different units, also `factor` and `offset`: target value = factor × source value + offset. With an end sized by a structural parameter, also `check_size`: the connection's name, for the size check when the FMU runs |
 | `variables` | The parts' variables not fed by a connection, named `<part>.<name>`, with `part` and `local` (the reference inside the part) added. `declared_type`, `depends_on`, `clocks` and named `dimensions` get the `<part>.` prefix too |

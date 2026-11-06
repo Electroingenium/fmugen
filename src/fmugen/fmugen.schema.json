@@ -251,8 +251,22 @@
           "description": "name = path of a fmugen.toml or its folder, in run order.",
           "type": "object",
           "minProperties": 2,
-          "additionalProperties": { "type": "string" }
+          "additionalProperties": {
+            "oneOf": [
+              { "type": "string" },
+              {
+                "type": "object",
+                "required": ["path"],
+                "additionalProperties": false,
+                "properties": {
+                  "path": { "type": "string" },
+                  "python": { "type": "string", "description": "With isolate = true: the Python this part builds and runs with." }
+                }
+              }
+            ]
+          }
         },
+        "isolate": { "type": "boolean", "description": "Run each part in a process of its own, optionally with its own Python and packages." },
         "connections": {
           "description": "\"part.output -> part.input\".",
           "type": "array",

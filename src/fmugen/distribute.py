@@ -283,8 +283,9 @@ def compile_fmu(compiler, resources, interface, work, requirements=()):
     work.mkdir(parents=True, exist_ok=True)
     models = _models(resources, interface)
     paths = [resources, *(folder / p for folder, model in models for p in model["sys_path"])]
-    modules = sorted({m for _, model in models for m in _modules(model)})
-    data = [(resources / "interface.json", ".")]
+    # isolated parts are compiled by themselves: this executable has only the backend and runtime
+    modules = sorted({"model", "fmugen_runtime", "cloudpickle", *(m for _, model in models for m in _modules(model))})
+    data =[(resources / "interface.json", ".")]
     for folder, model in models:
         if folder != resources:   # a part of a composite FMU reads its interface.json from parts/<name>/
             data.append((folder / "interface.json", folder.relative_to(resources).as_posix()))
@@ -341,7 +342,12 @@ def compile_fmu(compiler, resources, interface, work, requirements=()):
     if compiler == "pyinstaller" and (built / "_internal").is_dir():
         _add_package_folders(packages, built / "_internal")
     keep = {folder / MODEL_DIR for folder, model in models if model.get("cwd")}
+    parts = resources / "parts"
+    if interface.get("isolated"):
+        shutil.move(str(parts), str(work / "isolated_parts"))
     _remove_compiled(resources, keep, top=True)
+    if interface.get("isolated"):
+        shutil.move(str(work / "isolated_parts"), str(parts))
     shutil.move(str(built), str(resources / EXE_DIR))
 
 
@@ -356,6 +362,8 @@ def _models(resources, interface):
     """
     if not interface.get("composite"):
         return [(resources, interface)]
+    if interface.get("isolated"):
+        return []
     return [(resources / p["dir"], json.loads((resources / p["dir"] / "interface.json").read_text()))
             for p in interface["parts"]]
 

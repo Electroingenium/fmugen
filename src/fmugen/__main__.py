@@ -17,7 +17,7 @@ import sys
 from importlib.resources import files
 
 from fmugen import GENERATION_TOOL, wizard
-from fmugen.builder import FORMATS, build, init
+from fmugen.builder import FORMATS, build, build_part, init
 from fmugen.config import InterfaceError
 from fmugen.distribute import COMPILERS
 from fmugen.inspect_fmu import format_report, inspect_fmu
@@ -303,6 +303,8 @@ def main(argv=None):
     b.add_argument("--private-output", metavar="PATH",
                    help="with --distributed: the private folder (default: <output stem>_private next to -o)")
 
+    b.add_argument("--part", action="store_true", help=argparse.SUPPRESS)   # an isolated part, run by its composite's build
+
     for p in (i, b):
         p.add_argument("--probe-timeout", type=float, metavar="SECONDS",
                        help="with --probe: exit if the model's probe call takes longer (default: no limit)")
@@ -349,6 +351,10 @@ def main(argv=None):
                                 _parse_reads(args.read), _parse_keeps(args.keep), args.integer)
             if output:
                 print(f"Wrote {output.resolve()}; review it, then run: fmugen build {output}")
+            return
+        if args.part:
+            build_part(args.model, args.output, args.fmi, args.vendor, args.platform, args.python_version,
+                       args.compile, args.capture_output, args.hf_weights)
             return
         output, interface = build(args.model, args.output, args.name, args.author,
                                   args.format, args.call, args.fmi, args.vendor, args.platform,

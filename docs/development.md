@@ -63,6 +63,7 @@ The published models fmugen was tried on, and how, are in [testing/tested-models
 | `src/fmugen/interface.schema.json` | JSON Schema of `interface.json` ([interface.md](interface.md)) |
 | `src/fmugen/templates/fmugen_runtime/` | The engine: split into `_constants`, `_helpers`, `_engine`, `_composite` for development; concatenated into one file at build time |
 | `src/fmugen/templates/model_fmi2.py`, `model_fmi3.py` | The adapters copied into the FMU as `resources/model.py`: FMI calls → engine |
+| `src/fmugen/templates/fmugen_part_main.py` | The process of an isolated composite part, copied into its folder as `main.py`; `PartProxy` in `_composite.py` talks to it |
 | `src/fmugen/templates/fmugen_launch.py` | The launcher of vendored FMUs: offline install into a cached environment |
 | `tests/` | `uv run pytest` |
 | `docs/testing/` | Records of the published-model test runs, with their scripts |

@@ -212,6 +212,11 @@ def inspect_fmu(path):
             report["entry"] = "composite"
             report["parts"] = [p["name"] for p in spec["parts"]]
             report["connections"] = len(spec["connections"])
+            report["isolated"] = bool(spec.get("isolated"))
+            if report["isolated"]:
+                report["part_commands"] = {
+                    p["name"]: (json.loads(files.read(f"resources/{p['dir']}/launch.json") or b"{}").get(THIS_OS) or ["?"])[0]
+                    for p in spec["parts"]}
         else:
             entry = spec["entry"]
             report["entry"] = f"{entry['module']}:{entry['name']}"
@@ -244,6 +249,8 @@ def format_report(report):
     lines.append(f"Model:        {report['entry']}" + (f", step method {report['step_method']}" if "step_method" in report else ""))
     if "parts" in report:
         lines.append(f"Parts:        {', '.join(report['parts'])} ({report['connections']} connections)")
+        if report["isolated"]:
+            lines += [f"  {name} runs with: {command}" for name, command in report["part_commands"].items()]
     lines.append(f"Requires:     {listed(report['requirements'])}")
     if "wheels" in report:
         lines.append(f"Wheels:       {len(report['wheels'])}")
