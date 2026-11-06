@@ -132,7 +132,8 @@
               "from": { "$ref": "#/$defs/partReference" },
               "to": { "$ref": "#/$defs/partReference" },
               "factor": { "type": "number" },
-              "offset": { "type": "number" }
+              "offset": { "type": "number" },
+              "check_size": { "type": "string" }
             }
           }
         },

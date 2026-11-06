@@ -226,7 +226,7 @@ A config with `[composite]` instead of `[model]` builds one FMU from several fmu
 
 `[experiment]` may also be given. Other top-level tables are not allowed in a composite config.
 
-Parts may have clocks, structural parameters and `[events]` (FMI 3): the FMU's clocks are the parts' clocks, named `<part>.<clock>`, and a structural parameter sizes the arrays of its own part. Clocked variables and arrays sized by a structural parameter can't be connected.
+Parts may have clocks, structural parameters and `[events]` (FMI 3): the FMU's clocks are the parts' clocks, named `<part>.<clock>`, and a structural parameter sizes the arrays of its own part. Clocked variables can't be connected. Arrays sized by a structural parameter can: their sizes are checked when the FMU runs.
 
 ---
 

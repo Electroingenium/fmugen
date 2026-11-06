@@ -201,6 +201,66 @@ def test_conversion_applies_to_each_element_of_an_array(tmp_path, adapter):
     assert fmu.engine.get_values([fmu.vr["b.out"]])[1] == pytest.approx([1000.0, 2000.0])
 
 
+def write_sized(tmp_path, target_dimensions='["m"]'):
+    """Part a's array y, sized by its n, into part b's array x, sized by its m unless given."""
+    (tmp_path / "a").mkdir()
+    (tmp_path / "a" / "a.py").write_text("class A:\n    def __init__(self, n=2):\n        self.n = n\n\n"
+                                         "    def step(self):\n        return {'y': [1.0] * self.n}\n")
+    (tmp_path / "a" / "fmugen.toml").write_text(
+        '[model]\nentry = "a.py:A"\ncall = "step"\nfmi_version = 3\n'
+        '[structural_parameters]\nn = { start = 2, variability = "tunable", attr = false }\n'
+        '[outputs]\ny = { from = "return:y", dimensions = ["n"] }\n')
+    (tmp_path / "b").mkdir()
+    (tmp_path / "b" / "b.py").write_text("class B:\n    def __init__(self, m=2):\n        self.m = m\n\n"
+                                         "    def step(self, x):\n        return {'total': sum(x)}\n")
+    (tmp_path / "b" / "fmugen.toml").write_text(
+        '[model]\nentry = "b.py:B"\ncall = "step"\nfmi_version = 3\n'
+        '[structural_parameters]\nm = { start = 2, variability = "tunable", attr = false }\n'
+        f'[inputs]\nx = {{ dimensions = {target_dimensions}, start = 0.0 }}\n'
+        '[outputs]\ntotal = { from = "return:total" }\n')
+    (tmp_path / "fmugen.toml").write_text(
+        '[composite]\nfmi_version = 3\nparts = { a = "a", b = "b" }\nconnections = ["a.y -> b.x"]\n')
+    return tmp_path / "fmugen.toml"
+
+
+@pytest.mark.parametrize("target_dimensions", ['["m"]', "[2]"])
+def test_arrays_sized_by_structural_parameters_connect(tmp_path, adapter, target_dimensions):
+    build(write_sized(tmp_path, target_dimensions), tmp_path / "out", output_format="folder")
+    fmu = adapter(tmp_path / "out", fmi=3)
+    fmu.initialize()
+    assert fmu.fmi3DoStep(0.0, 1.0, False)[0] == OK, fmu.logs
+    assert fmu.get("b.total") == pytest.approx(2.0)
+
+
+def test_sizes_set_together_in_configuration_mode_work(tmp_path, adapter):
+    build(write_sized(tmp_path), tmp_path / "out", output_format="folder")
+    fmu = adapter(tmp_path / "out", fmi=3)
+    assert fmu.fmi3EnterConfigurationMode() == OK
+    assert fmu.fmi3SetUInt64([fmu.vr["a.n"], fmu.vr["b.m"]], [3, 3]) == OK
+    assert fmu.fmi3ExitConfigurationMode() == OK, fmu.logs
+    fmu.initialize()
+    assert fmu.fmi3DoStep(0.0, 1.0, False)[0] == OK, fmu.logs
+    assert fmu.get("b.total") == pytest.approx(3.0)
+
+
+def test_different_sizes_are_an_error_naming_the_connection(tmp_path, adapter):
+    build(write_sized(tmp_path), tmp_path / "out", output_format="folder")
+    fmu = adapter(tmp_path / "out", fmi=3)
+    assert fmu.fmi3EnterConfigurationMode() == OK
+    assert fmu.fmi3SetUInt64([fmu.vr["a.n"]], [3]) == OK
+    assert fmu.fmi3ExitConfigurationMode() != OK
+    assert any("a.y -> b.x" in message and "3 and 2" in message for *_, message in fmu.logs)
+
+
+def test_reconfiguration_checks_sizes_again(tmp_path, adapter):
+    build(write_sized(tmp_path), tmp_path / "out", output_format="folder")
+    fmu = adapter(tmp_path / "out", fmi=3)
+    fmu.initialize()
+    assert fmu.fmi3EnterConfigurationMode() == OK
+    assert fmu.fmi3SetUInt64([fmu.vr["b.m"]], [5]) == OK
+    assert fmu.fmi3ExitConfigurationMode() != OK
+
+
 @pytest.mark.fmu
 def test_unit_conversion_through_unifmu(tmp_path):
     fmu = tmp_path / "units.fmu"

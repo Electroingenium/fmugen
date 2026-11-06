@@ -206,7 +206,7 @@ def combine(composite, interfaces, version, model_name=None, author=None):
     """Build the composite FMU's interface from its parts' interfaces.
 
     Each connection is checked (any variable but an input into an input, fed once, unclocked, same
-    size, compatible types and units) and stored as the parts' value references, with the unit
+    size unless a structural parameter sizes an end, compatible types and units) and stored as the parts' value references, with the unit
     conversion it needs. The FMU's variables are the
     parts' variables not fed by a connection, named ``<part>.<name>`` and carrying ``part`` and
     ``local`` (the reference inside the part), which :class:`CompositeEngine` uses to route
@@ -245,17 +245,17 @@ def combine(composite, interfaces, version, model_name=None, author=None):
             if var.get("clocks"):
                 raise InterfaceError(f"[composite] connection: {end} is a clocked variable; only variables "
                                      "that have a value at every step can be connected")
-            if any(isinstance(d, str) for d in var.get("dimensions", ())):
-                raise InterfaceError(f"[composite] connection: {end} is an array sized by a structural "
-                                     "parameter; only fixed-size arrays can be connected")
-        if element_count(source) != element_count(target):
+        # an array sized by a structural parameter has its size only when the FMU runs: checked then
+        sized_later = any(isinstance(d, str) for var in (source, target) for d in var.get("dimensions", ()))
+        if not sized_later and element_count(source) != element_count(target):
             raise InterfaceError(f"[composite] connection: {src}.{src_var} and {dst}.{dst_var} have different sizes")
         why = _type_mismatch(source, target, interfaces[src], interfaces[dst])
         if why:
             raise InterfaceError(f"[composite] connection: {src}.{src_var} -> {dst}.{dst_var}: {why}")
         fed.add((dst, dst_var))
         connections.append({"from": [src, source["valueReference"]], "to": [dst, target["valueReference"]],
-                            **_unit_conversion(f"{src}.{src_var} -> {dst}.{dst_var}", source, target)})
+                            **_unit_conversion(f"{src}.{src_var} -> {dst}.{dst_var}", source, target),
+                            **({"check_size": f"{src}.{src_var} -> {dst}.{dst_var}"} if sized_later else {})})
 
     variables, type_definitions = [], {}
     for part, interface in interfaces.items():

@@ -73,6 +73,7 @@ class CompositeEngine:
     :ivar by_reference: composite value reference -> variable entry.
     :ivar elements: FMI 2 only: element reference -> (array variable, index).
     :ivar connections: ``((src part, src reference), (dst part, dst reference), factor, offset)``.
+    :ivar sized_later: the connections with an end sized by a structural parameter.
     :ivar clocks: composite clock name (``<part>.<clock>``) -> clock entry.
     :ivar clock_by_reference: composite clock reference -> clock entry.
     :ivar time: the composite's current time (for the independent variable).
@@ -109,6 +110,7 @@ class CompositeEngine:
             for k in range(math.prod(v["dimensions"]))}
         self.connections = [(tuple(c["from"]), tuple(c["to"]), c.get("factor", 1.0), c.get("offset", 0.0))
                             for c in self.interface["connections"]]
+        self.sized_later = [c for c in self.interface["connections"] if "check_size" in c]
         # the parts' clocks, <part>.<clock>: each reference is passed on to its part
         self.clocks = {c["name"]: c for c in self.interface.get("clocks", [])}
         self.clock_by_reference = {c["valueReference"]: c for c in self.clocks.values()}
@@ -191,6 +193,22 @@ class CompositeEngine:
                 return status
         return Status.ok
 
+    def _check_sizes(self):
+        """Check the connections whose size depends on a structural parameter.
+
+        :return: ``Status.ok``, or ``Status.error`` naming the first connection whose ends differ.
+        :rtype: int
+        """
+        for connection in self.sized_later:
+            sizes = []
+            for part, reference in (connection["from"], connection["to"]):
+                engine = self.parts[part]
+                sizes.append(engine.size(engine.by_reference[reference]))
+            if sizes[0] != sizes[1]:
+                return self.error(f"connection {connection['check_size']}: the arrays have different sizes, "
+                                  f"{sizes[0]} and {sizes[1]}")
+        return Status.ok
+
     def _target(self, r):
         """Map one of the FMU's value references to a part.
 
@@ -263,7 +281,9 @@ class CompositeEngine:
         :return: the worst status.
         :rtype: int
         """
-        status = Status.ok
+        status = self._check_sizes()
+        if status >= Status.error:
+            return status
         for name, engine in self.parts.items():
             status = max(status, self._feed(name))
             if status < Status.error:
@@ -335,13 +355,17 @@ class CompositeEngine:
     def exit_configuration_mode(self):
         """``fmi3ExitConfigurationMode`` for the parts that have structural parameters.
 
-        :return: the worst status, or ``Status.error`` when no part has structural parameters.
+        Connected arrays must have the same size by then.
+
+        :return: the worst status, or ``Status.error`` when no part has structural parameters or
+            connected arrays differ in size.
         :rtype: int
         """
         parts = self._configurable()
         if not parts:
             return self.error("this FMU has no structural parameters")
-        return max(e.exit_configuration_mode() for e in parts)
+        status = max(e.exit_configuration_mode() for e in parts)
+        return max(status, self._check_sizes())
 
     def enter_event_mode(self):
         """``fmi3EnterEventMode`` for every part.
