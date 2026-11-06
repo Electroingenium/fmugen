@@ -8,6 +8,7 @@ import sys
 
 import pytest
 from fmpy import simulate_fmu
+from test_composite import write_units
 from test_runtime import write
 
 from fmugen.builder import build
@@ -47,15 +48,16 @@ y = {{ from = "return" }}
 CLOCKED_SOURCE = """
 class Ticks:
     def __init__(self):
-        self.count = 0.0
+        self.count, self.even = 0.0, False
 
-    def tick(self):
+    def step(self):
         self.count += 1.0
+        self.even = self.count % 2 == 0
 """
 CLOCKED_CONFIG = """
 [model]
 entry = "ticks.py:Ticks"
-call = false
+call = "step"
 fmi_version = 3
 [experiment]
 start_time = 0.0
@@ -63,9 +65,9 @@ stop_time = 3.0
 step_size = 0.5
 [outputs]
 count = { from = "attr:count" }
-[clocks.sample]
-interval = 1.0
-call = "tick"
+[clocks.even_count]
+causality = "output"
+from = "attr:even"
 """
 
 
@@ -105,11 +107,27 @@ def test_a_stateful_model_matches_fmpy(tmp_path, command, fmi):
     assert last_value(result, "y") == pytest.approx(expected)
 
 
-def test_an_fmi3_periodic_clock_ticks(tmp_path):
-    # not OMSimulator, which can't read clocks: docs/limitations/omsimulator.md
+def test_an_fmi3_output_clock_enters_event_mode(tmp_path):
+    # not OMSimulator, which can't read clocks (docs/limitations/omsimulator.md), and not an input clock,
+    # which fmusim doesn't tick in co-simulation (docs/limitations/fmusim.md)
     write(tmp_path, "ticks.py", CLOCKED_SOURCE, CLOCKED_CONFIG)
     fmu = build(tmp_path / "fmugen.toml", tmp_path / "ticks.fmu")[0]
     result = tmp_path / "result.csv"
-    done = subprocess.run(run_fmusim(fmu, result), cwd=tmp_path, capture_output=True, text=True, timeout=120, check=False)
+    command = [*run_fmusim(fmu, result)[:-1], "--event-mode-used", "--log-fmi-calls", str(fmu)]
+    done = subprocess.run(command, cwd=tmp_path, capture_output=True, text=True, timeout=120, check=False)
     assert done.returncode == 0, done.stdout + done.stderr
-    assert last_value(result, "count") >= 3.0, done.stdout
+    assert "eventHandlingNeeded=1" in done.stdout and "fmi3EnterEventMode" in done.stdout, done.stdout
+    assert last_value(result, "count") == pytest.approx(STOP)   # one step per output interval of 1 s
+
+
+@pytest.mark.parametrize("isolate", [False, True], ids=["one_process", "isolated"])
+@pytest.mark.parametrize("command", [run_omsimulator, run_fmusim], ids=["omsimulator", "fmusim"])
+def test_a_composite_converting_units(tmp_path, command, isolate):
+    path = write_units(tmp_path, 'unit = "kW"', 'unit = "W", start = 0.0')
+    if isolate:
+        path.write_text(path.read_text().replace("[composite]\n", "[composite]\nisolate = true\n"))
+    fmu = build(path, tmp_path / "units.fmu")[0]
+    result = tmp_path / "result.csv"
+    done = subprocess.run(command(fmu, result), cwd=tmp_path, capture_output=True, text=True, timeout=120, check=False)
+    assert done.returncode == 0, done.stdout + done.stderr
+    assert last_value(result, "out") == pytest.approx(2000.0)

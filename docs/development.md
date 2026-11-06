@@ -35,7 +35,7 @@ The tests cover:
 - **Inference:** `fmugen init` on small models, and model shapes found while testing published models.
 - **FMU validity:** `modelDescription.xml` is checked with FMPy's validator, and `interface.json` against its JSON Schema.
 - **The installed wheel:** `tests/test_wheel.py` builds the wheel, installs it into a clean environment, and runs `init`, `build`, `inspect` and a simulation from there.
-- **Other importers:** `tests/test_importers.py` (`-m importers`) runs FMUs through OMSimulator (a dev dependency) and [fmusim from the Reference FMUs](https://github.com/modelica/Reference-FMUs) (on `PATH`, or set `FMUGEN_FMUSIM`; skipped without it), and compares with FMPy. OMSimulator's limits are in [limitations/omsimulator.md](limitations/omsimulator.md).
+- **Other importers:** `tests/test_importers.py` (`-m importers`) runs FMUs through OMSimulator (a dev dependency) and [fmusim from the Reference FMUs](https://github.com/modelica/Reference-FMUs) (on `PATH`, or set `FMUGEN_FMUSIM`; skipped without it; 0.0.39 is the newest release that has it), and compares with FMPy. Their limits are in [limitations/omsimulator.md](limitations/omsimulator.md) and [limitations/fmusim.md](limitations/fmusim.md).
 - **Real runs:** simulations through UniFMU for both versions. These cover every supported FMI 3 type, clocks, intervals and shifts, state save/restore, and changing a tunable parameter.
 
 The published models fmugen was tried on, and how, are in [testing/tested-models.md](testing/tested-models.md).
