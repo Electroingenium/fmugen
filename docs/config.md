@@ -27,6 +27,22 @@ Unknown keys are rejected with an error, so typos don't go unnoticed. Keys marke
 
 ---
 
+## Editor support
+
+`fmugen schema` prints a JSON Schema of this file, for completion and checks as you type. Save it once and point your editor at it. With the Even Better TOML extension (Taplo), add this as the file's first line:
+
+```bash
+fmugen schema > fmugen.schema.json
+```
+
+```toml
+#:schema ./fmugen.schema.json
+```
+
+The schema checks the keys and their types. `fmugen build` does the rest: bindings against the model's signature, values that depend on each other, and what needs FMI 3.
+
+---
+
 ## `[model]`
 
 | Key | Type | Default | Meaning |

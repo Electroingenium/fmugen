@@ -14,6 +14,7 @@ import argparse
 import json
 import re
 import sys
+from importlib.resources import files
 
 from fmugen import GENERATION_TOOL, wizard
 from fmugen.builder import FORMATS, build, init
@@ -315,7 +316,12 @@ def main(argv=None):
     for p in (i, b, n):
         p.add_argument("--debug", action="store_true",
                        help="show the full traceback of an unexpected error (default: a one-line message)")
+    sub.add_parser("schema", help="print the JSON Schema of fmugen.toml, for editors",
+                   description="Print the JSON Schema of fmugen.toml. See docs/config.md.")
     args = parser.parse_args(argv)
+    if args.command == "schema":
+        print(files("fmugen").joinpath("fmugen.schema.json").read_text(encoding="utf-8"), end="")
+        return
     if args.command != "inspect" and args.probe and args.probe_timeout:
         args.probe = args.probe_timeout
     try:

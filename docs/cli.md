@@ -18,7 +18,7 @@ fmugen init  MODEL [options]
 fmugen build MODEL -o OUTPUT [options]
 ```
 
-`fmugen --version` prints the fmugen and UniFMU versions, in the form FMUs record them as `generationTool`.
+`fmugen --version` prints the fmugen and UniFMU versions, in the form FMUs record them as `generationTool`. `fmugen schema` prints the JSON Schema of `fmugen.toml`, for [editors](config.md#editor-support).
 
 ## `fmugen init`
 

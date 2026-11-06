@@ -1,0 +1,264 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "fmugen.toml",
+  "description": "How an unmodified Python model becomes an FMU: a model config, or a composite of several. Reference: docs/config.md.",
+  "type": "object",
+  "oneOf": [
+    {
+      "required": ["model"],
+      "additionalProperties": false,
+      "properties": {
+        "model": { "$ref": "#/$defs/model" },
+        "experiment": { "$ref": "#/$defs/experiment" },
+        "time": { "$ref": "#/$defs/time" },
+        "structural_parameters": { "$ref": "#/$defs/section_structural_parameters" },
+        "parameters": { "$ref": "#/$defs/section_parameters" },
+        "calculated_parameters": { "$ref": "#/$defs/section_calculated_parameters" },
+        "inputs": { "$ref": "#/$defs/section_inputs" },
+        "states": { "$ref": "#/$defs/section_states" },
+        "outputs": { "$ref": "#/$defs/section_outputs" },
+        "locals": { "$ref": "#/$defs/section_locals" },
+        "clocks": {
+          "description": "FMI 3: one table per clock.",
+          "type": "object",
+          "additionalProperties": { "$ref": "#/$defs/clock" }
+        },
+        "events": { "$ref": "#/$defs/events" }
+      }
+    },
+    {
+      "required": ["composite"],
+      "additionalProperties": false,
+      "properties": {
+        "composite": { "$ref": "#/$defs/composite" },
+        "experiment": { "$ref": "#/$defs/experiment" }
+      }
+    }
+  ],
+  "$defs": {
+    "model": {
+      "description": "What to call.",
+      "type": "object",
+      "required": ["entry"],
+      "additionalProperties": false,
+      "properties": {
+        "entry": { "type": "string", "description": "\"path/file.py:Name\" or \"package.module:Name\": a function or class." },
+        "fmi_version": { "enum": [2, 3], "description": "FMI version to build; fmugen build --fmi overrides it." },
+        "call": { "type": ["string", "boolean"], "description": "Classes: the method run on each step. false: nothing runs on doStep, only clocks run code." },
+        "name": { "type": "string", "description": "modelName in modelDescription.xml." },
+        "description": { "type": "string", "description": "description in modelDescription.xml." },
+        "author": { "type": "string", "description": "author in modelDescription.xml." },
+        "sources": { "type": "array", "items": { "type": "string" }, "description": "Extra files and directories to copy into the FMU." },
+        "globals": { "type": "array", "items": { "type": "string" }, "description": "\"module:NAME\" module-level variables the model changes while it runs." },
+        "cwd": { "type": "string", "description": "Folder the model's code runs in, relative to fmugen.toml." },
+        "requirements": { "type": "array", "items": { "type": "string" }, "description": "pip requirement specifiers the model needs at runtime." },
+        "kind": { "const": "function", "description": "Construct the class with the inputs on every step." },
+        "create": { "type": "string", "description": "Classmethod that builds the object, e.g. \"from_pretrained\"." },
+        "call_on_class": { "type": "boolean", "description": "Call the step method on the class, not on the object." },
+        "save_state": {
+          "description": "How the FMU saves its state: true, false, or a list of attribute names.",
+          "oneOf": [{ "type": "boolean" }, { "type": "array", "items": { "type": "string" } }]
+        },
+        "setup": {
+          "description": "Calls run each time the FMU initializes.",
+          "type": "array",
+          "items": {
+            "oneOf": [
+              { "type": "string" },
+              {
+                "type": "object",
+                "required": ["call"],
+                "additionalProperties": false,
+                "properties": { "call": { "type": "string" }, "args": { "type": "array" }, "kwargs": { "type": "object" } }
+              }
+            ]
+          }
+        },
+        "init_call": { "type": "boolean", "description": "Call the model when leaving initialization mode, to compute the initial outputs." },
+        "terminate": { "type": "string", "description": "Classes: a method called on terminate, e.g. \"close\"." },
+        "discard_on": { "type": "array", "items": { "type": "string" }, "description": "\"module:Class\" exceptions and warnings that reject a step." },
+        "integrate": { "type": "string", "pattern": "^(euler|rk4|scipy:(RK45|RK23|DOP853|Radau|BDF|LSODA))$", "description": "The model returns the derivatives of the [states], and the FMU integrates them." },
+        "substeps": { "type": "integer", "minimum": 1, "description": "Fixed sub-steps per communication step." },
+        "annotations": { "type": "string", "description": "<Tool name=\"...\"> elements added to modelDescription.xml." },
+        "constants": { "type": "object", "description": "Fixed arguments of the constructor or function that aren't FMU variables." },
+        "call_constants": { "type": "object", "description": "Fixed arguments of the step method that aren't FMU variables." }
+      }
+    },
+    "experiment": {
+      "description": "The default experiment and step-size capability.",
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "start_time": { "type": "number" },
+        "stop_time": { "type": "number" },
+        "step_size": { "type": "number" },
+        "tolerance": { "type": "number" },
+        "fixed_step": { "type": "boolean", "description": "The model only works with step_size." }
+      }
+    },
+    "time_source": { "enum": ["time", "step_size", "end_time", "start_time", "stop_time", "tolerance"] },
+    "time": {
+      "description": "Arguments that receive the FMU time or step size.",
+      "type": "object",
+      "additionalProperties": {
+        "oneOf": [
+          { "$ref": "#/$defs/time_source" },
+          {
+            "type": "object",
+            "additionalProperties": false,
+            "properties": {
+              "source": { "$ref": "#/$defs/time_source" },
+              "epoch": { "type": "string", "description": "ISO 8601 date-time at FMU time 0: the argument gets a datetime." }
+            }
+          }
+        ]
+      }
+    },
+    "common": {
+      "type": "object",
+      "properties": {
+        "type": {
+          "description": "The FMI type.",
+          "enum": ["Real", "Float32", "Float64", "Integer", "Int8", "UInt8", "Int16", "UInt16", "Int32", "UInt32", "Int64", "UInt64", "Boolean", "String", "Binary", "Enumeration"]
+        },
+        "start": { "description": "Start value." },
+        "unit": { "type": "string", "description": "Floating-point only, e.g. \"W/(m2.K)\"." },
+        "description": { "type": "string" },
+        "variability": { "enum": ["constant", "fixed", "tunable", "discrete", "continuous"] },
+        "initial": { "enum": ["exact", "approx", "calculated"] },
+        "min": { "type": "number", "description": "Declared range; not enforced." },
+        "max": { "type": "number", "description": "Declared range; not enforced." },
+        "nominal": { "type": "number" },
+        "quantity": { "type": "string", "description": "Physical quantity, e.g. \"ThermodynamicTemperature\"." },
+        "items": { "type": "array", "items": { "type": "string" }, "description": "Enumeration items, numbered from 1." },
+        "enum": { "type": "string", "description": "\"module:EnumClass\"." },
+        "dimensions": { "type": "array", "items": { "type": ["integer", "string"] }, "description": "Makes it an array: sizes, or (FMI 3) structural parameter names." },
+        "numpy": { "type": "boolean", "description": "Pass the array as a numpy.ndarray." },
+        "convert": { "type": "string", "description": "\"module:function\", \"pint\" or \"series\": how the value is passed to the model." },
+        "epoch": { "type": "string", "description": "With convert = \"series\": the date at FMU time 0." },
+        "extra": { "type": "object", "description": "More XML attributes of the variable." }
+      }
+    },
+    "to": { "type": "string", "description": "Where the value goes: init:, arg:, call:, pos: or attr:." },
+    "from": { "type": "string", "description": "Where the value comes from: return, return:, attr: or get:." },
+    "attr": { "type": ["string", "boolean"], "description": "Tunable class parameters: the attribute written when the value changes; false for the constructor only." },
+    "clocks": { "type": "array", "items": { "type": "string" }, "maxItems": 1, "description": "FMI 3: the clock the variable belongs to." },
+    "section_structural_parameters": {
+      "description": "FMI 3: structural parameters.",
+      "type": "object",
+      "additionalProperties": {
+        "$ref": "#/$defs/common",
+        "unevaluatedProperties": false,
+        "properties": { "to": { "$ref": "#/$defs/to" }, "attr": { "$ref": "#/$defs/attr" } }
+      }
+    },
+    "section_parameters": {
+      "description": "Values the importer gives the model.",
+      "type": "object",
+      "additionalProperties": {
+        "$ref": "#/$defs/common",
+        "unevaluatedProperties": false,
+        "properties": { "to": { "$ref": "#/$defs/to" }, "attr": { "$ref": "#/$defs/attr" } }
+      }
+    },
+    "section_calculated_parameters": {
+      "description": "Values computed by the model at initialization.",
+      "type": "object",
+      "additionalProperties": {
+        "$ref": "#/$defs/common",
+        "unevaluatedProperties": false,
+        "properties": { "from": { "$ref": "#/$defs/from" } }
+      }
+    },
+    "section_inputs": {
+      "description": "Values the importer sets during the simulation.",
+      "type": "object",
+      "additionalProperties": {
+        "$ref": "#/$defs/common",
+        "unevaluatedProperties": false,
+        "properties": { "to": { "$ref": "#/$defs/to" }, "clocks": { "$ref": "#/$defs/clocks" } }
+      }
+    },
+    "section_states": {
+      "description": "Values fed back each step.",
+      "type": "object",
+      "additionalProperties": {
+        "$ref": "#/$defs/common",
+        "unevaluatedProperties": false,
+        "properties": {
+          "to": { "$ref": "#/$defs/to" },
+          "next": { "$ref": "#/$defs/from" },
+          "der": { "$ref": "#/$defs/from" }
+        }
+      }
+    },
+    "section_outputs": {
+      "description": "The model's results.",
+      "type": "object",
+      "additionalProperties": {
+        "$ref": "#/$defs/common",
+        "unevaluatedProperties": false,
+        "properties": {
+          "from": { "$ref": "#/$defs/from" },
+          "depends_on": { "type": "array", "items": { "type": "string" }, "description": "The inputs the output depends on." },
+          "clocks": { "$ref": "#/$defs/clocks" }
+        }
+      }
+    },
+    "section_locals": {
+      "description": "Values read from the model but not connected.",
+      "type": "object",
+      "additionalProperties": {
+        "$ref": "#/$defs/common",
+        "unevaluatedProperties": false,
+        "properties": { "from": { "$ref": "#/$defs/from" }, "clocks": { "$ref": "#/$defs/clocks" } }
+      }
+    },
+    "clock": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "causality": { "enum": ["input", "output"] },
+        "interval_variability": { "enum": ["constant", "fixed", "tunable", "changing", "countdown", "triggered"] },
+        "interval": { "type": "number" },
+        "shift": { "type": "number" },
+        "interval_from": { "$ref": "#/$defs/from" },
+        "call": { "type": "string", "description": "What runs on a tick." },
+        "from": { "$ref": "#/$defs/from" },
+        "description": { "type": "string" }
+      }
+    },
+    "events": {
+      "description": "FMI 3: terminate and next event time.",
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "terminate": { "$ref": "#/$defs/from" },
+        "next_event_time": { "$ref": "#/$defs/from" }
+      }
+    },
+    "composite": {
+      "description": "Several fmugen configs in one FMU.",
+      "type": "object",
+      "required": ["parts"],
+      "additionalProperties": false,
+      "properties": {
+        "name": { "type": "string" },
+        "description": { "type": "string" },
+        "author": { "type": "string" },
+        "fmi_version": { "enum": [2, 3] },
+        "parts": {
+          "description": "name = path of a fmugen.toml or its folder, in run order.",
+          "type": "object",
+          "minProperties": 2,
+          "additionalProperties": { "type": "string" }
+        },
+        "connections": {
+          "description": "\"part.output -> part.input\".",
+          "type": "array",
+          "items": { "type": "string", "pattern": "^\\s*\\w+\\..+->\\s*\\w+\\..+$" }
+        }
+      }
+    }
+  }
+}
