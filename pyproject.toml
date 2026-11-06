@@ -63,12 +63,14 @@ dev = [
     # tests check every generated interface.json against src/fmugen/interface.schema.json
     "jsonschema>=4.26.0",
     "ruff>=0.17.3",
+    "omsimulator>=3.0.0.post198",
 ]
 
 [tool.pytest.ini_options]
 markers = [
     "slow: builds compiled FMUs (minutes); deselect with -m \"not slow\"",
     "fmu: runs a built FMU through UniFMU and an importer (seconds each); the in-process loop is -m \"not slow and not fmu\"",
+    "importers: runs a built FMU through importers other than FMPy (OMSimulator, fmusim); skipped when they aren't installed",
 ]
 
 [tool.ruff]
