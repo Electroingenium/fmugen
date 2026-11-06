@@ -23,6 +23,7 @@ from fmugen.config import (
     load_config,
 )
 from fmugen.templates.fmugen_runtime import SPEC_VERSION
+from fmugen.units import AMBIGUOUS, display_unit, parse
 
 #: Keys allowed in ``[composite]``.
 COMPOSITE_KEYS = {"name", "description", "author", "parts", "connections", "fmi_version"}
@@ -168,11 +169,45 @@ def _type_mismatch(source, target, source_interface, target_interface):
     return f"a {a} can't be passed to a {b}"
 
 
+def _unit_conversion(name, source, target):
+    """What a connection does about its two variables' units.
+
+    :param name: the connection, for messages.
+    :type name: str
+    :param source: the source variable.
+    :type source: dict
+    :param target: the target variable.
+    :type target: dict
+    :return: ``{"factor": ..., "offset": ...}`` when the values must be converted, else ``{}``.
+        ``target value = factor * source value + offset``.
+    :rtype: dict
+    :raises InterfaceError: different quantities.
+    """
+    a, b = source.get("unit"), target.get("unit")
+    if a == b:
+        return {}
+    if not a or not b or parse(a) is None or parse(b) is None or AMBIGUOUS & {a, b}:
+        print(f"note: [composite] connection {name}: units {a or 'none'} and {b or 'none'} can't be checked; "
+              "values are passed unchanged")
+        return {}
+    conversion = display_unit(a, b)
+    if conversion is None:
+        raise InterfaceError(f"[composite] connection {name}: {a} and {b} don't measure the same quantity")
+    factor, offset = conversion
+    if any(v.get("extra", {}).get("relativeQuantity") for v in (source, target)):
+        offset = 0.0   # a difference, such as a temperature rise: only the scale applies
+    if factor == 1.0 and offset == 0.0:
+        return {}
+    print(f"note: [composite] connection {name}: values are converted from {a} to {b}")
+    return {"factor": factor, "offset": offset}
+
+
 def combine(composite, interfaces, version, model_name=None, author=None):
     """Build the composite FMU's interface from its parts' interfaces.
 
     Each connection is checked (any variable but an input into an input, fed once, unclocked, same
-    size, compatible types) and stored as the parts' value references. The FMU's variables are the
+    size, compatible types and units) and stored as the parts' value references, with the unit
+    conversion it needs. The FMU's variables are the
     parts' variables not fed by a connection, named ``<part>.<name>`` and carrying ``part`` and
     ``local`` (the reference inside the part), which :class:`CompositeEngine` uses to route
     calls. Clocks follow the variables. Parts with a fixed step must agree on it.
@@ -219,7 +254,8 @@ def combine(composite, interfaces, version, model_name=None, author=None):
         if why:
             raise InterfaceError(f"[composite] connection: {src}.{src_var} -> {dst}.{dst_var}: {why}")
         fed.add((dst, dst_var))
-        connections.append({"from": [src, source["valueReference"]], "to": [dst, target["valueReference"]]})
+        connections.append({"from": [src, source["valueReference"]], "to": [dst, target["valueReference"]],
+                            **_unit_conversion(f"{src}.{src_var} -> {dst}.{dst_var}", source, target)})
 
     variables, type_definitions = [], {}
     for part, interface in interfaces.items():

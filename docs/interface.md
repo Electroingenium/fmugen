@@ -190,7 +190,7 @@ A composite FMU (`[composite]`) has one full single-model file per part, in `res
 | `spec_version`, `fmi_version`, `model_name`, `description`, `author` | As above |
 | `composite` | `true` |
 | `parts` | `[{"name": part, "dir": "parts/<part>"}]` |
-| `connections` | `[{"from": [part, vr], "to": [part, vr]}]`, value references inside each part |
+| `connections` | `[{"from": [part, vr], "to": [part, vr]}]`, value references inside each part. Between different units, also `factor` and `offset`: target value = factor × source value + offset |
 | `variables` | The parts' variables not fed by a connection, named `<part>.<name>`, with `part` and `local` (the reference inside the part) added. `declared_type`, `depends_on`, `clocks` and named `dimensions` get the `<part>.` prefix too |
 | `type_definitions` | The parts' types, keys prefixed `<part>.` |
 | `experiment` | `[composite]` experiment; a part's fixed step size is taken if none is set |

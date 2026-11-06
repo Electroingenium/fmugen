@@ -142,6 +142,74 @@ def test_composite_parts_with_modules_of_the_same_name_are_refused(tmp_path):
         build(tmp_path / "fmugen.toml", tmp_path / "out", output_format="folder")
 
 
+def write_units(tmp_path, source_var, target_var, source_body="return {'y': 2.0}"):
+    """Part a's output y to part b's input x, which b returns as out, with the given variable keys."""
+    for name, code, config in (
+            ("a", f"def a():\n    {source_body}\n",
+             f'[model]\nentry = "a.py:a"\n[outputs]\ny = {{ from = "return:y", {source_var} }}\n'),
+            ("b", "def b(x=0.0):\n    return {'out': x}\n",
+             f'[model]\nentry = "b.py:b"\n[inputs]\nx = {{ {target_var} }}\n[outputs]\nout = {{ from = "return:out" }}\n')):
+        (tmp_path / name).mkdir()
+        (tmp_path / name / f"{name}.py").write_text(code)
+        (tmp_path / name / "fmugen.toml").write_text(config)
+    (tmp_path / "fmugen.toml").write_text('[composite]\nparts = { a = "a", b = "b" }\nconnections = ["a.y -> b.x"]\n')
+    return tmp_path / "fmugen.toml"
+
+
+@pytest.mark.parametrize("source, target, expected", [
+    ('unit = "kW"', 'unit = "W", start = 0.0', 2000.0),
+    ('unit = "degC"', 'unit = "K", start = 0.0', 275.15),
+    ('unit = "degC", extra = { relativeQuantity = true }', 'unit = "K", start = 0.0', 2.0),
+    ('unit = "W"', 'unit = "W", start = 0.0', 2.0),
+    ('unit = "kW/m2"', 'unit = "W/m2", start = 0.0', 2000.0),
+])
+def test_connections_convert_units(tmp_path, adapter, source, target, expected):
+    path = write_units(tmp_path, source, target)
+    build(path, tmp_path / "out", output_format="folder")
+    fmu = adapter(tmp_path / "out")
+    fmu.initialize()
+    assert fmu.fmi2DoStep(0.0, 1.0, False) == OK, fmu.logs
+    assert fmu.get("b.out") == pytest.approx(expected)
+
+
+def test_connections_refuse_different_quantities(tmp_path):
+    with pytest.raises(InterfaceError, match="don't measure the same quantity"):
+        build(write_units(tmp_path, 'unit = "m"', 'unit = "s"'), tmp_path / "out", output_format="folder")
+
+
+@pytest.mark.parametrize("source, target", [('unit = "furlong"', 'unit = "m", start = 0.0'),
+                                            ('unit = "C"', 'unit = "K", start = 0.0'),
+                                            ('unit = "kW"', 'start = 0.0')])
+def test_units_that_cant_be_checked_pass_unchanged_with_a_note(tmp_path, adapter, capsys, source, target):
+    build(write_units(tmp_path, source, target), tmp_path / "out", output_format="folder")
+    assert "can't be checked" in capsys.readouterr().out
+    fmu = adapter(tmp_path / "out")
+    fmu.initialize()
+    assert fmu.fmi2DoStep(0.0, 1.0, False) == OK and fmu.get("b.out") == pytest.approx(2.0)
+
+
+def test_conversion_applies_to_each_element_of_an_array(tmp_path, adapter):
+    path = write_units(tmp_path, 'unit = "kW", dimensions = [2]', 'unit = "W", dimensions = [2], start = 0.0',
+                       "return {'y': [1.0, 2.0]}")
+    (tmp_path / "b" / "fmugen.toml").write_text(
+        (tmp_path / "b" / "fmugen.toml").read_text().replace('out = { from = "return:out" }',
+                                                             'out = { from = "return:out", dimensions = [2] }'))
+    build(path, tmp_path / "out", output_format="folder", fmi_version=3)
+    fmu = adapter(tmp_path / "out", fmi=3)
+    fmu.initialize()
+    assert fmu.fmi3DoStep(0.0, 1.0, False)[0] == OK, fmu.logs
+    assert fmu.engine.get_values([fmu.vr["b.out"]])[1] == pytest.approx([1000.0, 2000.0])
+
+
+@pytest.mark.fmu
+def test_unit_conversion_through_unifmu(tmp_path):
+    fmu = tmp_path / "units.fmu"
+    build(write_units(tmp_path, 'unit = "kW"', 'unit = "W", start = 0.0'), fmu)
+    assert validate_fmu(str(fmu)) == []
+    result = simulate_fmu(str(fmu), stop_time=1.0, output_interval=1.0, output=["b.out"])
+    assert result["b.out"][-1] == pytest.approx(2000.0)
+
+
 @pytest.mark.parametrize("fmi", [2, 3])
 def test_composite_connection_types_are_checked(tmp_path, fmi):
     path = write_composite(tmp_path, ["valve.state -> tank.inflow"])

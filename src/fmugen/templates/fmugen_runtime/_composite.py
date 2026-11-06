@@ -72,7 +72,7 @@ class CompositeEngine:
     :ivar variables: the composite's variables.
     :ivar by_reference: composite value reference -> variable entry.
     :ivar elements: FMI 2 only: element reference -> (array variable, index).
-    :ivar connections: ``((src part, src reference), (dst part, dst reference))`` pairs.
+    :ivar connections: ``((src part, src reference), (dst part, dst reference), factor, offset)``.
     :ivar clocks: composite clock name (``<part>.<clock>``) -> clock entry.
     :ivar clock_by_reference: composite clock reference -> clock entry.
     :ivar time: the composite's current time (for the independent variable).
@@ -107,7 +107,8 @@ class CompositeEngine:
         self.elements = {} if self.interface.get("fmi_version") != 2 else {
             v["valueReference"] + k: (v, k) for v in self.variables if v.get("dimensions")
             for k in range(math.prod(v["dimensions"]))}
-        self.connections = [(tuple(c["from"]), tuple(c["to"])) for c in self.interface["connections"]]
+        self.connections = [(tuple(c["from"]), tuple(c["to"]), c.get("factor", 1.0), c.get("offset", 0.0))
+                            for c in self.interface["connections"]]
         # the parts' clocks, <part>.<clock>: each reference is passed on to its part
         self.clocks = {c["name"]: c for c in self.interface.get("clocks", [])}
         self.clock_by_reference = {c["valueReference"]: c for c in self.clocks.values()}
@@ -170,18 +171,21 @@ class CompositeEngine:
         """Copy the connected outputs into the inputs of part ``name``.
 
         Runs right before that part initializes or steps. Values pass through the parts'
-        ``get_values`` / ``set_values``, so the receiving part checks and coerces them.
+        ``get_values`` / ``set_values``, so the receiving part checks and coerces them. A connection
+        between different units converts them, element by element for an array.
 
         :param name: the receiving part.
         :type name: str
         :return: ``Status.ok``, or the first failing status.
         :rtype: int
         """
-        for (src, src_ref), (dst, dst_ref) in self.connections:
+        for (src, src_ref), (dst, dst_ref), factor, offset in self.connections:
             if dst != name:
                 continue
             status, values = self.parts[src].get_values([src_ref])
             if status == Status.ok:
+                if factor != 1.0 or offset != 0.0:
+                    values = [factor * v + offset for v in values]
                 status = self.parts[dst].set_values([dst_ref], values)
             if status != Status.ok:
                 return status

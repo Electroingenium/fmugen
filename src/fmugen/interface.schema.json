@@ -130,7 +130,9 @@
             "required": ["from", "to"],
             "properties": {
               "from": { "$ref": "#/$defs/partReference" },
-              "to": { "$ref": "#/$defs/partReference" }
+              "to": { "$ref": "#/$defs/partReference" },
+              "factor": { "type": "number" },
+              "offset": { "type": "number" }
             }
           }
         },
