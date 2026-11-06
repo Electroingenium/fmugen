@@ -34,6 +34,7 @@ The tests cover:
 - **Adapter:** the generated adapters' behaviour for every FMI 2 and FMI 3 call, including clocks, arrays and configuration mode.
 - **Inference:** `fmugen init` on small models, and model shapes found while testing published models.
 - **FMU validity:** `modelDescription.xml` is checked with FMPy's validator, and `interface.json` against its JSON Schema.
+- **The installed wheel:** `tests/test_wheel.py` builds the wheel, installs it into a clean environment, and runs `init`, `build`, `inspect` and a simulation from there.
 - **Real runs:** simulations through UniFMU for both versions. These cover every supported FMI 3 type, clocks, intervals and shifts, state save/restore, and changing a tunable parameter.
 
 The published models fmugen was tried on, and how, are in [testing/tested-models.md](testing/tested-models.md).
@@ -103,7 +104,6 @@ To move to a newer UniFMU:
 - **modelDescription:** FMI 3 terminals and icons aren't supported.
 
 ### Tests and quality
-- **No test from an installed wheel.** That is how an earlier review found a wheel that couldn't build anything.
 - **FMPy is the only importer used.** Add [fmusim from the Reference FMUs](https://github.com/modelica/Reference-FMUs) and, optionally, OMSimulator: importers call functions in different orders.
 - **The published-model tests are manual.** An opt-in `pytest -m pypi` suite built from the configs in `models/r3/*/fmugen.toml` would keep them checked.
 - **Property-based tests** (Hypothesis) for `render_toml` → `load_config` round trips and for `coerce` / `reshape` / `flatten`.
@@ -119,7 +119,6 @@ Ordered by value for users.
 | **`fmugen check MODEL`**: validate the config, import the model, print a table of the variables; `--run N` runs N steps in-process with `Engine`, without UniFMU | The fastest feedback loop; the runtime already works in-process |
 | **`fmugen run FMU --stop-time … [--input csv] [--plot]`**: a thin FMPy wrapper with FMI logging on | Users get "failed with status 3" without a reason |
 | **Units from annotations** (`Annotated[float, "K"]`, pint annotations) | Fewer edits after `init` (numpydoc units are already read) |
-| **JSON Schema for `fmugen.toml`** | Completion and validation in editors |
 | **A documented Python API** (`fmugen.build(...)`, `fmugen.init(...)`) | Notebooks, scripts, other tools |
 | **Merge compiled FMUs from several OSes** (`fmugen merge a.fmu b.fmu -o all.fmu`) | `--compile` is single-OS |
 | **Watch mode** (`fmugen build --watch`) | A fast edit → build → simulate loop |
