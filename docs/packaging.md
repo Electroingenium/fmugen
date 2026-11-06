@@ -49,7 +49,7 @@ Your code is never rewritten.
 
 ### Reproducible builds
 
-Rebuilding an unchanged model gives a byte-identical FMU:
+Rebuilding an unchanged model with the same fmugen version gives a byte-identical FMU (`generationTool` in `modelDescription.xml` records the fmugen and UniFMU versions, such as `fmugen 0.1.0 + unifmu 0.14.0`):
 
 - The GUID (FMI 2) / `instantiationToken` (FMI 3) is derived from the FMU's file contents, not random, so it only changes when the FMU does.
 - Zip entries are sorted and dated 1980-01-01, or `SOURCE_DATE_EPOCH` when that environment variable is set.

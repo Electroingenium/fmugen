@@ -14,7 +14,7 @@ import argparse
 import re
 import sys
 
-from fmugen import wizard
+from fmugen import GENERATION_TOOL, wizard
 from fmugen.builder import FORMATS, build, init
 from fmugen.config import InterfaceError
 from fmugen.distribute import COMPILERS
@@ -212,6 +212,7 @@ def main(argv=None):
     """
     parser = argparse.ArgumentParser(prog="fmugen", description=__doc__,
                                      formatter_class=argparse.RawDescriptionHelpFormatter)
+    parser.add_argument("--version", action="version", version=GENERATION_TOOL)
     sub = parser.add_subparsers(dest="command", required=True)
 
     i = sub.add_parser("init", help="write a fmugen.toml by inspecting a model",

@@ -5,6 +5,7 @@ import pytest
 from fmpy.validation import validate_fmu
 from test_runtime import write
 
+from fmugen import GENERATION_TOOL, UNIFMU_VERSION, __version__
 from fmugen.__main__ import main
 from fmugen.builder import build
 from fmugen.config import InterfaceError
@@ -50,6 +51,21 @@ def test_units_extra_attributes_and_annotations(tmp_path, fmi):
     assert (T.get("displayUnit"), T.get("unbounded")) == ("degC", "true")
     assert tool.get("name" if fmi == 2 else "type") == "example.org/tool"
     assert tool.find("Note").get("text") == "hello"
+
+
+@pytest.mark.parametrize("fmi", [2, 3])
+def test_generation_tool_records_the_versions(tmp_path, fmi):
+    write(tmp_path, "heat.py", SOURCE, CONFIG.format(fmi=fmi))
+    build(tmp_path / "fmugen.toml", tmp_path / "folder", output_format="folder")
+    root = ET.parse(tmp_path / "folder" / "modelDescription.xml").getroot()
+    assert root.get("generationTool") == f"fmugen {__version__} + unifmu {UNIFMU_VERSION}"
+
+
+def test_version_option(capsys):
+    with pytest.raises(SystemExit) as exit_info:
+        main(["--version"])
+    assert exit_info.value.code == 0
+    assert capsys.readouterr().out.strip() == GENERATION_TOOL
 
 
 def test_unit_parsing():

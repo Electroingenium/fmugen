@@ -68,7 +68,7 @@ The published models fmugen was tried on, and how, are in [testing/tested-models
 
 ## Updating UniFMU
 
-fmugen requires exactly UniFMU 0.14.0 (`UNIFMU_VERSION` in `src/fmugen/builder.py`) and refuses any other version, because the adapters are written against that version's `backend.py` and protobuf messages. `fmugen` replaces `resources/model.py` and `modelDescription.xml`, adds `fmugen_runtime.py`, `interface.json` and `fmugen_model/`, and rewrites `requirements.txt` and `launch.toml`; the backend and binaries are taken as they are.
+fmugen requires exactly UniFMU 0.14.0 (`UNIFMU_VERSION` in `src/fmugen/__init__.py`) and refuses any other version, because the adapters are written against that version's `backend.py` and protobuf messages. `fmugen` replaces `resources/model.py` and `modelDescription.xml`, adds `fmugen_runtime.py`, `interface.json` and `fmugen_model/`, and rewrites `requirements.txt` and `launch.toml`; the backend and binaries are taken as they are.
 
 To move to a newer UniFMU:
 
@@ -118,7 +118,6 @@ Ordered by value for users.
 | **`fmugen check MODEL`**: validate the config, import the model, print a table of the variables; `--run N` runs N steps in-process with `Engine`, without UniFMU | The fastest feedback loop; the runtime already works in-process |
 | **`fmugen run FMU --stop-time … [--input csv] [--plot]`**: a thin FMPy wrapper with FMI logging on | Users get "failed with status 3" without a reason |
 | **`fmugen inspect FMU`**: interface.json, the fmugen and UniFMU versions, the mode (venv / vendor / compile / distributed), platforms and requirements | Debugging FMUs received from others |
-| **Record the fmugen version** in `interface.json` and `generationTool` | Nothing in an FMU says which fmugen built it |
 | **Units from annotations** (`Annotated[float, "K"]`, pint annotations) | Fewer edits after `init` (numpydoc units are already read) |
 | **JSON Schema for `fmugen.toml`** | Completion and validation in editors |
 | **A documented Python API** (`fmugen.build(...)`, `fmugen.init(...)`) | Notebooks, scripts, other tools |

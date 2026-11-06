@@ -9,6 +9,7 @@ import xml.etree.ElementTree as ET
 from datetime import UTC, datetime
 from pathlib import Path
 
+from fmugen import GENERATION_TOOL
 from fmugen.units import base_unit, display_unit
 
 #: FMI 2 log categories: (name, description or None).
@@ -94,7 +95,7 @@ def build_model_description(interface, model_name=None, author=None):
         "guid": GUID_PLACEHOLDER,
         "description": interface.get("description", ""),
         "author": interface.get("author", "") if author is None else author,
-        "generationTool": "fmugen + unifmu",
+        "generationTool": GENERATION_TOOL,
         "generationDateAndTime": build_time().strftime("%Y-%m-%dT%H:%M:%SZ"),
         "variableNamingConvention": "structured" if any(v.get("dimensions") for v in variables) else "flat",
     })
@@ -332,7 +333,7 @@ def build_model_description_fmi3(interface, model_name=None, author=None):
         "instantiationToken": GUID_PLACEHOLDER,
         "description": interface.get("description", ""),
         "author": interface.get("author", "") if author is None else author,
-        "generationTool": "fmugen + unifmu",
+        "generationTool": GENERATION_TOOL,
         "generationDateAndTime": build_time().strftime("%Y-%m-%dT%H:%M:%SZ"),
         "variableNamingConvention": "flat",
     })

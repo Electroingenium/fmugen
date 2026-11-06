@@ -16,6 +16,7 @@ import tomllib
 import zipfile
 from pathlib import Path
 
+from fmugen import UNIFMU_VERSION
 from fmugen.arguments import UNFIT, assumptions, guessed_outputs, unfit_outputs
 from fmugen.compose import PARTS_DIR, Composite, combine, is_composite
 from fmugen.config import (
@@ -113,8 +114,6 @@ BACKEND_REQUIREMENTS = ["protobuf==5.27.3", "pyzmq", "cloudpickle"]
 #: Extra packages of a distributed FMU's private side.
 DISTRIBUTED_REQUIREMENTS = ["toml", "coloredlogs", "colorama"]
 
-#: The only UniFMU version fmugen works with.
-UNIFMU_VERSION = "0.14.0"
 #: Environment variable naming the unifmu executable.
 UNIFMU_ENV = "FMUGEN_UNIFMU"
 #: How to install UniFMU, for error messages.

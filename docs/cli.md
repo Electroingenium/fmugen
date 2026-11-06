@@ -17,6 +17,8 @@ fmugen init  MODEL [options]
 fmugen build MODEL -o OUTPUT [options]
 ```
 
+`fmugen --version` prints the fmugen and UniFMU versions, in the form FMUs record them as `generationTool`.
+
 ## `fmugen init`
 
 Imports the model, reads its signatures and **its source code**, and writes a commented `fmugen.toml`. **The model is not called**: no object is built and no step is run, so models that need a device, a network or a licence can be configured anywhere. Importing the module still runs its top-level code, as any import does. With `--probe`, `init` also calls the model once, to find what the code doesn't show.
