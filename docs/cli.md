@@ -4,6 +4,7 @@ Every option of `fmugen init` and `fmugen build`. Installation and a first run a
 
 - [`fmugen init`](#fmugen-init)
 - [`fmugen build`](#fmugen-build)
+- [`fmugen inspect`](#fmugen-inspect)
 - [Model targets](#model-targets)
 - [Errors and exit codes](#errors-and-exit-codes)
 - [Environment variables](#environment-variables)
@@ -155,6 +156,23 @@ For another machine without Python, with no source code in the FMU:
 ```bash
 fmugen build pid -o out/pid_compiled.fmu --compile pyinstaller
 ```
+
+## `fmugen inspect`
+
+Shows what a fmugen FMU contains and what it needs to run. It only reads the FMU's files, so it needs neither UniFMU nor the model's packages.
+
+```
+fmugen inspect FMU [--json] [--debug]
+```
+
+| Option | Description |
+|---|---|
+| `FMU` | A `.fmu` file or an FMU folder. |
+| `--json` | Print the report as JSON. |
+
+It prints the fmugen and UniFMU versions, the mode (`default`, `vendor`, `compile` or `distributed`), the platforms, the model and step method, the parts of a composite, the requirements, the variables and whether state can be saved. It ends with the reason when the FMU can't run on this machine: its Python doesn't exist here, it was compiled for another OS, or it's a proxy that needs its private side.
+
+Compiled FMUs and distributed proxies don't hold the model's entry or requirements, so those show as `not recorded`. FMUs from older fmugen versions show `versions not recorded`. An FMU from another tool is an error (exit code 2).
 
 ## Model targets
 

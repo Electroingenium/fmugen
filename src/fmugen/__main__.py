@@ -11,6 +11,7 @@
     fmugen build path/to/fmugen.toml -o out/model.fmu --distributed  # proxy FMU + out/model_private/
 """
 import argparse
+import json
 import re
 import sys
 
@@ -18,6 +19,7 @@ from fmugen import GENERATION_TOOL, wizard
 from fmugen.builder import FORMATS, build, init
 from fmugen.config import InterfaceError
 from fmugen.distribute import COMPILERS
+from fmugen.inspect_fmu import format_report, inspect_fmu
 
 #: An output name for ``--read``: dotted names are allowed, as the probe writes them.
 _OUTPUT_NAME = re.compile(r"[A-Za-z_]\w*(\.\w+)*")
@@ -303,12 +305,24 @@ def main(argv=None):
     for p in (i, b):
         p.add_argument("--probe-timeout", type=float, metavar="SECONDS",
                        help="with --probe: exit if the model's probe call takes longer (default: no limit)")
+
+    n = sub.add_parser("inspect", help="show what a fmugen FMU contains and what it needs to run",
+                       description="Read a fmugen FMU without running it: versions, mode, platforms, model, "
+                                   "requirements, variables, and why it can't run here. See docs/cli.md.")
+    n.add_argument("fmu", help="a .fmu file or an FMU folder")
+    n.add_argument("--json", action="store_true", help="print the report as JSON")
+
+    for p in (i, b, n):
         p.add_argument("--debug", action="store_true",
                        help="show the full traceback of an unexpected error (default: a one-line message)")
     args = parser.parse_args(argv)
-    if args.probe and args.probe_timeout:
+    if args.command != "inspect" and args.probe and args.probe_timeout:
         args.probe = args.probe_timeout
     try:
+        if args.command == "inspect":
+            report = inspect_fmu(args.fmu)
+            print(json.dumps(report, indent=2) if args.json else format_report(report))
+            return
         if args.command == "init":
             def values():
                 return _starts_and_consts(_parse_starts(args.start), _parse_consts(args.const),

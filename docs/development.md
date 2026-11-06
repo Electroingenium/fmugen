@@ -49,6 +49,7 @@ The published models fmugen was tried on, and how, are in [testing/tested-models
 | `src/fmugen/config.py` | `fmugen.toml` loading, validation, normalisation into the interface spec (FMI 2 and 3) |
 | `src/fmugen/compose.py` | Composite FMUs: several configs in one FMU |
 | `src/fmugen/description.py` | `modelDescription.xml` writers (FMI 2 and FMI 3) |
+| `src/fmugen/inspect_fmu.py` | `fmugen inspect`: reading a built FMU without running it |
 | `src/fmugen/units.py` | SI base units of unit strings, for `<BaseUnit>` |
 | `src/fmugen/distribute.py` | `--vendor`, `--compile` and `--hf-weights` |
 | `src/fmugen/interface.py` | `fmugen init`: inference orchestration (import, infer, rename, requirements) |
@@ -117,7 +118,6 @@ Ordered by value for users.
 |---|---|
 | **`fmugen check MODEL`**: validate the config, import the model, print a table of the variables; `--run N` runs N steps in-process with `Engine`, without UniFMU | The fastest feedback loop; the runtime already works in-process |
 | **`fmugen run FMU --stop-time … [--input csv] [--plot]`**: a thin FMPy wrapper with FMI logging on | Users get "failed with status 3" without a reason |
-| **`fmugen inspect FMU`**: interface.json, the fmugen and UniFMU versions, the mode (venv / vendor / compile / distributed), platforms and requirements | Debugging FMUs received from others |
 | **Units from annotations** (`Annotated[float, "K"]`, pint annotations) | Fewer edits after `init` (numpydoc units are already read) |
 | **JSON Schema for `fmugen.toml`** | Completion and validation in editors |
 | **A documented Python API** (`fmugen.build(...)`, `fmugen.init(...)`) | Notebooks, scripts, other tools |
