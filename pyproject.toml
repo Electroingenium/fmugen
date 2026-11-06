@@ -1,6 +1,6 @@
 [project]
 name = "fmugen"
-version = "0.1.0"
+version = "1.1.0"
 description = "Turn ordinary Python models into FMI 2.0 / 3.0 Co-Simulation FMUs (UniFMU), without changing their code"
 readme = "README.md"
 requires-python = ">=3.13"
