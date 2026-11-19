@@ -14,7 +14,7 @@ Install fmugen into the virtual environment of your model, the one that already 
 pip install path/to/2025_Inkindcontributions
 ```
 
-`fmugen build` also needs [UniFMU](https://github.com/INTO-CPS-Association/unifmu/releases) **0.14.0**, exactly this version: put the `unifmu` executable on `PATH`, or set `FMUGEN_UNIFMU` to its path. To validate and simulate FMUs, install [FMPy](https://github.com/CATIA-Systems/FMPy) too (`pip install fmpy`). Details: [docs/getting-started.md](docs/getting-started.md#installation).
+`fmugen build` also needs [UniFMU](https://github.com/INTO-CPS-Association/unifmu/releases) **1.1.0**, exactly this version: put the `unifmu` executable on `PATH`, or set `FMUGEN_UNIFMU` to its path. To validate and simulate FMUs, install [FMPy](https://github.com/CATIA-Systems/FMPy) too (`pip install fmpy`). Details: [docs/getting-started.md](docs/getting-started.md#installation).
 
 ---
 
@@ -66,7 +66,7 @@ FMUs are FMI 2.0 by default; `[model] fmi_version = 3` or `fmugen build --fmi 3`
 | [FMI behaviour](docs/fmi.md) | FMI 2 and FMI 3, function by function: initialization, steps, clocks, state, logging |
 | [Packaging and runtime](docs/packaging.md) | What `fmugen build` does, the FMU's layout and Python environment, FMUs for other machines |
 | [Troubleshooting](docs/troubleshooting.md) | Error messages and their fixes, known problems |
-| [UniFMU limitations](docs/limitations/unifmu.md), [FMPy limitations](docs/limitations/fmpy.md), [OMSimulator limitations](docs/limitations/omsimulator.md), [fmusim limitations](docs/limitations/fmusim.md) | Bugs in UniFMU 0.14, FMPy 0.3.32, OMSimulator 3.0 and fmusim 0.0.39 that affect fmugen FMUs, and their workarounds |
+| [UniFMU limitations](docs/limitations/unifmu.md), [FMPy limitations](docs/limitations/fmpy.md), [OMSimulator limitations](docs/limitations/omsimulator.md), [fmusim limitations](docs/limitations/fmusim.md) | Bugs in UniFMU 1.1 (and those fixed since 0.14), FMPy 0.3.32, OMSimulator 3.0 and fmusim 0.0.39 that affect fmugen FMUs, and their workarounds |
 | [`interface.json` reference](docs/interface.md) | fmugen's description of the model inside each FMU, with a JSON Schema |
 | [Tested models](docs/testing/tested-models.md) | Every published model fmugen was tried on, with its result |
 | [Development](docs/development.md) | Tests, project layout, updating UniFMU, open items |

@@ -72,15 +72,16 @@ The published models fmugen was tried on, and how, are in [testing/tested-models
 
 ## Updating UniFMU
 
-fmugen requires exactly UniFMU 0.14.0 (`UNIFMU_VERSION` in `src/fmugen/__init__.py`) and refuses any other version, because the adapters are written against that version's `backend.py` and protobuf messages. `fmugen` replaces `resources/model.py` and `modelDescription.xml`, adds `fmugen_runtime.py`, `interface.json` and `fmugen_model/`, and rewrites `requirements.txt` and `launch.toml`; the backend and binaries are taken as they are.
+fmugen requires exactly UniFMU 1.1.0 (`UNIFMU_VERSION` in `src/fmugen/__init__.py`) and refuses any other version, because the adapters are written against that version's `backend.py` and protobuf messages. `fmugen` replaces `resources/model.py` and `modelDescription.xml`, adds `fmugen_runtime.py`, `interface.json` and `fmugen_model/`, and rewrites `requirements.txt` and `launch.toml`; the backend and binaries are taken as they are.
 
 To move to a newer UniFMU:
 
 1. Change `UNIFMU_VERSION`.
 2. Check the backend's command list in the generated `resources/backend.py` against [fmi.md](fmi.md) and the adapters.
-3. If the new backend imports other packages, update `BACKEND_REQUIREMENTS` and fmugen's dependencies in `pyproject.toml`.
-4. Recheck the workarounds in [limitations/unifmu.md](limitations/unifmu.md) (e.g. the FMI 2 adapter doubling `%` in log messages).
-5. Run `uv run pytest`.
+3. If the new backend imports other packages, or pins another `protobuf` (its `resources/requirements.txt`), update `BACKEND_REQUIREMENTS` and fmugen's dependencies in `pyproject.toml`.
+4. Compare the files the template writes to `resources/` with `RESERVED_MODULES` in `config.py` (1.x added `fmi2_model_description.py`).
+5. Recheck the workarounds in [limitations/unifmu.md](limitations/unifmu.md).
+6. Run `uv run pytest`.
 
 ---
 

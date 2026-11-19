@@ -49,7 +49,7 @@ Your code is never rewritten.
 
 ### Reproducible builds
 
-Rebuilding an unchanged model with the same fmugen version gives a byte-identical FMU (`generationTool` in `modelDescription.xml` records the fmugen and UniFMU versions, such as `fmugen 1.1.0 + unifmu 0.14.0`):
+Rebuilding an unchanged model with the same fmugen version gives a byte-identical FMU (`generationTool` in `modelDescription.xml` records the fmugen and UniFMU versions, such as `fmugen 1.2.0 + unifmu 1.1.0`):
 
 - The GUID (FMI 2) / `instantiationToken` (FMI 3) is derived from the FMU's file contents, not random, so it only changes when the FMU does.
 - Zip entries are sorted and dated 1980-01-01, or `SOURCE_DATE_EPOCH` when that environment variable is set.
@@ -70,7 +70,7 @@ windows = ["C:\\path\\to\\model\\.venv\\Scripts\\python.exe", "main.py"]
 That environment has everything the FMU needs:
 
 - your model's packages, because you developed the model there
-- `protobuf==5.27.3`, `pyzmq` and `cloudpickle`, the UniFMU backend's packages (cloudpickle for FMU state), installed as fmugen's dependencies. `--distributed` adds `toml`, `coloredlogs` and `colorama`.
+- `protobuf==7.36.2`, `pyzmq` and `cloudpickle`, the UniFMU backend's packages (cloudpickle for FMU state), installed as fmugen's dependencies. `--distributed` adds `toml`, `coloredlogs` and `colorama`.
 
 The FMU therefore runs on the machine where it was built, as long as that environment exists and keeps those packages. `resources/requirements.txt` records what it must contain: the backend's packages and `[model] requirements`.
 
@@ -178,7 +178,7 @@ An [isolated composite](models.md#isolated-parts) keeps its parts in the private
 | `--vendor` | `python fmugen_launch.py PORT` | Python; the packages are installed from `wheels/` on the first run |
 | `--compile` | `dist/main/main PORT` (`.\dist\main\main.exe PORT` on Windows) | nothing; same OS as the build |
 
-**The port can't be set.** In UniFMU 0.14 the proxy port isn't configurable: `fmiapi/src/common/dispatcher/mod.rs` hardcodes `BackendSocket::create("tcp://0.0.0.0:0")`, so the OS assigns a new port on every run, and no environment variable or `launch.toml` field changes it. fmugen therefore has no port flag. The private side takes the port as its argument at start-up (or asks for it). When the importer instantiates the proxy, the proxy listens on all interfaces, logs
+**The port can't be set.** In UniFMU 1.1 (as in 0.14) the proxy port isn't configurable: `fmiapi/src/common/dispatcher/mod.rs` hardcodes `BackendSocket::create("tcp://0.0.0.0:0")`, so the OS assigns a new port on every run, and no environment variable or `launch.toml` field changes it. fmugen therefore has no port flag. The private side takes the port as its argument at start-up (or asks for it). When the importer instantiates the proxy, the proxy listens on all interfaces, logs
 
 ```
 ACTION REQUIRED ~ Connect remote backend to dispatcher through port: PORT
@@ -204,8 +204,10 @@ simulate_fmu("out/model.fmu", stop_time=10, debug_logging=True, logger=logger)
 
 ## UniFMU
 
-fmugen doesn't ship UniFMU. Every `fmugen build` runs the UniFMU **0.14.0** CLI to generate the FMU skeleton (native binaries for Windows, Linux and macOS, plus the Python backend), and refuses any other version, because fmugen's adapters are written against that version's backend. The backend and binaries are taken as they are; fmugen replaces `resources/model.py` and `modelDescription.xml`, adds `fmugen_runtime.py`, `interface.json` and `fmugen_model/`, and rewrites `requirements.txt` and `launch.toml`.
+fmugen doesn't ship UniFMU. Every `fmugen build` runs the UniFMU **1.1.0** CLI to generate the FMU skeleton (native binaries for Windows, Linux and macOS, plus the Python backend), and refuses any other version, because fmugen's adapters are written against that version's backend. The backend and binaries are taken as they are; fmugen replaces `resources/model.py` and `modelDescription.xml`, adds `fmugen_runtime.py`, `interface.json` and `fmugen_model/`, and rewrites `requirements.txt` and `launch.toml`.
 
-UniFMU 0.14 writes `fmiVersion="3.0-beta.4"` into the FMI 3 template's `modelDescription.xml`. That file is replaced on every build, so it doesn't matter.
+UniFMU 1.1 writes `fmiVersion="3.0-beta.4"` into the FMI 3 template's `modelDescription.xml`. That file is replaced on every build, so it doesn't matter.
+
+Since UniFMU 1.0.1, FMI 2 FMUs carry a universal macOS binary in `binaries/darwin64`, so they should also load on Apple Silicon Macs (FMI 3 FMUs have `x86_64-darwin` and `aarch64-darwin`). fmugen hasn't been tested on a Mac.
 
 What UniFMU can't do, and how fmugen works around it, is in [limitations/unifmu.md](limitations/unifmu.md). Moving fmugen to a newer UniFMU is described in [development.md](development.md#updating-unifmu).

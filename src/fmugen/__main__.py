@@ -293,8 +293,8 @@ def main(argv=None):
                         "\"amazon/chronos-bolt-tiny\") into the FMU, which then loads them offline "
                         "(default: on with --vendor and --compile)")
     b.add_argument("--capture-output", action="store_true",
-                   help="send what the model prints (stdout/stderr) to the importer's log instead of the "
-                        "console; use it when the model prints more than a few KB, which hangs UniFMU 0.14")
+                   help="send what the model prints (stdout/stderr) to the importer's FMI log as [output] "
+                        "messages, instead of the importer's console")
     b.add_argument("--distributed", action="store_true",
                    help="make the FMU a proxy and write the model to a separate folder (--private-output) "
                         "that runs on another host or container and connects to the proxy over TCP")

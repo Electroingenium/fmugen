@@ -47,7 +47,8 @@ MODEL_DIR = "fmugen_model"
 
 #: Module names already used by the UniFMU backend and fmugen in ``resources/``;
 #: a model module with one of these names would shadow them.
-RESERVED_MODULES = {"model", "backend", "main", "abstract_backend", "schemas", "fmugen_runtime", "fmugen_launch"}
+RESERVED_MODULES = {"model", "backend", "main", "abstract_backend", "schemas", "fmi2_model_description",
+                    "fmugen_runtime", "fmugen_launch"}
 
 #: Config section -> FMI causality, in valueReference order.
 SECTIONS = {

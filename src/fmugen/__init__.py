@@ -13,6 +13,6 @@ except PackageNotFoundError:   # run from a source tree that isn't installed
     __version__ = "0+unknown"
 
 #: The only UniFMU version fmugen works with.
-UNIFMU_VERSION = "0.14.0"
+UNIFMU_VERSION = "1.1.0"
 #: ``generationTool`` in modelDescription.xml: which fmugen and UniFMU built an FMU.
 GENERATION_TOOL = f"fmugen {__version__} + unifmu {UNIFMU_VERSION}"

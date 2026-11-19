@@ -978,13 +978,15 @@ def test_warning_names_only_outputs_of_unknown_type(tmp_path, capsys):
     assert "count" not in err and "y" not in err.split(":")[1]
 
 
-def test_init_warns_about_a_file_named_like_a_backend_module(tmp_path, capsys):
-    write(tmp_path, "model.py", """
+@pytest.mark.parametrize("module", ["model", "fmi2_model_description"])
+def test_init_warns_about_a_file_named_like_a_backend_module(tmp_path, capsys, module):
+    # fmi2_model_description.py is in UniFMU 1.x's FMI 2 template
+    write(tmp_path, f"{module}.py", """
         def area(r=1.0):
             return 3.14 * r * r
     """)
-    init(f"{tmp_path / 'model.py'}:area")
-    assert "warning: model.py clashes with a UniFMU backend module" in capsys.readouterr().err
+    init(f"{tmp_path / f'{module}.py'}:area")
+    assert f"warning: {module}.py clashes with a UniFMU backend module" in capsys.readouterr().err
 
 
 def test_numeric_strings_still_become_numbers(tmp_path, make_fmu, adapter):
@@ -1115,7 +1117,7 @@ def test_numbers_are_retried_as_one_element_arrays(tmp_path, make_fmu, adapter):
 
 def test_debug_logging_of_the_backend_is_raised_to_info(tmp_path, make_fmu, adapter, monkeypatch):
     # UniFMU's main.py sets the root logger to DEBUG; numba then writes megabytes while compiling
-    # (antropy), which crashes UniFMU 0.14 and hangs the importer
+    # (antropy), which floods the importer's console (and hung UniFMU 0.14)
     import logging
     write(tmp_path, "chatty.py", """
         import logging

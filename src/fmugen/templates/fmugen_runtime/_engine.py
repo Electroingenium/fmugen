@@ -263,8 +263,8 @@ class Engine:
             self.is_class = self.interface["entry"]["kind"] == "class"
             self.reset()
         except BaseException as e:
-            # the exception's own line first: UniFMU cuts the backend's output short, and the
-            # warnings printed while importing and a long traceback would push it out
+            # the exception's own line first: UniFMU reports only the end of the backend's output
+            # (its last 64 KB), and warnings printed while importing and a long traceback come before it
             _release_output(self._output, f"[fmugen] the model failed to load: {type(e).__name__}: {e}\n")
             raise
         self._forward_output()   # e.g. warnings printed while the model was imported

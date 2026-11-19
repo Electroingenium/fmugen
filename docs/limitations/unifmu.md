@@ -1,26 +1,28 @@
 # UniFMU: bugs and limitations
 
-Problems that come from [UniFMU](https://github.com/INTO-CPS-Association/unifmu) **0.14.0** (the version fmugen requires), not from fmugen. Each entry says where it was found, its effect on fmugen FMUs, and the workaround, if any. Sources: fmugen's own testing ([tested-models.md](../testing/tested-models.md)) and the [UniFMU README](https://github.com/INTO-CPS-Association/unifmu/blob/master/README.md).
+Problems that come from [UniFMU](https://github.com/INTO-CPS-Association/unifmu), not from fmugen. fmugen requires **1.1.0**. This page was first written for 0.14.0; the entries fixed in [1.0.1](https://github.com/INTO-CPS-Association/unifmu/releases/tag/v1.0.1) say so, and still apply to FMUs built with fmugen 1.1.0 or older, which used 0.14.0. Each entry says where it was found, its effect on fmugen FMUs, and the workaround, if any. Sources: fmugen's own testing ([tested-models.md](../testing/tested-models.md)) and the [UniFMU README](https://github.com/INTO-CPS-Association/unifmu/blob/master/README.md).
 
 | # | Problem | Kind | Workaround in fmugen |
 |---|---|---|---|
-| 1 | [The importer hangs when the model prints more than ~4 KB](#1-the-importer-hangs-when-the-model-prints-more-than-4-kb) | Bug | `build --capture-output` |
-| 2 | [The backend keeps running after an FMU error](#2-the-backend-keeps-running-after-an-fmu-error) | Limitation | Free the instance after an error ([FMPy doesn't](fmpy.md#1-simulate_fmu-doesnt-free-the-instance-after-an-fmu-error)) |
+| 1 | [The importer hangs when the model prints more than ~4 KB](#1-the-importer-hangs-when-the-model-prints-more-than-4-kb) | Bug, fixed in 1.0.1 | Not needed. `build --capture-output` sends the output to the FMI log instead |
+| 2 | [The backend keeps running after an FMU error](#2-the-backend-keeps-running-after-an-fmu-error) | Limitation, partly fixed in 1.0.1 | Free the instance after an error ([FMPy doesn't](fmpy.md#1-simulate_fmu-doesnt-free-the-instance-after-an-fmu-error)) |
 | 3 | [Error messages are lost when logging is off](#3-error-messages-are-lost-when-logging-is-off) | Limitation | None. Turn on debug logging in the importer |
 | 4 | [Log messages only during an FMI call](#4-log-messages-only-during-an-fmi-call) | Limitation | None |
 | 5 | [Unsupported FMI functions stop the backend](#5-unsupported-fmi-functions-stop-the-backend) | Limitation | Never declared, so compliant importers don't call them |
 | 6 | [Co-Simulation only](#6-co-simulation-only) | Limitation | None |
-| 7 | [Exact `protobuf==5.27.3` pin](#7-exact-protobuf5273-pin) | Limitation | None |
+| 7 | [Exact `protobuf==7.36.2` pin](#7-exact-protobuf7362-pin) | Limitation | None |
 | 8 | [The FMU needs a Python interpreter](#8-the-fmu-needs-a-python-interpreter) | Limitation | `--vendor`, `--compile` |
 | 9 | [Reserved module names](#9-reserved-module-names) | Limitation | None. Rename the model file |
 | 10 | [Smaller limitations from the README](#10-smaller-limitations-from-the-readme) | Limitation | — |
-| 11 | [FMI 2 log messages are used as printf format strings](#11-fmi-2-log-messages-are-used-as-printf-format-strings) | Bug | The FMI 2 adapter doubles each `%` |
-| 12 | [A backend that exits during a call can abort the importer](#12-a-backend-that-exits-during-a-call-can-abort-the-importer) | Bug | None. Find the backend's error by running it directly |
+| 11 | [FMI 2 log messages are used as printf format strings](#11-fmi-2-log-messages-are-used-as-printf-format-strings) | Bug, fixed in 1.0.1 | Removed in fmugen 1.2.0 |
+| 12 | [A backend that exits during a call can abort the importer](#12-a-backend-that-exits-during-a-call-can-abort-the-importer) | Bug, fixed in 1.0.1 | Not needed |
 | 13 | [The distributed proxy's port can't be set](#13-the-distributed-proxys-port-cant-be-set) | Limitation | None. Read the port from the importer's log |
 
 ---
 
 ## 1. The importer hangs when the model prints more than ~4 KB
+
+**Fixed in UniFMU 1.0.1** ([PR #93](https://github.com/INTO-CPS-Association/unifmu/pull/93)). A thread now reads the backend's stdout/stderr while it runs and writes it to the importer's stdout, keeping the last 64 KB for the "backend exited unexpectedly" message. Checked with fmugen 1.2.0 on 2026-11-18: a model printing 40 KB per step simulates in FMI 2 and FMI 3 without `--capture-output` (`test_large_console_output_without_capture_simulates`). The rest of this section describes 0.14.0.
 
 When the FMU's Python process writes more than about 4 KB in total to stdout/stderr, the backend blocks and the importer waits forever, with no error.
 
@@ -37,13 +39,15 @@ When the FMU's Python process writes more than about 4 KB in total to stdout/std
 
 Found with Chronos-Bolt ([tested-models.md](../testing/tested-models.md)).
 
-**Workaround:** `fmugen build --capture-output` redirects file descriptors 1 and 2 inside the backend to a temporary file, and sends the text to the importer's log as `[output]` messages after each call. It is off by default, so a model that prints or logs a lot still hangs unless built with it. Possible next steps in fmugen: have `init --probe` suggest the flag when its probe call writes a lot, or turn it on by default. Not reported upstream yet.
+**Workaround (0.14):** `fmugen build --capture-output` redirects file descriptors 1 and 2 inside the backend to a temporary file, and sends the text to the importer's log as `[output]` messages after each call. With 1.1 the flag only chooses where the output goes (the FMI log instead of the importer's console), so it stays off by default and fmugen doesn't suggest it.
 
 ## 2. The backend keeps running after an FMU error
 
 When an importer exits without calling `fmi2FreeInstance` / `fmi3FreeInstance`, UniFMU's Python backend stays alive: 2 processes (`venv\Scripts\python.exe main.py` and the base `python.exe main.py`). Seen with FMI 2 and FMI 3, on Windows with FMPy, after an FMU call failed (an error status from `exitInitializationMode` or `doStep`).
 
 **The importer is the cause, not UniFMU:** FMPy's `simulate_fmu` skips `freeInstance` after an error: [fmpy-limitations.md §1](fmpy.md#1-simulate_fmu-doesnt-free-the-instance-after-an-fmu-error). When the instance is freed after the failed call, the backend exits within 3 s, in FMI 2 and FMI 3 (checked on 2026-10-13). This entry first said "probably `fmi2FreeInstance` isn't reached, or doesn't stop the backend": it isn't reached.
+
+**Since UniFMU 1.0.1**, freeing or dropping the instance kills a backend that is still running, instead of waiting for it. An importer that crashes or is killed without freeing still leaves the backend running, as below.
 
 **UniFMU's part:** the backend can't tell that the importer has gone. Its loop (`abstract_backend.py`, `recv_command`) waits on a ZeroMQ `socket.recv()` with no timeout and doesn't watch its parent process, and on Windows a child process isn't stopped when its parent exits. So whenever an importer skips the free (an error path, a crash, a kill), the backend waits forever. A receive timeout or a parent check would make it exit.
 
@@ -86,9 +90,9 @@ The Python backend implements Co-Simulation only (UniFMU README, "Supported Feat
 - **No intermediate update or early return** (FMI 3).
 - **No FMI 1.**
 
-## 7. Exact `protobuf==5.27.3` pin
+## 7. Exact `protobuf==7.36.2` pin
 
-The backend's generated `*_pb2.py` files require exactly `protobuf==5.27.3` (plus `pyzmq`). Since the FMU runs with the model's own environment, this pin lands there and can conflict with packages that pin protobuf differently (TensorFlow, grpcio, …). Regenerating the schemas, or testing a range like `protobuf>=5.27,<6`, would loosen it.
+The backend's generated `*_pb2.py` files (protoc 36.2 since UniFMU 1.0.1, [PR #97](https://github.com/INTO-CPS-Association/unifmu/pull/97)) require `protobuf` 7.x, and UniFMU's `requirements.txt` pins exactly `protobuf==7.36.2` (0.14.0 pinned `5.27.3`), plus `pyzmq`. Since the FMU runs with the model's own environment, this pin lands there and can conflict with packages that pin protobuf differently (TensorFlow, grpcio, …). Testing a range like `protobuf>=7.36,<8` would loosen it. FMUs built with fmugen 1.1.0 or older need `protobuf` 5.x, so they can't share an environment with newer ones.
 
 ## 8. The FMU needs a Python interpreter
 
@@ -98,15 +102,17 @@ The backend also uses `match`, so it needs **Python 3.10 or newer**.
 
 ## 9. Reserved module names
 
-The backend's own modules live in the FMU's `resources/` folder next to the model: `model`, `backend`, `main`, `abstract_backend` and `schemas` (plus fmugen's `fmugen_runtime`). A model whose entry module has one of these names can't be used; rename the file. See [models.md](../models.md).
+The backend's own modules live in the FMU's `resources/` folder next to the model: `model`, `backend`, `main`, `abstract_backend`, `schemas` and, in FMI 2 since 1.0.1, `fmi2_model_description` (plus fmugen's `fmugen_runtime` and `fmugen_launch`). A model whose entry module has one of these names can't be used; rename the file. See [models.md](../models.md).
 
 ## 10. Smaller limitations from the README
 
 - **`launch.toml` commands run without a shell**, so wildcards, per-session environment variables and aliases don't work. To use a shell, give it as the first element of the command.
-- **Distributed FMUs (`generate-distributed`) are FMI 2 only**, per the README. In 0.14.0, `unifmu generate-distributed python X fmi3` does generate an FMI 3 pair, and fmugen's `build --distributed` simulates with both versions ([packaging.md](../packaging.md#distributed-fmus---distributed)).
-- **Building UniFMU itself** pins Protocol Buffers v27.3 (the source of the pin in 7), and on Windows, git's CRLF line endings break the Docker build's bash scripts.
+- **Distributed FMUs (`generate-distributed`) are FMI 2 only**, per the README. In 0.14.0 and 1.1.0, `unifmu generate-distributed python X fmi3` does generate an FMI 3 pair, and fmugen's `build --distributed` simulates with both versions ([packaging.md](../packaging.md#distributed-fmus---distributed)).
+- **Building UniFMU itself** pins Protocol Buffers v36.2 since 1.0.1 (v27.3 before), the source of the pin in 7, and on Windows, git's CRLF line endings break the Docker build's bash scripts.
 
 ## 11. FMI 2 log messages are used as printf format strings
+
+**Fixed in UniFMU 1.0.1** ([PR #92](https://github.com/INTO-CPS-Association/unifmu/pull/92)): the text is now passed as the argument of a `"%s"` format, which also covers UniFMU's own messages. fmugen 1.2.0 removed its escape, and `test_fmi2_log_messages_with_percent_signs_reach_the_importer` checks that `done 50%s of %d` arrives unchanged, with no `%%`. The rest of this section describes 0.14.0.
 
 In FMI 2, the importer's logger callback is variadic, like `printf`: `logger(env, instanceName, status, category, message, ...)`, where `message` is a format string. UniFMU passes the log text as the format string, with no arguments after it and without escaping `%`. Any `%` in a log message is then read as a format specifier by an importer that formats messages. `%s` makes it read a string pointer from an argument that doesn't exist, and it crashes or prints garbage, depending on what is on the stack.
 
@@ -143,9 +149,11 @@ So any error whose traceback quotes a line with a `%` (common in library code: `
 
 **Fix upstream:** call `(self.callback)(env, name, status, category, c"%s".as_ptr(), c_message.as_ptr())`, or double each `%` to `%%` in `log()`. No upstream issue was found (a search of the UniFMU issues for "logger format", "printf", "access violation" and "percent" returned nothing).
 
-**Workaround in fmugen (done, 2026-10-14):** the FMI 2 adapter (`model_fmi2.py`, `log()`) doubles each `%` before sending a message, so an importer that formats it prints a single `%`. Checked through UniFMU with FMPy and `debug_logging=True`: a model that logs `"done 50%s of %d"` crashed FMPy with an access violation without the escape, and with it the importer receives the text unchanged (`test_fmi2_log_messages_with_percent_signs_reach_the_importer`). Since fmugen pins UniFMU 0.14.0 exactly, this is safe, but it must be removed when UniFMU passes the text as an argument, or `%%` would show in the log. UniFMU's own messages (built in Rust from error text) are not escaped and can still contain a `%`.
+**Workaround in fmugen (2026-10-14 to fmugen 1.1.0, removed in 1.2.0):** the FMI 2 adapter (`model_fmi2.py`, `log()`) doubles each `%` before sending a message, so an importer that formats it prints a single `%`. Checked through UniFMU with FMPy and `debug_logging=True`: a model that logs `"done 50%s of %d"` crashed FMPy with an access violation without the escape, and with it the importer receives the text unchanged (`test_fmi2_log_messages_with_percent_signs_reach_the_importer`). Since fmugen pins UniFMU 0.14.0 exactly, this is safe, but it must be removed when UniFMU passes the text as an argument, or `%%` would show in the log. UniFMU's own messages (built in Rust from error text) are not escaped and can still contain a `%`.
 
 ## 12. A backend that exits during a call can abort the importer
+
+**Fixed in UniFMU 1.0.1** ([PR #96](https://github.com/INTO-CPS-Association/unifmu/pull/96)). Socket disconnects are now detected, panics are caught before they reach the C FMI functions, and the importer gets an error status whose message has the backend's exit status and the end of its output. A failed instance refuses further calls (`create a new FMU instance`). Checked with fmugen 1.2.0 on 2026-11-18: a backend that calls `os._exit(1)` while instantiating gives FMPy a failed instantiation in FMI 2 and FMI 3, and the importer keeps running (`test_a_backend_that_exits_gives_the_importer_an_error`). The rest of this section describes 0.14.0.
 
 When the backend process exits while UniFMU waits for its reply, UniFMU's native library may panic instead of returning an error status. The panic is `zeromq-0.4.1/src/rep.rs:168:40: not yet implemented` (also seen when a backend blocked by [§1](#1-the-importer-hangs-when-the-model-prints-more-than-4-kb) is killed), followed by `panic in a function that cannot unwind … aborting`. That line is the `Some((_peer_id, _)) => todo!()` arm of `RepSocket::recv` in zeromq 0.4.1: the socket received an error from the peer connection, and that case isn't implemented. Because the panic can't unwind through the FMI C function, **the importer's whole process is aborted**. The importer gets no error status, and the backend's own error (its Python traceback) is not shown anywhere.
 
@@ -170,15 +178,15 @@ Every one of these is a file, module or extension that PyInstaller left out of t
 
 **Who is affected:** any UniFMU FMU whose backend can exit during a call, e.g. a frozen backend with a missing file, an uncaught exception in the backend's own code, or native code that calls `exit`. Since the importer process dies, a co-simulation master loses every other FMU too.
 
-**Workaround in fmugen:** none. To find the backend's error, run it outside the importer: set `UNIFMU_DISPATCHER_ENDPOINT` to a ZeroMQ REP socket you bind, start `resources/dist/main/main.exe` (or `python main.py` for an uncompiled FMU), answer the handshake and send an `Fmi2Instantiate` command built with `resources/schemas/fmi2_messages_pb2.py` from an uncompiled build of the same config. The backend prints its traceback to its stdout.
+**Workaround in fmugen (0.14):** none. To find the backend's error, run it outside the importer: set `UNIFMU_DISPATCHER_ENDPOINT` to a ZeroMQ REP socket you bind, start `resources/dist/main/main.exe` (or `python main.py` for an uncompiled FMU), answer the handshake and send an `Fmi2Instantiate` command built with `resources/schemas/fmi2_messages_pb2.py` from an uncompiled build of the same config. The backend prints its traceback to its stdout.
 
 **Fix upstream:** handle the error arm in UniFMU's receive path (return an error status when the peer connection fails or the backend exits), and don't let a panic cross the `extern "C"` FMI functions. Not reported upstream yet.
 
 ## 13. The distributed proxy's port can't be set
 
-In UniFMU 0.14 the proxy port isn't configurable. The proxy of a distributed FMU binds its socket with a hardcoded port 0, so the OS assigns a new port on every run. No environment variable or `launch.toml` field changes it (`UNIFMU_DISPATCHER_ENDPOINT` is only how a local backend is told the port).
+In UniFMU 1.1 (as in 0.14) the proxy port isn't configurable. The proxy of a distributed FMU binds its socket with a hardcoded port 0, so the OS assigns a new port on every run. No environment variable or `launch.toml` field changes it (`UNIFMU_DISPATCHER_ENDPOINT` is only how a local backend is told the port).
 
-Source (v0.14.0), `fmiapi/src/common/dispatcher/mod.rs`, `RemoteDispatcher::create`:
+Source (v0.14.0, unchanged in v1.1.0), `fmiapi/src/common/dispatcher/mod.rs`, `RemoteDispatcher::create`:
 
 ```rust
 BackendSocket::create("tcp://0.0.0.0:0")

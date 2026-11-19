@@ -61,7 +61,7 @@ Every key is always present in a single-model file.
 | `integrate` | null or object | `{method, substeps}`: the model returns derivatives and the engine integrates the states. `method` is `euler`, `rk4` or `scipy:<RK45, RK23, DOP853, Radau, BDF, LSODA>` | `[model] integrate`, `substeps` |
 | `repeat` | int (only when set) | how many times the step runs per communication step, each with an equal part of it | `[model] substeps` without `integrate` |
 | `annotations` | string or null | XML of `<Tool name="...">` elements, copied into `<Annotations>` | `[model] annotations` |
-| `capture_output` | bool | Inside UniFMU, send the model's stdout/stderr to a file and forward it to the importer's log (UniFMU 0.14 crashes on more than ~4 KB of console output) | `--capture-output` |
+| `capture_output` | bool | Inside UniFMU, send the model's stdout/stderr to a file and forward it to the importer's log, instead of the importer's console | `--capture-output` |
 
 The notes `config.normalize()` produces (e.g. "the FMU has no outputs") are printed by `fmugen build` and aren't written to the file.
 

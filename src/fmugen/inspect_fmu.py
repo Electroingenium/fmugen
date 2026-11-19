@@ -17,7 +17,7 @@ from fmugen.config import InterfaceError
 THIS_OS = {"win32": "windows", "darwin": "macos"}.get(sys.platform, "linux")
 #: What a compiled or proxy FMU doesn't hold.
 NOT_RECORDED = {"compile": "not recorded (compiled FMU)", "distributed": "not recorded (in the private folder)"}
-#: ``generationTool`` with versions: ``fmugen 1.1.0 + unifmu 0.14.0``.
+#: ``generationTool`` with versions: ``fmugen 1.2.0 + unifmu 1.1.0``.
 _TOOL = re.compile(r"fmugen (\S+) \+ unifmu (\S+)")
 
 

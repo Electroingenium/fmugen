@@ -1,6 +1,6 @@
 [project]
 name = "fmugen"
-version = "1.1.0"
+version = "1.2.0"
 description = "Turn ordinary Python models into FMI 2.0 / 3.0 Co-Simulation FMUs (UniFMU), without changing their code"
 readme = "README.md"
 requires-python = ">=3.13"
@@ -17,9 +17,9 @@ classifiers = [
     "Topic :: Software Development :: Code Generators",
 ]
 # The FMU runs with the Python fmugen is installed in (the model's virtual environment),
-# so that environment needs what UniFMU 0.14's Python backend imports.
+# so that environment needs what UniFMU 1.1's Python backend imports.
 dependencies = [
-    "protobuf==5.27.3",
+    "protobuf==7.36.2",
     "pyzmq>=27.2.0",
     "cloudpickle>=3.0",   # FMU state save/restore when pickle can't (lambdas, local functions)
     "questionary>=2.1.1",

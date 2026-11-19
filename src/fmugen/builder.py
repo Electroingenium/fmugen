@@ -111,8 +111,8 @@ OSES = ("linux", "macos", "windows")
 DEFAULT_PYTHON = {"linux": "python3", "macos": "python3", "windows": "python"}
 #: This machine's OS, in :data:`OSES` names.
 CURRENT_OS = {"win32": "windows", "darwin": "macos"}.get(sys.platform, "linux")
-#: Packages UniFMU's Python backend needs (protobuf pinned to what UniFMU 0.14 generated).
-BACKEND_REQUIREMENTS = ["protobuf==5.27.3", "pyzmq", "cloudpickle"]
+#: Packages UniFMU's Python backend needs (protobuf pinned to what UniFMU 1.1 generated).
+BACKEND_REQUIREMENTS = ["protobuf==7.36.2", "pyzmq", "cloudpickle"]
 #: Extra packages of a distributed FMU's private side.
 DISTRIBUTED_REQUIREMENTS = ["toml", "coloredlogs", "colorama"]
 
@@ -262,7 +262,7 @@ def _write_private_readme(private, model_name, endpoint, mode=None):
         "1. Start the simulation with the proxy FMU, with logging on for the `logUnifmuMessages`\n"
         f"   category. The proxy, on the host {endpoint} (see endpoint.toml), logs:\n\n"
         "       ACTION REQUIRED ~ Connect remote backend to dispatcher through port: PORT\n\n"
-        "   UniFMU 0.14 picks a new port on every run, and it can't be set.\n"
+        "   UniFMU picks a new port on every run, and it can't be set.\n"
         f"2. In this folder, run:\n\n       {private_start_command(mode)}\n" + packages,
         encoding="utf-8")
 

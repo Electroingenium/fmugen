@@ -1015,9 +1015,9 @@ def _quiet_debug_logging():
     """Inside UniFMU's backend, raise the root logger from DEBUG to INFO.
 
     The backend's main.py calls logging.basicConfig(level=logging.DEBUG), so every library logs
-    its debug records to the console: numba writes about 3 MB while compiling antropy's functions.
-    UniFMU 0.14 crashes (its dispatcher panics) when the backend writes that much, and the importer
-    then waits forever. INFO and above still reach the console and the importer's log.
+    its debug records to the console: numba writes about 3 MB while compiling antropy's functions,
+    which UniFMU relays to the importer's console (UniFMU 0.14 hung on it). INFO and above still
+    reach the console and the importer's log.
     """
     root = logging.getLogger()
     if "UNIFMU_DISPATCHER_ENDPOINT" in os.environ and root.level < logging.INFO:
@@ -1027,9 +1027,9 @@ def _quiet_debug_logging():
 def _capture_output(enabled):
     """Inside UniFMU's backend, send stdout and stderr (file descriptors 1 and 2) to a file.
 
-    Only with ``fmugen build --capture-output``. UniFMU 0.14 crashes when its backend writes more
-    than about 4 KB to the console, which models that print warnings or progress bars do. The
-    output then goes to the importer's log instead (:meth:`Engine._forward_output`). Outside
+    Only with ``fmugen build --capture-output``. UniFMU relays the backend's console to the
+    importer's stdout; with this, the output goes to the importer's FMI log instead, as
+    ``[output]`` messages (:meth:`Engine._forward_output`). Outside
     UniFMU (build probe, tests), nothing is redirected. ``os.dup2`` is used rather than replacing
     ``sys.stdout`` so output from C extensions is captured too.
 

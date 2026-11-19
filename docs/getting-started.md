@@ -33,9 +33,9 @@ Install fmugen into the virtual environment of your model, the one that already 
 pip install path/to/2025_Inkindcontributions
 ```
 
-(or `uv add path/to/2025_Inkindcontributions`). This also installs `protobuf==5.27.3`, `pyzmq` and `cloudpickle`, which UniFMU's Python backend needs to run the FMU. Run `fmugen` from that environment: `init` and `build` import your model, and by default the FMU runs with that environment's Python ([details](packaging.md#the-fmus-python-environment)).
+(or `uv add path/to/2025_Inkindcontributions`). This also installs `protobuf==7.36.2`, `pyzmq` and `cloudpickle`, which UniFMU's Python backend needs to run the FMU. Run `fmugen` from that environment: `init` and `build` import your model, and by default the FMU runs with that environment's Python ([details](packaging.md#the-fmus-python-environment)).
 
-`fmugen build` also needs [UniFMU](https://github.com/INTO-CPS-Association/unifmu/releases) **0.14.0**, exactly this version: fmugen runs `unifmu generate` to create each FMU's native binaries and Python backend. Put the `unifmu` executable on `PATH`, or set `FMUGEN_UNIFMU` to its path. `fmugen init` works without it.
+`fmugen build` also needs [UniFMU](https://github.com/INTO-CPS-Association/unifmu/releases) **1.1.0**, exactly this version: fmugen runs `unifmu generate` to create each FMU's native binaries and Python backend. Put the `unifmu` executable on `PATH`, or set `FMUGEN_UNIFMU` to its path. `fmugen init` works without it.
 
 To validate and simulate FMUs as below, install [FMPy](https://github.com/CATIA-Systems/FMPy) too (`pip install fmpy`).
 
