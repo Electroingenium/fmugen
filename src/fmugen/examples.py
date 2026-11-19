@@ -18,6 +18,8 @@ import textwrap
 from dataclasses import dataclass, field
 from pathlib import Path
 
+from fmugen.static import packages_distributions
+
 #: Calls on the object that aren't a step: they show, save, copy or close it.
 NOT_A_STEP = ("plot", "show", "print", "save", "summary", "describe", "copy", "close", "to_", "plot_", "save_",
               "print_", "get_params", "set_params", "__repr__", "__str__")
@@ -213,7 +215,7 @@ def _readmes(module, model_path):
         return
     top = (getattr(module, "__name__", "") or "").partition(".")[0]
     try:
-        dists = importlib.metadata.packages_distributions().get(top, [])
+        dists = packages_distributions().get(top, [])   # cached: a full scan of the installed packages is slow
     except Exception:
         dists = []
     for dist in dict.fromkeys(dists):

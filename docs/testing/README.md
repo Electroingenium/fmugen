@@ -14,3 +14,4 @@ Records of how fmugen was tested on unmodified published models. Each report is 
 | [pending-100/](pending-100/) | Scripts, wrappers, hand configs and results of the 82 models tested later |
 | [run-pending-models.md](run-pending-models.md) | Instructions followed for the 100 models run on 2026-11-03 |
 | [pending-r4/CONCLUSIONS.md](pending-r4/CONCLUSIONS.md) | Those 100 models (`cc07fc3`): results, problems found, scripts, hand configs |
+| [benchmark/report.md](benchmark/report.md) | Where `init --probe` and `build` spend their time (`b63e0a4`), with the scripts |
