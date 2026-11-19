@@ -1,4 +1,8 @@
-import subprocess, sys, time, statistics, os
+import statistics
+import subprocess
+import sys
+import time
+
 PY = sys.argv[1]
 cases = [
   ("fn.py", ["models/fn.py"]),
@@ -13,9 +17,9 @@ for name, args in cases:
         ts = []
         for _ in range(3):
             cmd = [PY, "-m", "fmugen", "init", *args, "-o", "-"] + (["--probe"] if probe else [])
-            t = time.perf_counter(); r = subprocess.run(cmd, capture_output=True, text=True); ts.append(time.perf_counter() - t)
+            t = time.perf_counter(); r = subprocess.run(cmd, capture_output=True, text=True, check=False); ts.append(time.perf_counter() - t)
         row.append(f"{statistics.median(ts):6.2f}s rc={r.returncode}")
         if r.returncode: row.append(r.stderr.strip().splitlines()[-1][:120])
     print(" | ".join(row), flush=True)
-t = time.perf_counter(); subprocess.run([PY, "-c", "import fmugen.interface, fmugen.probe"]); print("import fmugen.interface:", round(time.perf_counter()-t, 2))
-t = time.perf_counter(); subprocess.run([PY, "-c", "pass"]); print("bare python:", round(time.perf_counter()-t, 2))
+t = time.perf_counter(); subprocess.run([PY, "-c", "import fmugen.interface, fmugen.probe"], check=False); print("import fmugen.interface:", round(time.perf_counter()-t, 2))
+t = time.perf_counter(); subprocess.run([PY, "-c", "pass"], check=False); print("bare python:", round(time.perf_counter()-t, 2))

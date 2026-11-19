@@ -1,11 +1,18 @@
-import cProfile, pstats, sys, time, io, contextlib
+import contextlib
+import cProfile
+import io
+import pstats
+import sys
+import time
+
 from fmugen.__main__ import main
+
 target = sys.argv[1:]
 pr = cProfile.Profile(); t = time.perf_counter()
 with contextlib.redirect_stdout(io.StringIO()), contextlib.redirect_stderr(io.StringIO()) as err:
     pr.enable()
     try: main(["init", *target, "-o", "-", "--probe"])
-    except SystemExit as e: pass
+    except SystemExit: pass
     pr.disable()
 wall = time.perf_counter() - t
 st = pstats.Stats(pr).stats

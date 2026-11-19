@@ -197,8 +197,9 @@ In `fmugen.toml` the same forms appear as `[model] entry`, with file paths relat
 | Variable | Used by | Effect |
 |---|---|---|
 | `FMUGEN_UNIFMU` | `build` | Path of the UniFMU executable, instead of `unifmu` on `PATH` |
+| `FMUGEN_TEMPLATE_DIR` | `build` | Where the `unifmu generate` templates are kept between builds (default: `%LOCALAPPDATA%\fmugen\unifmu`, `~/Library/Caches/fmugen/unifmu`, `$XDG_CACHE_HOME/fmugen/unifmu` or `~/.cache/fmugen/unifmu`); one per UniFMU executable and FMI version, made again if cut short. Safe to delete |
 | `SOURCE_DATE_EPOCH` | `build` | Build time (Unix seconds) written into `modelDescription.xml` and the zip, for [reproducible builds](packaging.md#reproducible-builds) |
 | `FMUGEN_ENV_DIR` | `--vendor` FMUs | Where the FMU's cached environments go ([details](packaging.md#--vendor)) |
-| `XDG_CACHE_HOME` | `--vendor` FMUs, Linux | Base of the default cache folder |
+| `XDG_CACHE_HOME` | `build`, `--vendor` FMUs, Linux | Base of the default cache folder |
 
 Each error names the section and key, e.g. `[inputs] x: unknown key(s) ['strat']`. See [troubleshooting.md](troubleshooting.md) and the [validation rules](config.md#validation-rules).

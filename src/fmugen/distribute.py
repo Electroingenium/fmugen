@@ -303,14 +303,16 @@ def compile_fmu(compiler, resources, interface, work, requirements=()):
         cmd += [arg for m in modules for arg in ("--hidden-import", m)]
         cmd += [arg for src, dest in data for arg in ("--add-data", f"{src}{os.pathsep}{dest}")]
         cmd += [arg for p in packages for arg in ("--collect-data", p, "--collect-binaries", p)]
-        cmd += [arg for src, dest in _loaded_libraries(packages) for arg in ("--add-binary", f"{src}{os.pathsep}{dest}")]
         cmd += [arg for p in direct for arg in ("--collect-submodules", p)]
         cmd += [arg for p in imports for arg in ("--hidden-import", p)]
         if "numpy" in packages:   # numpy 2's numpy.core aliases: what older pickles name (np.load of .npz)
             cmd += ["--collect-submodules", "numpy.core"]
         cmd += [arg for src, dest in _plugin_dirs(direct) for arg in ("--add-data", f"{src}{os.pathsep}{dest}")]
         cmd += [arg for d in distributions for arg in ("--copy-metadata", d)]
-        hooks = _source_hooks(packages, work / "hooks")
+        # in a hook, not --add-binary: one absolute path per library went over Windows' 32 767-character
+        # command line (194 for scikit-learn, scipy and numpy)
+        hooks = _binaries_hook(_loaded_libraries(packages), work / "hooks")
+        hooks = _source_hooks(packages, work / "hooks") or hooks
         cmd += ["--additional-hooks-dir", str(hooks)] if hooks else []
         built = work / "dist" / EXE_NAME
         env = None
@@ -643,6 +645,28 @@ def _source_hooks(packages, hooks_dir):
             text += ("from PyInstaller.utils.hooks import collect_data_files\n"
                      f"datas = collect_data_files({top!r}, include_py_files=True)\n")
         (hooks_dir / f"hook-{top}.py").write_text(text)
+    return hooks_dir
+
+
+def _binaries_hook(libraries, hooks_dir):
+    """A PyInstaller hook for ``fmugen_runtime`` (always a hidden import) that adds ``libraries``.
+
+    The libraries :func:`_loaded_libraries` finds go here rather than on the command line as
+    ``--add-binary``: Windows limits a command line to 32 767 characters, and one absolute path per
+    native file of scikit-learn, scipy and numpy (194) made 44 165 in a venv with a long path.
+
+    :param libraries: ``[(file, destination folder)]``.
+    :type libraries: list[tuple]
+    :param hooks_dir: where to write the hook.
+    :type hooks_dir: pathlib.Path
+    :return: ``hooks_dir``, or None if there are no libraries.
+    :rtype: pathlib.Path or None
+    """
+    if not libraries:
+        return None
+    hooks_dir.mkdir(parents=True, exist_ok=True)
+    entries = "".join(f"    ({str(src)!r}, {str(dest)!r}),\n" for src, dest in libraries)
+    (hooks_dir / "hook-fmugen_runtime.py").write_text(f"binaries = [\n{entries}]\n", encoding="utf-8")
     return hooks_dir
 
 

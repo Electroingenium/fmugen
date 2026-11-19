@@ -136,6 +136,19 @@ def test_libraries_loaded_by_path_and_package_folders_are_kept(tmp_path, monkeyp
     assert _loaded_libraries(["nospec_like", "visionlike"]) == [(pkg / "_C_stable.so", "visionlike")]
 
 
+def test_libraries_loaded_by_path_go_in_a_hook_not_the_command_line(tmp_path):
+    # 194 --add-binary paths (scikit-learn, scipy, numpy) made a 44 165-character PyInstaller command,
+    # over Windows' 32 767 limit (WinError 206)
+    import ast
+
+    from fmugen.distribute import _binaries_hook
+    assert _binaries_hook([], tmp_path / "hooks") is None
+    libraries = [(tmp_path / "site" / "pkg" / f"_ext{i}.pyd", "pkg/sub") for i in range(300)]
+    hooks = _binaries_hook(libraries, tmp_path / "hooks")
+    tree = ast.parse((hooks / "hook-fmugen_runtime.py").read_text(encoding="utf-8"))
+    binaries = ast.literal_eval(tree.body[0].value)
+    assert binaries == [(str(src), dest) for src, dest in libraries]
+
 def test_libraries_built_on_torch_ship_their_sources(tmp_path, monkeypatch):
     # TorchScript compiles functions when mace or norse is imported, and reads their source to do it
     from fmugen import distribute
@@ -170,3 +183,51 @@ def test_editable_installs_are_put_on_the_freezer_path(tmp_path, monkeypatch):
 
     monkeypatch.setattr(sys, "meta_path", [EditableFinder, *sys.meta_path])
     assert _editable_paths(["debutanizer_like", "pytest", "json", "not_installed_anywhere"]) == [project.resolve()]
+
+
+def test_wheels_are_stored_in_the_fmu_not_deflated_again(tmp_path):
+    # torch's 120 MB wheel took 6 s more to deflate again, for 3 MB
+    import zipfile
+
+    from fmugen.builder import _write_zip
+    folder = tmp_path / "fmu"
+    (folder / "resources" / "wheels").mkdir(parents=True)
+    (folder / "resources" / "wheels" / "torch-2.15.0-cp313-win_amd64.whl").write_bytes(b"PK" + b"x" * 1000)
+    (folder / "resources" / "model.py").write_text("x = 1\n" * 200)
+    _write_zip(folder, tmp_path / "m.fmu")
+    types = {i.filename: i.compress_type for i in zipfile.ZipFile(tmp_path / "m.fmu").infolist()}
+    assert types == {"resources/model.py": zipfile.ZIP_DEFLATED,
+                     "resources/wheels/torch-2.15.0-cp313-win_amd64.whl": zipfile.ZIP_STORED}
+
+
+def test_the_unifmu_template_is_kept_between_builds(tmp_path, monkeypatch):
+    # each build ran `unifmu generate` (0.8 s) into a new folder, and Windows Defender scanned its four
+    # new binaries on their first read (0.9 s); a kept folder, hard-linked into each FMU, is scanned once
+    import os
+    import shutil
+    from pathlib import Path
+
+    from fmugen import builder
+    monkeypatch.setenv(builder.TEMPLATE_DIR_ENV, str(tmp_path / "cache"))
+    monkeypatch.setattr(builder, "_templates", {})
+    builder.generate_boilerplate(2, tmp_path / "a")
+    [kept] = (tmp_path / "cache").iterdir()
+    assert kept.name.startswith("python-out-fmi2-")
+
+    # a later build (a new process: nothing cached in memory) doesn't run unifmu generate again
+    run = builder.subprocess.run
+    def no_generate(cmd, *args, **kwargs):
+        assert "generate" not in cmd, cmd
+        return run(cmd, *args, **kwargs)
+    monkeypatch.setattr(builder, "_templates", {})
+    monkeypatch.setattr(builder.subprocess, "run", no_generate)
+    builder.generate_boilerplate(2, tmp_path / "b")
+    dll = Path("binaries", "win64", "unifmu.dll")
+    assert os.path.samefile(tmp_path / "b" / dll, kept / "out" / dll)   # hard-linked, not copied
+    monkeypatch.setattr(builder.subprocess, "run", run)
+
+    # a kept folder that is cut short is made again
+    shutil.rmtree(kept / "out" / "resources")
+    monkeypatch.setattr(builder, "_templates", {})
+    builder.generate_boilerplate(2, tmp_path / "c")
+    assert (tmp_path / "c" / "resources").is_dir() and (kept / "out" / "resources").is_dir()

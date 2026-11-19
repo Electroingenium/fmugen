@@ -175,7 +175,7 @@ def written_globals(module):
     """
     try:
         tree = ast.parse(inspect.getsource(module))
-    except (OSError, TypeError, SyntaxError, UnicodeDecodeError):
+    except Exception:   # also a module whose __getattr__ raises, e.g. torch.classes' RuntimeError on __wrapped__
         return []
     found = []
     for fn in ast.walk(tree):

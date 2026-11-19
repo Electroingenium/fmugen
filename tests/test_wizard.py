@@ -501,9 +501,10 @@ def test_targets_are_checked_when_typed(tmp_path, monkeypatch):
 
 
 def test_the_command_keeps_the_order_of_the_values():
-    args = type("A", (), dict(model="m.py", start=["a=1", "c=3"], const=["b=2"], value_order=["a", "b", "c"], probe=True,
-                              probe_timeout=5.0, create=None, kind=None, call="step", setup=[], read=[], convert=[],
-                              keep=[], integer=[], fmi=2, output="x.toml", force=True))()
+    args = type("A", (), {"model": "m.py", "start": ["a=1", "c=3"], "const": ["b=2"], "value_order": ["a", "b", "c"],
+                          "probe": True, "probe_timeout": 5.0, "create": None, "kind": None, "call": "step", "setup": [],
+                          "read": [], "convert": [], "keep": [], "integer": [], "fmi": 2, "output": "x.toml",
+                          "force": True})()
     assert wizard._command(args) == ["m.py", "--start", "a=1", "--const", "b=2", "--start", "c=3", "--probe",
                                      "--probe-timeout", "5", "--call", "step", "--fmi", "2", "-o", "x.toml", "--force"]
 

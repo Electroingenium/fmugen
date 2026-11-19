@@ -1164,3 +1164,17 @@ def test_a_vector_of_times_is_not_the_simulation_time(tmp_path):
     assert "t" not in data.get("time", {})
     data, _ = probe(f"{path}:ode", tmp_path, force=True)
     assert data["time"] == {"t": "time"}
+
+
+def test_the_probe_retries_with_torch_tensors_only_when_torch_is_already_imported(monkeypatch):
+    # with torch installed, a failing sklearn probe imported it (about 4 s) and torch's reads of its own
+    # source files were taken for the model's ("--compile won't work")
+    import sys
+    import types
+
+    from fmugen.probe import _array_retries
+
+    monkeypatch.delitem(sys.modules, "torch", raising=False)
+    assert [c for c, _ in _array_retries()] == ["numpy"]
+    monkeypatch.setitem(sys.modules, "torch", types.ModuleType("torch"))
+    assert [c for c, _ in _array_retries()] == ["numpy", "torch:tensor"]

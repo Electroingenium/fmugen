@@ -1601,6 +1601,10 @@ def _add_globals(data, comments, entry_module, local_dir=None):
     :func:`static.written_globals` which of their globals are rebound. Only numbers, strings and
     arrays are kept. They are put back on reset and saved with the FMU state.
 
+    In an installed package, a package's ``__init__`` other than the entry isn't followed (it
+    reaches the whole library), and private names (``_x``) are left out: they are the library's
+    own flags and counters, not the model's state. The user's project keeps both.
+
     :param data: the config being inferred; updated in place.
     :type data: dict
     :param comments: ``(section, key) -> text``; updated in place.
@@ -1632,17 +1636,34 @@ def _add_globals(data, comments, entry_module, local_dir=None):
         """
         return m.__name__ == top or m.__name__.startswith(top + ".") or local(m)
 
+    def through_package(m):
+        """Whether ``m`` is an installed package's ``__init__``, which isn't followed.
+
+        ``import torch`` in torch.nn.modules.linear reaches torch's ``__init__``, and through it all of
+        torch (783 modules, 3.5 s to parse, and 51 of its internal flags taken for the model's state).
+        The modules the entry imports directly, or whose functions and classes it uses, are still
+        followed (pythermalcomfort's ``thermoregulation``), and the entry module itself may be a package.
+
+        :param m: the module.
+        :type m: types.ModuleType
+        :rtype: bool
+        """
+        return hasattr(m, "__path__") and not local(m)
+
     # the entry module, and the package's modules it uses (as modules, or by their functions and classes)
     reached, todo = {entry_module.__name__: entry_module}, [entry_module]
     while todo:
         for value in list(vars(todo.pop()).values()):
             used = value if isinstance(value, types.ModuleType) else sys.modules.get(getattr(value, "__module__", None) or "")
-            if isinstance(used, types.ModuleType) and used.__name__ not in reached and ours(used):
+            if (isinstance(used, types.ModuleType) and used.__name__ not in reached and ours(used)
+                    and not through_package(used)):
                 reached[used.__name__] = used
                 todo.append(used)
     found = []
     for module in reached.values():
         for name in static.written_globals(module):
+            if name.startswith("_") and not local(module):
+                continue   # an installed library's private flag or counter (torch's _is_in_torch_dispatch_mode)
             value = module.__dict__.get(name)
             if isinstance(value, (bool, int, float, str)) or _number_like(value) or _array_info(value) is not None:
                 found.append(f"{module.__name__}:{name}")

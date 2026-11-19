@@ -55,6 +55,7 @@ from fmugen.probe._calling import (  # noqa: F401
     PROTOTYPE,
     QUANTITY_ASKED,
     TEXT_ASKED,
+    _array_retries,
     _build_set_up,
     _call_with_probe_inputs,
     _construct,

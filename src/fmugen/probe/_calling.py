@@ -72,6 +72,23 @@ def _build_set_up(build, data):
 ARRAY_RETRIES = ("numpy", "torch:tensor")
 
 
+def _array_retries():
+    """``(converter, module)`` of each :data:`ARRAY_RETRIES` entry the probe can try.
+
+    numpy when it's installed; another (torch) only when it's already imported: a model that takes
+    tensors imported torch itself, and importing it just to try costs seconds (about 4 s) and makes
+    torch's reads of its own source files look like the model's (``--compile won't work``).
+
+    :rtype: list[tuple[str, str]]
+    """
+    found = []
+    for converter in ARRAY_RETRIES:
+        module = "numpy" if converter == "numpy" else converter.partition(":")[0]
+        if (module in sys.modules if module != "numpy" else importlib.util.find_spec(module) is not None):
+            found.append((converter, module))
+    return found
+
+
 def _probe_call(fn, data, comments, constants_key="constants"):
     """Call ``fn`` with the probe inputs (:func:`_probe_dated`), dropping time arguments that aren't the clock.
 
@@ -316,10 +333,7 @@ def _probe_attempt(fn, data, comments, constants_key="constants"):
             if result is _FAILED:
                 raise
             return result
-        for converter in ARRAY_RETRIES:
-            module = "numpy" if converter == "numpy" else converter.partition(":")[0]
-            if importlib.util.find_spec(module) is None:
-                continue
+        for converter, module in _array_retries():
             for info in plain:
                 info.update({"numpy": True} if converter == "numpy" else {"convert": converter})
             try:
@@ -728,10 +742,7 @@ def _construct(build, data, comments):
             if obj is _FAILED:
                 raise
             return obj
-        for converter in ARRAY_RETRIES:
-            module = "numpy" if converter == "numpy" else converter.partition(":")[0]
-            if importlib.util.find_spec(module) is None:
-                continue
+        for converter, module in _array_retries():
             for info in plain.values():
                 info.update({"numpy": True} if converter == "numpy" else {"convert": converter})
             try:

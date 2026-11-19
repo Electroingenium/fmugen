@@ -1,6 +1,6 @@
 """Build and init: packaging Python models into FMUs via UniFMU."""
-import atexit
 import contextlib
+import hashlib
 import importlib
 import importlib.util
 import json
@@ -62,6 +62,8 @@ PART_MAIN = TEMPLATES_DIR / "fmugen_part_main.py"
 IGNORE = shutil.ignore_patterns("__pycache__", "*.pyc", "venv", ".venv")
 #: ``--format`` values.
 FORMATS = ("fmu", "folder")
+#: Files written into the .fmu uncompressed: they are zip archives already (vendored wheels).
+STORED = (".whl", ".zip")
 
 def _concatenate_runtime(destination):
     """Concatenate the split runtime source files into a single ``fmugen_runtime.py`` for the FMU.
@@ -149,12 +151,40 @@ def find_unifmu():
     return exe
 
 
-#: Cache: (exe, *args) -> folder of a ``unifmu generate`` run, removed at exit.
+#: Environment variable: the folder of the kept ``unifmu generate`` templates (default: :func:`template_cache`).
+TEMPLATE_DIR_ENV = "FMUGEN_TEMPLATE_DIR"
+
+#: Cache: (exe, *args) -> folder of a ``unifmu generate`` run, in this process.
 _templates = {}
 
 
+def template_cache():
+    """The folder that keeps ``unifmu generate`` templates between builds.
+
+    ``FMUGEN_TEMPLATE_DIR`` if set, else the user cache folder + ``fmugen/unifmu`` (as the
+    launcher's ``fmugen/envs``).
+
+    :rtype: pathlib.Path
+    """
+    if os.environ.get(TEMPLATE_DIR_ENV):
+        return Path(os.environ[TEMPLATE_DIR_ENV])
+    if sys.platform == "win32":
+        base = os.environ.get("LOCALAPPDATA") or os.path.expanduser("~\\AppData\\Local")
+    elif sys.platform == "darwin":
+        base = os.path.expanduser("~/Library/Caches")
+    else:
+        base = os.environ.get("XDG_CACHE_HOME") or os.path.expanduser("~/.cache")
+    return Path(base) / "fmugen" / "unifmu"
+
+
 def _template(args, check):
-    """Run ``unifmu *args`` once per process, in a cached folder, and return that folder.
+    """Run ``unifmu *args`` once, in a kept folder, and return that folder.
+
+    The folder is kept between builds (:func:`template_cache`), keyed on the executable (path,
+    size and modification time, so another UniFMU gets its own) and the arguments: running
+    ``unifmu generate`` took 0.7–0.9 s, and its four binaries, written anew, were scanned by
+    Windows Defender on their first read (another 0.9 s); a kept file, and a hard link to it, isn't
+    scanned again. A folder that fails ``check`` (cut short, edited) is made again.
 
     :param args: the unifmu arguments.
     :type args: list[str]
@@ -165,15 +195,28 @@ def _template(args, check):
     """
     exe = find_unifmu()
     key = (exe, *args)
-    if key not in _templates:
-        folder = Path(tempfile.mkdtemp(prefix="fmugen-unifmu-"))
-        atexit.register(shutil.rmtree, folder, ignore_errors=True)
-        result = subprocess.run([exe, *args], capture_output=True, text=True, cwd=folder, check=False)
-        if result.returncode != 0 or not check(folder):
-            shutil.rmtree(folder, ignore_errors=True)
+    if key in _templates:
+        return _templates[key]
+    stat = Path(exe).stat()
+    digest = hashlib.sha256(repr((str(Path(exe).resolve()), stat.st_size, stat.st_mtime_ns, *args)).encode())
+    root = template_cache()
+    folder = root / f"{'-'.join(args[1:])}-{digest.hexdigest()[:16]}"
+    if not (folder.is_dir() and check(folder)):
+        shutil.rmtree(folder, ignore_errors=True)
+        root.mkdir(parents=True, exist_ok=True)
+        new = Path(tempfile.mkdtemp(prefix="new-", dir=root))
+        result = subprocess.run([exe, *args], capture_output=True, text=True, cwd=new, check=False)
+        if result.returncode != 0 or not check(new):
+            shutil.rmtree(new, ignore_errors=True)
             raise InterfaceError(f"`unifmu {' '.join(args)}` failed:\n{result.stdout}{result.stderr}")
-        _templates[key] = folder
-    return _templates[key]
+        try:
+            new.rename(folder)
+        except OSError:   # another build made it meanwhile
+            shutil.rmtree(new, ignore_errors=True)
+            if not (folder.is_dir() and check(folder)):
+                raise
+    _templates[key] = folder
+    return folder
 
 
 def _link_or_copy(src, dst):
@@ -563,6 +606,7 @@ def _write_zip(fmu_dir, output):
 
     Files in sorted order with a fixed date (``SOURCE_DATE_EPOCH`` when set), and Unix
     permissions set explicitly (executable for binaries) so the archive is the same on every OS.
+    Zip archives inside it (:data:`STORED`: vendored wheels) are stored, not deflated again.
 
     :param fmu_dir: the FMU folder.
     :type fmu_dir: pathlib.Path
@@ -575,7 +619,8 @@ def _write_zip(fmu_dir, output):
         for file in sorted(fmu_dir.rglob("*")):
             if file.is_file() and "__pycache__" not in file.parts:
                 info = zipfile.ZipInfo(file.relative_to(fmu_dir).as_posix(), date_time)
-                info.compress_type = zipfile.ZIP_DEFLATED
+                # a wheel is a zip already: deflating torch's again took 6 s for 3 MB
+                info.compress_type = zipfile.ZIP_STORED if file.suffix in STORED else zipfile.ZIP_DEFLATED
                 if os.name == "nt":
                     executable = "binaries" in file.relative_to(fmu_dir).parts or file.suffix in (".exe", ".sh")
                 else:

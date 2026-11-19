@@ -13,7 +13,6 @@
 import argparse
 import json
 import re
-import sys
 from importlib.resources import files
 
 from fmugen import GENERATION_TOOL, wizard

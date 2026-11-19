@@ -303,3 +303,64 @@ def test_probe_outputs_what_the_step_changes_when_nothing_else(tmp_path):
     data, _ = infer(f"{model}:Learner", call="learn_one", probe=True)
     assert data["outputs"] == {"intercept": {}, "history": {"from": "attr:history.-1"}}
     assert "locals" not in data
+
+
+def test_a_module_whose_getattr_raises_has_no_written_globals():
+    # torch.classes raises RuntimeError, not AttributeError, for any unknown name, __wrapped__ included,
+    # which inspect.getsource asks for: init of torch.nn:Linear stopped there
+    import types
+
+    from fmugen.static import written_globals
+
+    class Raising(types.ModuleType):
+        def __getattr__(self, name):
+            raise RuntimeError(f"Tried to instantiate class '{name}'")
+
+    assert written_globals(Raising("classes")) == []
+
+
+def test_globals_of_an_installed_package_skip_its_other_packages_and_private_names(tmp_path, monkeypatch):
+    # like torch: `import torch` in the entry module reached all of torch's __init__ (783 modules) and
+    # listed 51 of its private flags; pythermalcomfort's PRE_SHIV (a module the entry uses) is still found
+    lib = tmp_path / "lib"
+    (lib / "noise").mkdir(parents=True)
+    (lib / "__init__.py").write_text("from lib import core, state, noise\n")
+    (lib / "core.py").write_text(textwrap.dedent("""
+        import lib
+        from lib import state
+        COUNT = 0
+        def step(x):
+            global COUNT
+            COUNT += 1
+            state.bump()
+            return x
+        """))
+    (lib / "state.py").write_text(textwrap.dedent("""
+        TOTAL = 0
+        _calls = 0
+        def bump():
+            global TOTAL, _calls
+            TOTAL += 1
+            _calls += 1
+        """))
+    (lib / "noise" / "__init__.py").write_text(textwrap.dedent("""
+        LEVEL = 0
+        def set_level():
+            global LEVEL
+            LEVEL = 1
+        """))
+    monkeypatch.chdir(tmp_path)
+    data, _ = infer("lib.core:step", config_dir=tmp_path)
+    assert data["model"]["globals"] == ["lib.core:COUNT", "lib.state:TOTAL"]
+
+
+def test_the_users_own_modules_keep_their_private_globals(tmp_path):
+    write(tmp_path, """
+        _calls = 0
+        def step(x):
+            global _calls
+            _calls += 1
+            return x
+        """, name="counter.py")
+    data, _ = infer(tmp_path / "counter.py")
+    assert data["model"]["globals"] == ["counter:_calls"]
