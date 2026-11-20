@@ -60,6 +60,55 @@ mean_molecular_weight = {}
 
 The fuel/air state can only be set in `setup`: Cantera's `TPX` is a tuple property, and there is no way to bind inputs to it.
 
+## pvlib read_tmy3
+
+```toml
+[model]
+entry = "pvlib.iotools:read_tmy3"
+
+[inputs]
+filename = { start = "703165TY.csv" }  # pvlib's data/703165TY.csv
+map_variables = { start = true }
+
+[outputs]
+ghi = { from = "return:0.ghi", dimensions = [8760], unit = "W/m2" }
+dni = { from = "return:0.dni", dimensions = [8760], unit = "W/m2" }
+dhi = { from = "return:0.dhi", dimensions = [8760], unit = "W/m2" }
+temp_air = { from = "return:0.temp_air", dimensions = [8760], unit = "degC" }
+latitude = { from = "return:1.latitude", unit = "deg" }
+longitude = { from = "return:1.longitude", unit = "deg" }
+altitude = { from = "return:1.altitude", unit = "m" }
+TZ = { from = "return:1.TZ" }
+```
+
+`init --probe` outputs all of the TMY3 table's columns, about 260,000 values; this keeps the irradiance, the air temperature and where the site is.
+
+## radioactivedecay
+
+```toml
+[model]
+entry = "radioactivedecay:Inventory"
+call = "decay"
+init_call = true
+
+[model.constants]
+contents = { call = "builtins:dict([(\"C-14\",1.0)])" }
+
+[parameters]
+units = { start = "Bq" }
+check = { start = true }
+
+[inputs]
+decay_time = { start = 1000.0 }
+decay_units = { start = "s", to = "arg:units" }
+
+[outputs]
+"contents.C_14" = { from = "return:contents.C-14" }
+"contents.N_14" = { from = "return:contents.N-14" }
+```
+
+The `init --probe` config without its 1,590 other outputs: the inventory's whole nuclide database (`decay_data`, `decay_matrices`), which isn't a result. Each step decays the starting inventory by `decay_time`; `decay` returns a new inventory and leaves the model's unchanged.
+
 ## metpy
 
 ```toml

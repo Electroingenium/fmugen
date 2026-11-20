@@ -11,6 +11,7 @@ Instructions for running the 100 models that were in tested-models.md's Pending 
 - **Find the real error.** When an FMU fails, read the backend's own output (`--capture-output`) before blaming UniFMU, FMPy or fmugen. Only list something as a UniFMU limitation after checking it fails the same way outside fmugen.
 - **Don't fix fmugen during the run** unless told to. Record what fails and why; fixes are a separate change, after which the affected models are rerun.
 - **Don't attribute anything to Claude**: no `Co-Authored-By` or "Generated with" lines in commits, PRs or issues.
+- **A missing install isn't a failure.** When a model fails only because something isn't installed (a package or an undeclared dependency, a version it needs, a compiler, a system library), install it and run the model again; record what was installed in the notes. Only what still fails after that counts.
 - **Unattended only.** A model that needs a license accepted interactively, a login or a paid API key goes in the "Impractical to run" table of [discarded-models.md](discarded-models.md), as TabPFN did.
 
 ## Setup
