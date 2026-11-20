@@ -1467,6 +1467,10 @@ def _array_info(value, with_start=False):
             shape, flat = [int(n) for n in value.shape], flatten(value.tolist())
         except Exception:   # a tensor without data: torch's meta device (whisper's alignment_heads before loading)
             return None
+        if len(flat) != math.prod(shape):
+            # an object array of lists of different lengths (radioactivedecay's decay_data.bfs: 1512
+            # entries, 1612 numbers): the runtime would send all the numbers, not one per entry
+            return None
         fmi_type = NUMPY_TYPES.get(str(value.dtype).rpartition(".")[2])   # "float32", "torch.float32", ...
         if str(value.dtype) == "object" and flat and all(
                 isinstance(x, (int, float)) and not isinstance(x, bool) for x in flat):

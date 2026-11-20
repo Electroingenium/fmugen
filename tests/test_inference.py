@@ -562,6 +562,21 @@ def test_bytes_dated_series_and_object_arrays_are_outputs(tmp_path):
     assert data["outputs"]["y0"]["dimensions"] == [2, 2] and data["outputs"]["y1"]["dimensions"] == [1]
 
 
+def test_an_object_array_of_lists_of_different_lengths_is_not_an_output(tmp_path):
+    # radioactivedecay's decay_data.bfs: 1512 lists (one per nuclide), 1612 numbers in all; typed as
+    # [1512], the FMU failed with "has 1612 values, expected 1512" (Linux) or hung (Windows)
+    (tmp_path / "rag.py").write_text(textwrap.dedent('''
+        import numpy as np
+        def decay(t=1.0):
+            bfs = np.empty(3, dtype=object)
+            bfs[:] = [[0.9, 0.1], [1.0], [1.0]]
+            return {"amount": 2.0 * t, "bfs": bfs, "even": np.array([[1.0, 2.0], [3.0, 4.0]], dtype=object)}
+    '''))
+    data, _ = infer(f"{tmp_path / 'rag.py'}:decay")
+    assert set(data["outputs"]) == {"amount", "even"}
+    assert data["outputs"]["even"]["dimensions"] == [2, 2]
+
+
 def test_a_keyword_named_like_the_kwargs_parameter(tmp_path):
     # MOMENTPipeline.from_pretrained(name, **model_kwargs) is called with model_kwargs={...}
     (tmp_path / "kw.py").write_text(textwrap.dedent('''

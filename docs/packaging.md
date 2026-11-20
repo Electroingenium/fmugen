@@ -152,6 +152,7 @@ A freezer only follows `import` statements. Libraries also read files next to th
 - **Their whole dependency tree, with every package's data files, binaries and metadata.** The tree is read from the installed packages' metadata, and also includes the optional dependencies of the model's own packages that are installed. This is how, for example, iapws's `VERSION`, ahrs's `WMM.COF`, mendeleev's `elements.db`, pymsis's `msis21.parm`, silero-vad's ONNX file and pybamm's parameter sets get into the FMU.
 - **The packages the model's packages depend on, imported by name** (pybamm imports `anytree` that way).
 - **Folders of `.py` files inside the model's packages that aren't packages** (no `__init__.py`), e.g. pyromat's `registry`. Libraries load these by path, so they ship as files.
+- **Native libraries loaded by path** (PyInstaller only): those inside the packages that aren't `lib*` files or imported, e.g. torchvision's `_C_stable.so`, and those a distribution installs at the top of site-packages, outside its package, e.g. galpy's `libgalpy`, which galpy loads with `ctypes` from a `sys.path` folder. Without `libgalpy`, galpy silently falls back to Python integrators that give other orbits.
 - **numpy's `numpy.core` compatibility modules**, which older pickles name, e.g. data loaded with `numpy.load`.
 - **The `.py` sources of packages built on transformers** (PyInstaller only). transformers reads the source of the classes it decorates, as PyInstaller's own hook already arranges for transformers itself. These sources are in the FMU.
 

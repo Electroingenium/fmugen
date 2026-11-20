@@ -136,6 +136,26 @@ def test_libraries_loaded_by_path_and_package_folders_are_kept(tmp_path, monkeyp
     assert _loaded_libraries(["nospec_like", "visionlike"]) == [(pkg / "_C_stable.so", "visionlike")]
 
 
+def test_a_library_installed_beside_its_package_is_collected(tmp_path, monkeypatch):
+    # galpy installs libgalpy.<suffix>.so at the top of site-packages and loads it with ctypes from a
+    # sys.path folder; without it the compiled FMU fell back to odeint and gave other orbits
+    from fmugen.distribute import _loaded_libraries
+    site = tmp_path / "site"
+    (site / "galpylike").mkdir(parents=True)
+    (site / "galpylike" / "__init__.py").write_text("")
+    (site / "libgalpylike.cpython-313-x86_64-linux-gnu.so").write_text("")
+    (site / "unrelated.so").write_text("")   # another distribution's: not collected
+    info = site / "galpylike-1.0.dist-info"
+    info.mkdir()
+    (info / "METADATA").write_text("Metadata-Version: 2.1\nName: galpylike\nVersion: 1.0\n")
+    (info / "RECORD").write_text("galpylike/__init__.py,,\nlibgalpylike.cpython-313-x86_64-linux-gnu.so,,\n"
+                                 "galpylike-1.0.dist-info/METADATA,,\ngalpylike-1.0.dist-info/RECORD,,\n")
+    monkeypatch.syspath_prepend(str(site))
+    assert _loaded_libraries(["galpylike"]) == []
+    assert _loaded_libraries(["galpylike"], ["galpylike", "not-installed-anywhere"]) == [
+        (site / "libgalpylike.cpython-313-x86_64-linux-gnu.so", ".")]
+
+
 def test_libraries_loaded_by_path_go_in_a_hook_not_the_command_line(tmp_path):
     # 194 --add-binary paths (scikit-learn, scipy, numpy) made a 44 165-character PyInstaller command,
     # over Windows' 32 767 limit (WinError 206)

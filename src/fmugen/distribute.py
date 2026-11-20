@@ -311,7 +311,7 @@ def compile_fmu(compiler, resources, interface, work, requirements=()):
         cmd += [arg for d in distributions for arg in ("--copy-metadata", d)]
         # in a hook, not --add-binary: one absolute path per library went over Windows' 32 767-character
         # command line (194 for scikit-learn, scipy and numpy)
-        hooks = _binaries_hook(_loaded_libraries(packages), work / "hooks")
+        hooks = _binaries_hook(_loaded_libraries(packages, distributions), work / "hooks")
         hooks = _source_hooks(packages, work / "hooks") or hooks
         cmd += ["--additional-hooks-dir", str(hooks)] if hooks else []
         built = work / "dist" / EXE_NAME
@@ -727,25 +727,49 @@ def _package_folders(packages):
     return found
 
 
-def _loaded_libraries(packages):
-    """Native libraries inside ``packages`` that PyInstaller's ``--collect-binaries`` skips.
+def _native(name):
+    """Whether a file name is a native library or extension module (``.so``, ``.so.1``, ``.pyd``, ``.dylib``).
 
-    It collects ``lib*.so`` and imported extension modules; a library loaded by path, like
-    torchvision's ``_C_stable.so`` (``torch.ops.load_library``), is neither, and without it
-    ``import torchvision`` fails in the frozen FMU (timm, ultralytics).
+    :type name: str
+    :rtype: bool
+    """
+    return name.endswith((".so", ".pyd", ".dylib")) or ".so." in name
+
+
+def _loaded_libraries(packages, distributions=()):
+    """Native libraries that PyInstaller's ``--collect-binaries`` skips.
+
+    It collects ``lib*.so`` inside ``packages`` and imported extension modules; a library loaded by
+    path, like torchvision's ``_C_stable.so`` (``torch.ops.load_library``), is neither, and without
+    it ``import torchvision`` fails in the frozen FMU (timm, ultralytics). Nor is a library a
+    distribution installs at the top of site-packages, outside its package, and loads from a
+    ``sys.path`` folder: galpy's ``libgalpy`` (``ctypes.CDLL``), without which galpy silently falls
+    back to Python integrators that give other values. Those go to the executable's top folder,
+    which is on its ``sys.path``.
 
     :param packages: package names.
     :type packages: list[str]
+    :param distributions: the distributions collected, whose top-level native files are added.
+    :type distributions: list[str] or tuple
     :return: ``[(file, destination folder inside the executable)]``.
     :rtype: list[tuple]
     """
     found = []
     for root, dest in _package_folders(packages):
         for path in sorted(root.rglob("*")):
-            name = path.name
-            native = name.endswith((".so", ".pyd", ".dylib")) or ".so." in name
-            if native and not name.startswith("lib") and path.is_file():
+            if _native(path.name) and not path.name.startswith("lib") and path.is_file():
                 found.append((path, (dest / path.parent.relative_to(root)).as_posix()))
+    import importlib.metadata
+    for name in distributions:
+        try:
+            files = importlib.metadata.distribution(name).files or []
+        except importlib.metadata.PackageNotFoundError:
+            continue
+        for file in files:
+            if len(file.parts) == 1 and _native(file.name):
+                path = Path(file.locate())
+                if path.is_file():
+                    found.append((path, "."))
     return found
 
 
